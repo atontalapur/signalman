@@ -1,0 +1,160 @@
+{
+  "E0": {
+    "key": "SIG-1"
+  },
+  "E1": {
+    "key": "SIG-2"
+  },
+  "E2": {
+    "key": "SIG-3"
+  },
+  "E3": {
+    "key": "SIG-4"
+  },
+  "E4": {
+    "key": "SIG-5"
+  },
+  "E5": {
+    "key": "SIG-6"
+  },
+  "E6": {
+    "key": "SIG-7"
+  },
+  "E7": {
+    "key": "SIG-8"
+  },
+  "E8": {
+    "key": "SIG-9"
+  },
+  "E9": {
+    "key": "SIG-10"
+  },
+  "S-01": {
+    "key": "SIG-11"
+  },
+  "S-02": {
+    "key": "SIG-12"
+  },
+  "S-10": {
+    "key": "SIG-13"
+  },
+  "S-11": {
+    "key": "SIG-14"
+  },
+  "S-12": {
+    "key": "SIG-15"
+  },
+  "S-13": {
+    "key": "SIG-16"
+  },
+  "S-14": {
+    "key": "SIG-17"
+  },
+  "S-15": {
+    "key": "SIG-18"
+  },
+  "S-16": {
+    "key": "SIG-19"
+  },
+  "S-17": {
+    "key": "SIG-20"
+  },
+  "S-18": {
+    "key": "SIG-21"
+  },
+  "S-20": {
+    "key": "SIG-22"
+  },
+  "S-21": {
+    "key": "SIG-23"
+  },
+  "S-22": {
+    "key": "SIG-24"
+  },
+  "S-23": {
+    "key": "SIG-25"
+  },
+  "S-30": {
+    "key": "SIG-26"
+  },
+  "S-31": {
+    "key": "SIG-27"
+  },
+  "S-32": {
+    "key": "SIG-28"
+  },
+  "S-33": {
+    "key": "SIG-29"
+  },
+  "S-34": {
+    "key": "SIG-30"
+  },
+  "S-40": {
+    "key": "SIG-31"
+  },
+  "S-41": {
+    "key": "SIG-32"
+  },
+  "S-50": {
+    "key": "SIG-33"
+  },
+  "S-51": {
+    "key": "SIG-34"
+  },
+  "S-52": {
+    "key": "SIG-35"
+  },
+  "S-60": {
+    "key": "SIG-36"
+  },
+  "S-61": {
+    "key": "SIG-37"
+  },
+  "S-70": {
+    "key": "SIG-38"
+  },
+  "S-71": {
+    "key": "SIG-39"
+  },
+  "S-72": {
+    "key": "SIG-40"
+  },
+  "S-80": {
+    "key": "SIG-41"
+  },
+  "S-81": {
+    "key": "SIG-42"
+  },
+  "S-82": {
+    "key": "SIG-43"
+  },
+  "S-90": {
+    "key": "SIG-44"
+  },
+  "S-91": {
+    "key": "SIG-45"
+  },
+  "S-92": {
+    "key": "SIG-46"
+  },
+  "sprint-1": {
+    "id": 4,
+    "name": "Sprint 1: Sigma frontend"
+  },
+  "sprint-2": {
+    "id": 5,
+    "name": "Sprint 2: Evaluator, pipeline"
+  },
+  "sprint-3": {
+    "id": 6,
+    "name": "Sprint 3: Sink, observability"
+  },
+  "sprint-4": {
+    "id": 7,
+    "name": "Sprint 4: Load, v2 engine"
+  },
+  "sprint-5": {
+    "id": 8,
+    "name": "Sprint 5: Cutover, authoring"
+  }
+}

@@ -18,6 +18,7 @@ import argparse
 import base64
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -27,6 +28,18 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def ssl_context():
+    # python.org builds of Python ship without system CA certificates.
+    # Prefer certifi's bundle when it is installed; otherwise fall back to
+    # whatever the interpreter has.
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
 BACKLOG = ROOT / "docs" / "backlog.yml"
 MAP = ROOT / "docs" / "jira-map.json"
 PROJECT_KEY = "SIG"
@@ -42,6 +55,7 @@ class Jira:
         self.site = site.rstrip("/")
         self.auth = base64.b64encode(f"{email}:{token}".encode()).decode()
         self.dry_run = dry_run
+        self.ctx = ssl_context()
 
     def call(self, method, path, body=None, params=None):
         url = self.site + path
@@ -58,7 +72,7 @@ class Jira:
             req.add_header("Content-Type", "application/json")
             data = json.dumps(body).encode()
         try:
-            with urllib.request.urlopen(req, data) as resp:
+            with urllib.request.urlopen(req, data, context=self.ctx) as resp:
                 raw = resp.read()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
@@ -134,7 +148,12 @@ def ensure_project(j, backlog):
 
 
 def issue_type_ids(j):
-    meta = j.call("GET", f"/rest/api/3/project/{PROJECT_KEY}", params={"expand": "issueTypes"})
+    try:
+        meta = j.call("GET", f"/rest/api/3/project/{PROJECT_KEY}", params={"expand": "issueTypes"})
+    except RuntimeError as e:
+        if j.dry_run and "404" in str(e):
+            return {"epic": "DRY-epic", "story": "DRY-story"}
+        raise
     types = {t["name"].lower(): t["id"] for t in meta.get("issueTypes", [])}
     for needed in ("epic", "story"):
         if needed not in types:
@@ -160,7 +179,13 @@ def find_existing(j, summary):
 
 def upsert_issue(j, m, local_key, fields):
     summary = fields["summary"]
-    key = m.get(local_key, {}).get("key") or find_existing(j, summary)
+    key = m.get(local_key, {}).get("key")
+    if not key:
+        try:
+            key = find_existing(j, summary)
+        except RuntimeError as e:
+            if not (j.dry_run and "400" in str(e)):
+                raise
     if key:
         j.call("PUT", f"/rest/api/3/issue/{key}", {"fields": fields})
         print(f"  updated {key}  {local_key}  {summary}")
@@ -173,10 +198,23 @@ def upsert_issue(j, m, local_key, fields):
 
 
 def board_id(j):
-    res = j.call("GET", "/rest/agile/1.0/board", params={"projectKeyOrId": PROJECT_KEY, "type": "scrum"})
+    if j.dry_run:
+        try:
+            res = j.call("GET", "/rest/agile/1.0/board", params={"projectKeyOrId": PROJECT_KEY})
+        except RuntimeError:
+            return "DRY-board"
+    else:
+        res = j.call("GET", "/rest/agile/1.0/board", params={"projectKeyOrId": PROJECT_KEY})
     values = res.get("values", [])
+    if not values and j.dry_run:
+        return "DRY-board"
+    # Team-managed boards report type "simple", so do not filter on type;
+    # prefer the board located in this project.
+    for b in values:
+        if b.get("location", {}).get("projectKey") == PROJECT_KEY:
+            return b["id"]
     if not values:
-        raise RuntimeError("no scrum board for project; open the project in Jira once to create it")
+        raise RuntimeError("no board for project; open the project in Jira once to create it")
     return values[0]["id"]
 
 
@@ -184,6 +222,8 @@ def ensure_sprints(j, m, backlog, bid):
     existing = {}
     start = 0
     while True:
+        if str(bid).startswith("DRY"):
+            break
         res = j.call("GET", f"/rest/agile/1.0/board/{bid}/sprint", params={"startAt": start, "maxResults": 50})
         for s in res.get("values", []):
             existing[s["name"]] = s["id"]
@@ -195,7 +235,7 @@ def ensure_sprints(j, m, backlog, bid):
         sid = m.get(local, {}).get("id") or existing.get(sp["name"])
         body = {"name": sp["name"], "goal": sp["goal"]}
         if sid:
-            j.call("PUT", f"/rest/agile/1.0/sprint/{sid}", body)
+            j.call("POST", f"/rest/agile/1.0/sprint/{sid}", body)
             print(f"  updated sprint {sid}  {sp['name']}")
         else:
             res = j.call("POST", "/rest/agile/1.0/sprint", {**body, "originBoardId": bid})
@@ -216,6 +256,22 @@ def assign_sprints(j, m, backlog):
         print(f"  sprint {sprint_no}: {len(keys)} stories")
 
 
+def validate(backlog):
+    # An unquoted colon in a YAML list item silently becomes a mapping, which
+    # Jira then rejects as invalid ADF. Catch it here with a useful message.
+    bad = []
+    for e in backlog["epics"]:
+        for s in e["stories"]:
+            for f in ("title", "story"):
+                if not isinstance(s.get(f), str):
+                    bad.append(f"{s['key']}.{f}")
+            for i, a in enumerate(s["acceptance"]):
+                if not isinstance(a, str) or not a.strip():
+                    bad.append(f"{s['key']}.acceptance[{i}] (quote lines containing a colon)")
+    if bad:
+        sys.exit("backlog.yml has non-string text:\n  " + "\n  ".join(bad))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -227,6 +283,7 @@ def main():
 
     j = Jira(os.environ["JIRA_SITE"], os.environ["JIRA_EMAIL"], os.environ["JIRA_TOKEN"], args.dry_run)
     backlog = yaml.safe_load(BACKLOG.read_text())
+    validate(backlog)
     m = load_map()
 
     print("== project")

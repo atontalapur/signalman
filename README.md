@@ -5,7 +5,7 @@ A Sigma detection engine and event pipeline in Go, built so that its evaluation 
 - Spec: `docs/spec/signalman-v1.html`
 - Roadmap: `docs/superpowers/plans/2026-09-10-signalman-roadmap.md`
 - Backlog (source of truth for Jira): `docs/backlog.yml`
-- Sync backlog to Jira: `JIRA_SITE=... JIRA_EMAIL=... JIRA_TOKEN=... scripts/jira_sync.py`
+- Sync backlog to Jira: copy `.env.example` to `.env`, fill it in, then `set -a; . ./.env; set +a; scripts/jira_sync.py`
 
 Before every commit: `make check`. CI runs the same target on every PR (`.github/workflows/ci.yml`), fuzzers run nightly, and a `v*` tag cuts a release with binaries and a GHCR image (`.goreleaser.yaml`).
 
