@@ -1,0 +1,1187 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Signalman Build Spec</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+  :root {
+    --ground:      #F1F4F3;
+    --surface:     #FFFFFF;
+    --surface-2:   #E6EBEA;
+    --ink:         #0F1918;
+    --ink-2:       #455856;
+    --ink-3:       #6C7E7C;
+    --rule:        #D1D9D8;
+    --rule-strong: #B4C0BE;
+    --accent:      #0B5F63;
+    --accent-2:    #DBE9E9;
+    --warn:        #9E5614;
+    --crit:        #94302F;
+    --ok:          #3D6A38;
+
+    --f-head: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+    --f-body: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0D1413;
+      --surface:     #141D1C;
+      --surface-2:   #1C2625;
+      --ink:         #E4ECEB;
+      --ink-2:       #A1B2B0;
+      --ink-3:       #7A8C8A;
+      --rule:        #293534;
+      --rule-strong: #3A4948;
+      --accent:      #63C4C8;
+      --accent-2:    #123033;
+      --warn:        #D9975E;
+      --crit:        #E08078;
+      --ok:          #82BA7B;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0D1413;
+    --surface:     #141D1C;
+    --surface-2:   #1C2625;
+    --ink:         #E4ECEB;
+    --ink-2:       #A1B2B0;
+    --ink-3:       #7A8C8A;
+    --rule:        #293534;
+    --rule-strong: #3A4948;
+    --accent:      #63C4C8;
+    --accent-2:    #123033;
+    --warn:        #D9975E;
+    --crit:        #E08078;
+    --ok:          #82BA7B;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 0 96px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  /* ---------- masthead ---------- */
+
+  .mast {
+    grid-column: 1 / -1;
+    border-bottom: 1px solid var(--rule-strong);
+    padding-block: 56px 30px;
+  }
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .mast h1 {
+    font-family: var(--f-head);
+    font-weight: 700;
+    font-size: clamp(38px, 6.4vw, 62px);
+    line-height: 1.02;
+    letter-spacing: -0.015em;
+    margin: 12px 0 0;
+    text-wrap: balance;
+  }
+  .mast .sub {
+    margin: 14px 0 0;
+    max-width: 62ch;
+    font-size: 19px;
+    color: var(--ink-2);
+  }
+  .facts {
+    margin: 26px 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 30px;
+    font-family: var(--f-mono);
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+  .facts b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* ---------- two column body ---------- */
+
+  .body-grid {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 40px;
+    align-items: start;
+  }
+
+  @media (min-width: 940px) {
+    .body-grid { grid-template-columns: 208px minmax(0, 1fr); gap: 56px; }
+    nav.rail { position: sticky; top: 24px; }
+  }
+
+  nav.rail {
+    padding-block: 30px 0;
+    font-family: var(--f-head);
+  }
+  nav.rail .rail-title {
+    font-family: var(--f-mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+  }
+  nav.rail ol {
+    list-style: none;
+    margin: 0;
+    padding: 10px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    counter-reset: ph;
+  }
+  nav.rail a {
+    display: grid;
+    grid-template-columns: 26px 1fr;
+    gap: 4px;
+    padding: 5px 0;
+    color: var(--ink-2);
+    text-decoration: none;
+    font-size: 14.5px;
+    line-height: 1.3;
+  }
+  nav.rail a:hover { color: var(--accent); }
+  nav.rail a .n {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    padding-top: 2px;
+  }
+  nav.rail a:hover .n { color: var(--accent); }
+
+  main { padding-block: 30px 0; min-width: 0; }
+
+  /* ---------- sections ---------- */
+
+  section { padding-block: 20px 40px; }
+  section + section { border-top: 1px solid var(--rule); }
+
+  .sec-head {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 6px;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .sec-head .num {
+    font-family: var(--f-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  h2 {
+    font-family: var(--f-head);
+    font-weight: 700;
+    font-size: clamp(25px, 3.4vw, 32px);
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--f-head);
+    font-weight: 600;
+    font-size: 19px;
+    letter-spacing: 0.005em;
+    margin: 34px 0 8px;
+    color: var(--ink);
+  }
+  h4 {
+    font-family: var(--f-mono);
+    font-weight: 600;
+    font-size: 11.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 26px 0 8px;
+  }
+
+  p, ul, ol.prose-list { max-width: 68ch; }
+  p { margin: 0 0 14px; }
+  main ul, main ol.prose-list { margin: 0 0 14px; padding-left: 20px; }
+  main li { margin-bottom: 6px; }
+  main li::marker { color: var(--ink-3); }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  code {
+    font-family: var(--f-mono);
+    font-size: 0.855em;
+    background: var(--surface-2);
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+  strong { font-weight: 600; }
+
+  /* ---------- code blocks ---------- */
+
+  .code {
+    margin: 16px 0 20px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 2px solid var(--accent);
+    overflow-x: auto;
+  }
+  .code .cap {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 8px 14px 0;
+  }
+  .code pre {
+    margin: 0;
+    padding: 10px 14px 14px;
+    font-family: var(--f-mono);
+    font-size: 12.5px;
+    line-height: 1.62;
+    color: var(--ink);
+    white-space: pre;
+  }
+  .code .c { color: var(--ink-3); }
+  .code .k { color: var(--accent); }
+
+  /* ---------- callouts ---------- */
+
+  .note {
+    margin: 18px 0 22px;
+    max-width: 68ch;
+    padding: 2px 0 2px 16px;
+    border-left: 2px solid var(--accent);
+  }
+  .note.risk { border-left-color: var(--warn); }
+  .note .lab {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 3px;
+  }
+  .note.risk .lab { color: var(--warn); }
+  .note p { margin: 0 0 8px; }
+  .note p:last-child { margin-bottom: 0; }
+
+  /* ---------- tables ---------- */
+
+  .tw { overflow-x: auto; margin: 18px 0 22px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 460px;
+    font-size: 14.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    text-align: left;
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding-bottom: 8px;
+  }
+  th {
+    text-align: left;
+    font-family: var(--f-head);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.03em;
+    color: var(--ink-2);
+    border-bottom: 1px solid var(--rule-strong);
+    padding: 0 14px 6px 0;
+    vertical-align: bottom;
+  }
+  td {
+    border-bottom: 1px solid var(--rule);
+    padding: 8px 14px 8px 0;
+    vertical-align: top;
+    color: var(--ink-2);
+  }
+  td:first-child { color: var(--ink); }
+  td code, th code { font-size: 12px; background: none; padding: 0; }
+  .mono-col { font-family: var(--f-mono); font-size: 12.5px; }
+
+  .sev { font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+  .sev.crit { color: var(--crit); }
+  .sev.warn { color: var(--warn); }
+  .sev.ok   { color: var(--ok); }
+
+  /* ---------- gates ---------- */
+
+  .gates { list-style: none; margin: 18px 0 22px; padding: 0; max-width: 72ch; display: flex; flex-direction: column; }
+  .gates li {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 12px;
+    padding: 13px 0;
+    border-top: 1px solid var(--rule);
+    margin: 0;
+  }
+  .gates li:last-child { border-bottom: 1px solid var(--rule); }
+  .gates .step {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    padding-top: 4px;
+  }
+  .gates .what { font-weight: 600; font-size: 16px; display: block; margin-bottom: 2px; }
+  .gates .cond { font-size: 14.5px; color: var(--ink-2); }
+  .gates .cond b { font-family: var(--f-mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+
+  /* ---------- diagram ---------- */
+
+  figure { margin: 22px 0 24px; }
+  .dw { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); padding: 16px; }
+  .dw svg { display: block; min-width: 720px; }
+  figcaption { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); margin-top: 9px; line-height: 1.5; }
+
+  footer {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--rule-strong);
+    margin-top: 20px;
+    padding-top: 20px;
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="shell">
+
+  <header class="mast">
+    <div class="eyebrow">Technical specification / v1.0</div>
+    <h1>Signalman</h1>
+    <p class="sub">A Sigma detection engine and event pipeline in Go, built so that its evaluation core can be replaced under live traffic and proven equivalent before the old one is retired.</p>
+    <div class="facts">
+      <span><b>Language</b> Go 1.23</span>
+      <span><b>Transport</b> Kafka / Redpanda</span>
+      <span><b>Store</b> ClickHouse</span>
+      <span><b>Rules</b> Sigma (SigmaHQ corpus)</span>
+      <span><b>Duration</b> 10 weeks</span>
+    </div>
+  </header>
+
+  <div class="body-grid">
+
+    <nav class="rail" aria-label="Contents">
+      <div class="rail-title">Phases</div>
+      <ol>
+        <li><a href="#goals"><span class="n">00</span><span>Goals and non-goals</span></a></li>
+        <li><a href="#contract"><span class="n">01</span><span>Data contract</span></a></li>
+        <li><a href="#frontend"><span class="n">02</span><span>Sigma frontend</span></a></li>
+        <li><a href="#v1"><span class="n">03</span><span>Reference evaluator</span></a></li>
+        <li><a href="#pipeline"><span class="n">04</span><span>Pipeline</span></a></li>
+        <li><a href="#load"><span class="n">05</span><span>Behavior under load</span></a></li>
+        <li><a href="#obs"><span class="n">06</span><span>Observability</span></a></li>
+        <li><a href="#v2"><span class="n">07</span><span>Compiled engine</span></a></li>
+        <li><a href="#equiv"><span class="n">08</span><span>Equivalence</span></a></li>
+        <li><a href="#cutover"><span class="n">09</span><span>Cutover</span></a></li>
+        <li><a href="#authors"><span class="n">10</span><span>Author surface</span></a></li>
+        <li><a href="#ai"><span class="n">11</span><span>AI tooling policy</span></a></li>
+        <li><a href="#plan"><span class="n">12</span><span>Schedule</span></a></li>
+      </ol>
+    </nav>
+
+    <main>
+
+      <!-- 00 -->
+      <section id="goals">
+        <div class="sec-head"><span class="num">00</span><h2>Goals and non-goals</h2></div>
+
+        <p>Signalman ingests normalized security events, evaluates Sigma rules against each one, and writes alerts. That much is a weekend project. The specification exists because of the second half: the evaluation core is written twice, and the second version replaces the first while traffic is flowing, under a written equivalence argument.</p>
+
+        <p>The build therefore produces two things. One is a working system. The other is a set of documents that record how the replacement was proven safe, which is the part that is hard to fake and hard to acquire outside of a job.</p>
+
+        <h4>Goals</h4>
+        <ul>
+          <li>Parse and evaluate the Sigma specification correctly, including the condition grammar and the value modifiers, not a convenient subset.</li>
+          <li>Sustain 50k events/sec against a 1,500 rule corpus on a single 8-core node, with p99 end-to-end latency under 250ms.</li>
+          <li>Make degradation legible: when the pipeline falls behind, it is knowable whether detections were delayed or lost.</li>
+          <li>Detect the absence of expected work, not just the presence of errors.</li>
+          <li>Give rule authors a feedback loop that reports false-positive load before a rule merges.</li>
+          <li>Replace the evaluator with zero verdict divergence, on a staged rollout, with a rehearsed rollback.</li>
+        </ul>
+
+        <h4>Non-goals</h4>
+        <ul>
+          <li><strong>Sigma correlations and aggregations.</strong> <code>| count() &gt; 5 by User</code> requires stateful windowing and a different design. Rules using it are rejected at load time with a clear error rather than silently mis-evaluated. This is the single largest scope cut and it is deliberate.</li>
+          <li><strong>Enrichment.</strong> No asset lookups, no threat intel joins, no geo. The normalizer maps fields and stops.</li>
+          <li><strong>Case management.</strong> Alerts land in ClickHouse. Triage workflow is out of scope.</li>
+          <li><strong>Multi-tenancy.</strong> One rule set, one taxonomy, one tenant.</li>
+        </ul>
+
+        <div class="note risk">
+          <span class="lab">Scope discipline</span>
+          <p>Every item on the non-goals list is a thing that will look tempting in week 6. Adding any of them costs the cutover, which is the only part of this project that a hiring panel cannot get from a hundred other candidates. Cut features before cutting phase 08.</p>
+        </div>
+      </section>
+
+      <!-- 01 -->
+      <section id="contract">
+        <div class="sec-head"><span class="num">01</span><h2>Data contract</h2></div>
+
+        <p>Equivalence between two engines is only checkable if there is a precise definition of what each engine emits. That definition comes first, before either engine exists, and it does not change after phase 04 ships.</p>
+
+        <div class="code">
+          <div class="cap">internal/event/event.go</div>
+<pre><span class="c">// Event is the unit of work. Seq is assigned once, at ingest, and is</span>
+<span class="c">// monotonic within a partition. Everything downstream is keyed on it.</span>
+type Event struct {
+	Seq       uint64            <span class="c">// ingest-assigned, per-partition monotonic</span>
+	Partition int32
+	Source    string            <span class="c">// "sysmon" | "auditd" | "cloudtrail"</span>
+	EventTime time.Time         <span class="c">// from the record, never wall clock</span>
+	IngestAt  time.Time
+	Fields    map[string]Value  <span class="c">// taxonomy-mapped, normalized</span>
+	Raw       []byte            <span class="c">// retained for the alert record</span>
+}
+
+<span class="c">// Value is a closed sum type. Sigma comparison semantics differ per</span>
+<span class="c">// kind, so the kind is carried explicitly rather than inferred.</span>
+type Value struct {
+	Kind ValueKind <span class="c">// KindString, KindInt, KindBool, KindNull, KindList</span>
+	S    string
+	I    int64
+	B    bool
+	L    []Value
+}
+
+<span class="c">// Verdict is the equivalence unit. One per (event, enabled rule).</span>
+type Verdict struct {
+	Seq       uint64
+	Partition int32
+	RuleID    string <span class="c">// the Sigma `id:` UUID, not the filename</span>
+	Matched   bool
+	Engine    string <span class="c">// "v1" | "v2"</span>
+	RuleSetV  string <span class="c">// content hash of the compiled rule set</span>
+	TaxonomyV string <span class="c">// content hash of the field mapping</span>
+}</pre>
+        </div>
+
+        <div class="note">
+          <span class="lab">Invariant 1 / total coverage</span>
+          <p>Every event admitted at ingest produces exactly one verdict per enabled rule, or exactly one entry in the drop ledger with a reason code. There is no third outcome. An event that vanishes without appearing in one of those two places is a P1 bug, and the pipeline has a continuous audit job that checks the arithmetic.</p>
+        </div>
+
+        <div class="note">
+          <span class="lab">Invariant 2 / determinism</span>
+          <p>A verdict is a pure function of <code>(Event, RuleSetV, TaxonomyV)</code>. No wall clock, no random source, no dependence on Go map iteration order, no dependence on the order rules were loaded. This is what makes replay a valid equivalence test, so it gets its own property test: evaluate the same corpus with the rule set shuffled ten times and assert the verdict stream hash is identical.</p>
+        </div>
+
+        <div class="note">
+          <span class="lab">Invariant 3 / ordering</span>
+          <p>Alerts for a given partition are emitted in <code>Seq</code> order. Kafka partitioning is by <code>host_id</code> hash, so per-host ordering holds, and cross-host ordering is explicitly not guaranteed. Say this out loud in the doc, because a consumer will otherwise assume global ordering and be wrong.</p>
+        </div>
+
+        <h3>Verdict stream hash</h3>
+        <p>The single most useful piece of tooling in the whole project is three lines long. Fold every verdict into a rolling hash, per partition, in <code>Seq</code> order:</p>
+
+        <div class="code">
+          <div class="cap">internal/verdict/digest.go</div>
+<pre>h = fnv1a64(h, seq, ruleID, matched)</pre>
+        </div>
+
+        <p>Two engines that produce the same digest over the same corpus are equivalent on that corpus, and the check is a string comparison rather than a diff of forty million rows. The row-level differ still exists for finding out <em>why</em> a digest differs, but the digest is what goes in the cutover gate.</p>
+      </section>
+
+      <!-- 02 -->
+      <section id="frontend">
+        <div class="sec-head"><span class="num">02</span><h2>Sigma frontend</h2></div>
+
+        <p>The frontend turns rule YAML into an AST. It is shared by both evaluators and by the ClickHouse backend, so a semantic bug here is a bug everywhere, and it gets the heaviest testing in the project.</p>
+
+        <h3>Condition grammar</h3>
+        <p>Write a real lexer and a precedence-climbing parser. The condition field looks simple enough to handle with string splitting, which is exactly the trap: <code>selection and not (filter1 or filter2)</code> and <code>1 of selection_* and not all of filter_*</code> both appear in the SigmaHQ corpus and neither survives a naive split.</p>
+
+        <div class="code">
+          <div class="cap">Condition grammar, EBNF</div>
+<pre>condition   := or_expr
+or_expr     := and_expr ( "or" and_expr )*
+and_expr    := not_expr ( "and" not_expr )*
+not_expr    := [ "not" ] primary
+primary     := "(" or_expr ")" | quantifier | IDENT
+quantifier  := count "of" ( pattern | "them" )
+count       := "1" | "any" | "all"
+pattern     := IDENT [ "*" ]        <span class="c"># prefix glob over selection names</span>
+
+<span class="c"># precedence: not &gt; and &gt; or        (left associative)</span></pre>
+        </div>
+
+        <p>Resolve quantifiers at parse time, not eval time. <code>1 of selection_*</code> expands into an OR node over the matching selection identifiers, and <code>all of them</code> expands into an AND node over every selection defined in the rule. Doing the expansion in the parser means the evaluator only ever sees AND, OR, NOT, and leaf predicates, which keeps both engines small.</p>
+
+        <div class="note risk">
+          <span class="lab">Reject loudly</span>
+          <p>If the condition contains a pipe, the rule uses aggregation and this engine cannot evaluate it. Fail the load with the rule ID, the line number, and the phrase "aggregation is not supported". A rule that is silently skipped is a missed detection with no signal attached to it, which is the worst failure this system can have.</p>
+        </div>
+
+        <h3>Detection block semantics</h3>
+        <p>The implicit boolean structure is where most homegrown implementations quietly diverge from the specification.</p>
+
+        <div class="tw">
+        <table>
+          <caption>Implicit combination rules</caption>
+          <thead><tr><th style="width:34%">Shape</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td class="mono-col">map of field: value</td><td>AND across the fields</td></tr>
+            <tr><td class="mono-col">field: [a, b, c]</td><td>OR across the values</td></tr>
+            <tr><td class="mono-col">field|all: [a, b]</td><td>AND across the values</td></tr>
+            <tr><td class="mono-col">list of maps</td><td>OR across the maps, AND within each</td></tr>
+            <tr><td class="mono-col">field: null</td><td>matches when the field is absent <em>or</em> present and null</td></tr>
+            <tr><td class="mono-col">field: ''</td><td>matches only a present, empty string. Not the same as null</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <h3>Modifiers</h3>
+        <p>Implement the full set, and implement wildcard matching as its own matcher rather than by translating to regex. The naive translation of <code>*</code> to <code>.*</code> breaks on values that contain regex metacharacters, and Windows command lines are full of them.</p>
+
+        <div class="tw">
+        <table>
+          <caption>Value modifiers and their sharp edges</caption>
+          <thead><tr><th style="width:26%">Modifier</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td class="mono-col">contains, startswith, endswith</td><td>Case insensitive by default, like all Sigma string comparison</td></tr>
+            <tr><td class="mono-col">all</td><td>Applies to the list, not the value. Chains as <code>|contains|all</code></td></tr>
+            <tr><td class="mono-col">re</td><td>Case <em>sensitive</em> unless <code>|re|i</code>. Different default from every other string modifier</td></tr>
+            <tr><td class="mono-col">base64offset|contains</td><td>Expands to three encodings, for the three possible byte alignments of the plaintext</td></tr>
+            <tr><td class="mono-col">utf16le, utf16be, wide</td><td>Applied before base64 encoding when chained. Order matters</td></tr>
+            <tr><td class="mono-col">windash</td><td>Expands a leading <code>-</code> into <code>-</code>, <code>/</code>, <code>&ndash;</code>, <code>&mdash;</code>, <code>&#8213;</code>. Five variants, not two</td></tr>
+            <tr><td class="mono-col">cidr</td><td>Parse once at compile time into a <code>netip.Prefix</code>, never per event</td></tr>
+            <tr><td class="mono-col">lt, lte, gt, gte</td><td>Numeric. Defines behavior when the field is a string that does not parse: no match, not an error</td></tr>
+            <tr><td class="mono-col">fieldref</td><td>Compares two fields on the same event. Breaks the assumption that a leaf predicate has a constant right side, so design for it now</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <h3>Taxonomy mapping</h3>
+        <p>Sigma logsources are abstract. <code>process_creation</code> on Windows means Sysmon Event ID 1, and the rule's <code>Image</code> field means Sysmon's <code>Image</code> but auditd's <code>exe</code>. That mapping is configuration, versioned, and hashed into <code>TaxonomyV</code>:</p>
+
+        <div class="code">
+          <div class="cap">config/taxonomy/sysmon.yml</div>
+<pre>logsource:
+  product: windows
+  category: process_creation
+match:
+  channel: Microsoft-Windows-Sysmon/Operational
+  event_id: 1
+fields:
+  Image:            Image
+  CommandLine:      CommandLine
+  ParentImage:      ParentImage
+  User:             User
+  OriginalFileName: OriginalFileName
+  Hashes:           Hashes</pre>
+        </div>
+
+        <p>A rule whose logsource has no taxonomy entry does not silently match nothing. It fails to load, with the same loud error as an unsupported condition.</p>
+
+        <h3>Second backend</h3>
+        <p>Once the AST exists, add a compiler that emits ClickHouse SQL for retro-hunting over the historical alert store. One specification, two execution targets, is the exercise that shows whether the AST is a real abstraction or just a shape the evaluator happens to like. Expect the leaks to show up in regex dialect (RE2 in both, fortunately), case-insensitive comparison, and null handling, and write those down as they appear.</p>
+      </section>
+
+      <!-- 03 -->
+      <section id="v1">
+        <div class="sec-head"><span class="num">03</span><h2>Reference evaluator</h2></div>
+
+        <p>v1 walks the AST once per rule per event. No index, no prefilter, no caching. It is intentionally the slowest correct thing that can be written.</p>
+
+        <div class="code">
+          <div class="cap">internal/engine/v1/eval.go</div>
+<pre>func (e *Engine) Evaluate(ev *event.Event) []event.Verdict {
+	out := make([]event.Verdict, 0, len(e.rules))
+	for _, r := range e.rules {
+		if !r.LogSource.Matches(ev) {
+			out = append(out, verdict(ev, r, false))
+			continue
+		}
+		out = append(out, verdict(ev, r, walk(r.Cond, ev)))
+	}
+	return out
+}
+
+func walk(n ast.Node, ev *event.Event) bool {
+	switch n := n.(type) {
+	case *ast.And: <span class="c">// short circuit is fine; it cannot change the result</span>
+		for _, c := range n.Children { if !walk(c, ev) { return false } }
+		return true
+	case *ast.Or:
+		for _, c := range n.Children { if walk(c, ev) { return true } }
+		return false
+	case *ast.Not:
+		return !walk(n.Child, ev)
+	case *ast.Pred:
+		return n.Match(ev)
+	}
+	panic("unreachable node type")
+}</pre>
+        </div>
+
+        <p>Two rules govern v1 for the life of the project. It is optimized for being obviously correct when read, and it is never deleted. After the cutover it stops serving traffic and becomes the oracle that the differential tests compare against, which means the codebase permanently contains a second, independent implementation of the semantics.</p>
+
+        <div class="note">
+          <span class="lab">Invariant 4 / no rule skipping</span>
+          <p>Note that v1 emits a <code>false</code> verdict for a logsource mismatch rather than emitting nothing. Absent verdicts and negative verdicts are different states, and collapsing them makes invariant 1 uncheckable. v2 must preserve this, which is a real constraint on the prefilter design in phase 07.</p>
+        </div>
+      </section>
+
+      <!-- 04 -->
+      <section id="pipeline">
+        <div class="sec-head"><span class="num">04</span><h2>Pipeline</h2></div>
+
+        <figure>
+          <div class="dw">
+            <svg viewBox="0 0 760 232" role="img" aria-label="Pipeline topology: ingest to normalize, then forking into the v1 matcher lane and the v2 shadow lane, with a differ comparing verdict streams.">
+              <defs>
+                <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M0,1 L9,5 L0,9 z" fill="var(--rule-strong)"/>
+                </marker>
+              </defs>
+              <g font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--ink)">
+
+                <!-- lane labels -->
+                <text x="8" y="16" font-size="9.5" fill="var(--accent)" letter-spacing="0.1em">PRODUCTION LANE</text>
+                <text x="8" y="222" font-size="9.5" fill="var(--ink-3)" letter-spacing="0.1em">SHADOW LANE (PHASE 08)</text>
+
+                <!-- boxes -->
+                <g>
+                  <rect x="8" y="85" width="104" height="42" fill="var(--surface-2)" stroke="var(--rule-strong)"/>
+                  <text x="60" y="103" text-anchor="middle" fill="var(--ink)">ingest</text>
+                  <text x="60" y="117" text-anchor="middle" font-size="9" fill="var(--ink-3)">assigns Seq</text>
+                </g>
+                <g>
+                  <rect x="168" y="85" width="104" height="42" fill="var(--surface-2)" stroke="var(--rule-strong)"/>
+                  <text x="220" y="103" text-anchor="middle" fill="var(--ink)">normalize</text>
+                  <text x="220" y="117" text-anchor="middle" font-size="9" fill="var(--ink-3)">taxonomy map</text>
+                </g>
+                <g>
+                  <rect x="328" y="33" width="104" height="42" fill="var(--accent-2)" stroke="var(--accent)"/>
+                  <text x="380" y="51" text-anchor="middle" fill="var(--ink)">match v1</text>
+                  <text x="380" y="65" text-anchor="middle" font-size="9" fill="var(--ink-3)">tree walk</text>
+                </g>
+                <g>
+                  <rect x="328" y="137" width="104" height="42" fill="var(--surface-2)" stroke="var(--rule-strong)" stroke-dasharray="3 2"/>
+                  <text x="380" y="155" text-anchor="middle" fill="var(--ink)">match v2</text>
+                  <text x="380" y="169" text-anchor="middle" font-size="9" fill="var(--ink-3)">compiled</text>
+                </g>
+                <g>
+                  <rect x="488" y="33" width="104" height="42" fill="var(--surface-2)" stroke="var(--rule-strong)"/>
+                  <text x="540" y="58" text-anchor="middle" fill="var(--ink)">alert sink</text>
+                </g>
+                <g>
+                  <rect x="648" y="33" width="104" height="42" fill="var(--surface-2)" stroke="var(--rule-strong)"/>
+                  <text x="700" y="51" text-anchor="middle" fill="var(--ink)">ClickHouse</text>
+                  <text x="700" y="65" text-anchor="middle" font-size="9" fill="var(--ink-3)">alerts</text>
+                </g>
+                <g>
+                  <rect x="488" y="137" width="104" height="42" fill="var(--surface-2)" stroke="var(--rule-strong)" stroke-dasharray="3 2"/>
+                  <text x="540" y="162" text-anchor="middle" fill="var(--ink)">differ</text>
+                </g>
+                <g>
+                  <rect x="648" y="137" width="104" height="42" fill="var(--surface-2)" stroke="var(--rule-strong)" stroke-dasharray="3 2"/>
+                  <text x="700" y="155" text-anchor="middle" fill="var(--ink)">divergence</text>
+                  <text x="700" y="169" text-anchor="middle" font-size="9" fill="var(--ink-3)">report</text>
+                </g>
+
+                <!-- arrows -->
+                <g stroke="var(--rule-strong)" stroke-width="1.2" fill="none" marker-end="url(#ah)">
+                  <path d="M112,106 H164"/>
+                  <path d="M272,106 H300 V54 H324"/>
+                  <path d="M300,106 V158 H324"/>
+                  <path d="M432,54 H484"/>
+                  <path d="M592,54 H644"/>
+                  <path d="M432,158 H484"/>
+                  <path d="M592,158 H644"/>
+                  <path d="M380,75 V112 H484 V150 H484" stroke-dasharray="3 3"/>
+                </g>
+
+                <!-- topic labels -->
+                <g font-size="9" fill="var(--ink-3)" text-anchor="middle">
+                  <text x="138" y="100">events.raw</text>
+                  <text x="298" y="30">events.norm</text>
+                  <text x="458" y="48">alerts</text>
+                  <text x="618" y="48">insert</text>
+                  <text x="458" y="152">verdicts.v2</text>
+                  <text x="618" y="152">report</text>
+                  <text x="440" y="108">verdicts.v1</text>
+                </g>
+              </g>
+            </svg>
+          </div>
+          <figcaption>The shadow lane is built in phase 08 and torn down after retirement. Everything else is permanent.</figcaption>
+        </figure>
+
+        <h3>Topics</h3>
+        <div class="tw">
+        <table>
+          <caption>Kafka topics</caption>
+          <thead><tr><th style="width:26%">Topic</th><th style="width:20%">Key</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td class="mono-col">events.raw</td><td class="mono-col">host_id</td><td>Untouched source records</td></tr>
+            <tr><td class="mono-col">events.norm</td><td class="mono-col">host_id</td><td>Taxonomy-mapped, Seq assigned</td></tr>
+            <tr><td class="mono-col">alerts</td><td class="mono-col">rule_id</td><td>Matches only. The consumer-facing contract</td></tr>
+            <tr><td class="mono-col">verdicts.v1</td><td class="mono-col">partition</td><td>All verdicts. Retained 7 days, shadow only</td></tr>
+            <tr><td class="mono-col">verdicts.v2</td><td class="mono-col">partition</td><td>Same, from the shadow engine</td></tr>
+            <tr><td class="mono-col">drops</td><td class="mono-col">host_id</td><td>The drop ledger. Retained 30 days</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <h3>Backpressure</h3>
+        <p>Every stage boundary is a bounded channel. There is no unbounded buffer anywhere in the process, and the code review checklist has a line item for it. The worker pool per stage is sized at <code>GOMAXPROCS</code> and configured, not computed at startup, so that load tests can pin it.</p>
+
+        <div class="note">
+          <span class="lab">Decision / lag over loss</span>
+          <p>When the matcher cannot keep up, the bounded channel fills, the consumer stops polling, and Kafka consumer lag grows. Signalman does not shed load. Lag is visible, bounded by retention, and recoverable by replay. Silent loss is none of those. The one place events are discarded is a parse failure, and every discard is written to the drop ledger with a reason code and the raw bytes.</p>
+        </div>
+
+        <p>Offsets are committed manually and only after the verdicts for that batch are durable, which makes delivery at-least-once. Duplicates are absorbed at the sink: the ClickHouse alert table is a <code>ReplacingMergeTree</code> ordered by <code>(partition, seq, rule_id)</code>, so a redelivered batch collapses on merge. Write down which of the two failure modes you chose and why, because "at-least-once with an idempotent sink" is a design decision, not an accident.</p>
+
+        <div class="code">
+          <div class="cap">ClickHouse schema</div>
+<pre>CREATE TABLE alerts (
+  partition   Int32,
+  seq         UInt64,
+  rule_id     UUID,
+  rule_title  LowCardinality(String),
+  severity    Enum8('informational'=1,'low'=2,'medium'=3,'high'=4,'critical'=5),
+  event_time  DateTime64(3),
+  ingest_time DateTime64(3),
+  host_id     LowCardinality(String),
+  source      LowCardinality(String),
+  fields      Map(String, String),
+  raw         String CODEC(ZSTD(3))
+) ENGINE = ReplacingMergeTree
+ORDER BY (partition, seq, rule_id)
+PARTITION BY toYYYYMMDD(event_time)
+TTL toDateTime(event_time) + INTERVAL 90 DAY;</pre>
+        </div>
+      </section>
+
+      <!-- 05 -->
+      <section id="load">
+        <div class="sec-head"><span class="num">05</span><h2>Behavior under load</h2></div>
+
+        <p>The deliverable of this phase is a written document, not a benchmark number. It answers three questions for each experiment below: where did the work queue, what fell behind first, and what happened to detection correctness while it was behind.</p>
+
+        <div class="tw">
+        <table>
+          <caption>Required experiments</caption>
+          <thead><tr><th style="width:32%">Experiment</th><th>What the document has to answer</th></tr></thead>
+          <tbody>
+            <tr><td>Sustained 2x capacity, 30 min</td><td>Which stage saturates first, and what the lag curve looks like on recovery. Verify zero drop-ledger entries</td></tr>
+            <tr><td>Sustained 5x, 30 min</td><td>Whether anything begins to fail rather than merely slow down. Broker disk, socket buffers, GC pressure</td></tr>
+            <tr><td>Consumer kill mid-batch</td><td>Whether replay produces duplicate alerts and whether the sink collapses them. Verify the verdict digest is unchanged after recovery</td></tr>
+            <tr><td>Poison record</td><td>A record that panics the normalizer. It must land in the drop ledger and must not wedge the partition</td></tr>
+            <tr><td>Rule set reload under load</td><td>Whether verdicts straddle two <code>RuleSetV</code> values mid-batch. They must not; reload is atomic at a batch boundary</td></tr>
+            <tr><td>ClickHouse unavailable, 10 min</td><td>Where the backpressure surfaces, and whether alerts survive the outage</td></tr>
+            <tr><td>One partition offline</td><td>Whether the other partitions keep processing, and whether the canary alerts on the dead one</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <div class="note">
+          <span class="lab">The interview answer</span>
+          <p>A missed detection and a delayed detection are different classes of failure. This phase exists so that you can say, with evidence, which one Signalman produces under overload and why that was the right trade for a detection system. That sentence is worth more than the throughput number.</p>
+        </div>
+      </section>
+
+      <!-- 06 -->
+      <section id="obs">
+        <div class="sec-head"><span class="num">06</span><h2>Observability</h2></div>
+
+        <p>Instrumentation is written with the code in each phase, not added at the end. The metric names below are fixed in phase 04 and referenced by the load document, the cutover gates, and the alert rules.</p>
+
+        <div class="tw">
+        <table>
+          <caption>Core metrics</caption>
+          <thead><tr><th style="width:44%">Metric</th><th>Type and labels</th></tr></thead>
+          <tbody>
+            <tr><td class="mono-col">signalman_events_ingested_total</td><td>counter / source, partition</td></tr>
+            <tr><td class="mono-col">signalman_events_dropped_total</td><td>counter / reason, source</td></tr>
+            <tr><td class="mono-col">signalman_verdicts_total</td><td>counter / engine, matched</td></tr>
+            <tr><td class="mono-col">signalman_rule_matches_total</td><td>counter / rule_id</td></tr>
+            <tr><td class="mono-col">signalman_rule_eval_seconds</td><td>histogram / rule_id (exemplars off)</td></tr>
+            <tr><td class="mono-col">signalman_stage_queue_depth</td><td>gauge / stage</td></tr>
+            <tr><td class="mono-col">signalman_consumer_lag_records</td><td>gauge / topic, partition</td></tr>
+            <tr><td class="mono-col">signalman_event_staleness_seconds</td><td>gauge / partition</td></tr>
+            <tr><td class="mono-col">signalman_canary_age_seconds</td><td>gauge / partition</td></tr>
+            <tr><td class="mono-col">signalman_ruleset_version_info</td><td>gauge / ruleset_v, taxonomy_v</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <p>Staleness and lag are separate on purpose. Lag counts records not yet consumed. Staleness is <code>now() - max(event_time)</code> among processed records, which catches an upstream that stopped producing. A pipeline with zero lag and rising staleness is broken, and only one of those two metrics can see it.</p>
+
+        <h3>Alerting on absence</h3>
+        <p>This is the piece the job description asks for by name, and it is about twenty lines of code.</p>
+
+        <p>A generator injects a synthetic event into <code>events.raw</code> on every partition every 30 seconds. The event is crafted to match one rule, <code>signalman-canary</code>, which exists only for this purpose and is loaded like any other rule. When the corresponding alert appears at the sink, <code>signalman_canary_age_seconds</code> resets. When it does not, the gauge climbs.</p>
+
+        <div class="code">
+          <div class="cap">alerts/absence.yml</div>
+<pre>- alert: SignalmanCanaryStalled
+  expr: signalman_canary_age_seconds &gt; 120
+  for: 2m
+  labels:   { severity: page }
+  annotations:
+    summary: "No canary alert on partition {{ $labels.partition }} for 2m"
+    runbook: "Pipeline is not producing detections. Check staleness, then
+              the taxonomy version, then broker health. Assume detections
+              are being missed until proven otherwise."
+
+- alert: SignalmanRuleWentSilent
+  expr: |
+    increase(signalman_rule_matches_total[24h]) == 0
+      and
+    increase(signalman_rule_matches_total[30d]) &gt; 0
+  for: 1h
+  labels:   { severity: ticket }
+  annotations:
+    summary: "Rule {{ $labels.rule_id }} matched in the last 30d but not today"</pre>
+        </div>
+
+        <p>The canary catches a wedged consumer or a broken sink within two minutes. The silence detector catches the subtler failure: a taxonomy change renames a field, a rule stops matching anything, and nothing errors. It files a ticket rather than paging, because the base rate of legitimately quiet rules is high and a noisy absence alert would be self-defeating.</p>
+
+        <div class="note risk">
+          <span class="lab">Noise budget</span>
+          <p>The severity split is the point. A SOC that gets paged for a rule going quiet will mute the channel within a week, and then the canary page gets muted with it. Absence alerting only works if the paging tier stays small enough to stay credible.</p>
+        </div>
+      </section>
+
+      <!-- 07 -->
+      <section id="v2">
+        <div class="sec-head"><span class="num">07</span><h2>Compiled engine</h2></div>
+
+        <p>v1 costs O(rules x predicates) per event. At 1,500 rules that is roughly 40,000 predicate evaluations per event, most of them on fields the event does not have. v2 compiles the whole rule set into one structure and evaluates the shared work once.</p>
+
+        <h3>Predicate interning</h3>
+        <p>Across the SigmaHQ corpus, the same leaf predicate appears in many rules. <code>Image|endswith: '\powershell.exe'</code> occurs in dozens. Compile every leaf into a canonical form, deduplicate into a table, and give each unique predicate an index. Evaluation fills a bitset of predicate results per event; the boolean trees then read from the bitset instead of touching the event.</p>
+
+        <div class="code">
+          <div class="cap">internal/engine/v2/compile.go</div>
+<pre>type Program struct {
+	Preds  []Pred            <span class="c">// deduped, indexed</span>
+	ByField map[string][]int <span class="c">// field name -&gt; predicate indices</span>
+	Trees  []Tree            <span class="c">// one per rule, leaves are predicate indices</span>
+	Filter *ahocorasick.Matcher
+	Always []int             <span class="c">// rules with no derivable required literal</span>
+}</pre>
+        </div>
+
+        <h3>Literal prefilter</h3>
+        <p>For each rule, derive the set of string literals that <em>must</em> appear somewhere in the event for the rule to have any chance of matching. Build one Aho-Corasick automaton over all such literals and run the event's string fields through it once. Rules whose required literals are absent skip tree evaluation entirely.</p>
+
+        <div class="note risk">
+          <span class="lab">The subtle part</span>
+          <p>A literal is only <em>required</em> if it sits in a conjunctive position with no negation above it. Harvesting literals from inside an OR, or from under a <code>not</code>, produces a prefilter that discards events the rule would have matched, which is a missed detection introduced by an optimization. Write the derivation as a separate function with its own property test: for every rule and every event in the corpus, assert that <code>prefilterAdmits(rule, event) == false</code> implies <code>v1.Evaluate(rule, event) == false</code>. Rules with no safe required literal go in <code>Always</code>, and the size of that set is a metric worth watching.</p>
+        </div>
+
+        <h3>Field presence gating</h3>
+        <p>Before anything else, intersect the event's field set with each rule's required field set. A <code>process_creation</code> rule against a network connection event exits on a bitset AND. This also preserves invariant 4: a gated-out rule still emits an explicit <code>false</code> verdict, it just does not walk the tree to produce it.</p>
+
+        <h3>Targets</h3>
+        <div class="tw">
+        <table>
+          <caption>Performance targets, 1,500 rules, 8 cores</caption>
+          <thead><tr><th style="width:34%">Measure</th><th style="width:22%">v1</th><th>v2 target</th></tr></thead>
+          <tbody>
+            <tr><td>Throughput, single node</td><td class="mono-col">~4k ev/s</td><td class="mono-col">50k ev/s</td></tr>
+            <tr><td>p99 match latency</td><td class="mono-col">~9 ms</td><td class="mono-col">&lt; 400 &micro;s</td></tr>
+            <tr><td>Allocations per event</td><td class="mono-col">measure it</td><td class="mono-col">0 in the hot path</td></tr>
+            <tr><td>Rule set compile time</td><td class="mono-col">n/a</td><td class="mono-col">&lt; 2 s</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <p>Zero allocations per event in the steady state is achievable with a per-worker arena and a reused bitset, and <code>go test -bench . -benchmem</code> in CI will hold the line. Set the v1 numbers by measuring, not by guessing, and record them before starting v2 so the comparison is honest.</p>
+      </section>
+
+      <!-- 08 -->
+      <section id="equiv">
+        <div class="sec-head"><span class="num">08</span><h2>Equivalence</h2></div>
+
+        <p>Four independent arguments, in increasing order of strength. Each one is cheap to run in CI once built.</p>
+
+        <h3>Differential fuzzing against pySigma</h3>
+        <p>pySigma is the reference implementation of the specification. Generate random but valid rules and random events, evaluate both under Signalman and under pySigma, and assert agreement. This tests the frontend against the specification, which nothing else in the project does.</p>
+
+        <div class="code">
+          <div class="cap">test/fuzz/differential_test.go</div>
+<pre>func FuzzAgainstPySigma(f *testing.F) {
+	<span class="c">// seed corpus: every rule in SigmaHQ that this engine accepts</span>
+	f.Fuzz(func(t *testing.T, ruleYAML, eventJSON []byte) {
+		got, errG := signalman.EvalOnce(ruleYAML, eventJSON)
+		want, errP := pysigma.EvalOnce(ruleYAML, eventJSON) <span class="c">// subprocess</span>
+		if (errG == nil) != (errP == nil) {
+			t.Fatalf("acceptance mismatch: go=%v py=%v", errG, errP)
+		}
+		if errG == nil &amp;&amp; got != want {
+			t.Fatalf("verdict mismatch: go=%v py=%v", got, want)
+		}
+	})
+}</pre>
+        </div>
+
+        <p>Run the parser fuzzer separately, with no oracle, purely for panics and unbounded recursion on hostile condition strings.</p>
+
+        <h3>Property tests</h3>
+        <ul>
+          <li><strong>Determinism.</strong> Same corpus, rule set shuffled, digests identical. This is the property invariant 2 depends on.</li>
+          <li><strong>Rule independence.</strong> Evaluating rules A and B together produces the same verdicts as evaluating each alone. Catches shared-state bugs in the interned predicate table.</li>
+          <li><strong>Prefilter soundness.</strong> The implication stated in phase 07, run over the full corpus.</li>
+          <li><strong>Idempotence.</strong> Re-ingesting an identical batch changes no alert row after merge.</li>
+        </ul>
+
+        <h3>Corpus replay</h3>
+        <p>Replay the full historical event corpus through both engines offline and compare verdict digests per partition. This is the strongest offline claim available, because it is exhaustive over a fixed input rather than sampled. It runs in CI on every change to the frontend or either engine.</p>
+
+        <h3>Shadow mode</h3>
+        <p>v2 consumes <code>events.norm</code> alongside v1 and writes to <code>verdicts.v2</code>. It emits no alerts and has no consumers. The differ joins the two verdict streams on <code>(partition, seq, rule_id)</code> and classifies every disagreement.</p>
+
+        <div class="tw">
+        <table>
+          <caption>Divergence classes and budgets</caption>
+          <thead><tr><th style="width:26%">Class</th><th style="width:18%">Budget</th><th>Handling</th></tr></thead>
+          <tbody>
+            <tr><td>v2 false negative</td><td><span class="sev crit">zero</span></td><td>Missed detection. Halts the cutover immediately</td></tr>
+            <tr><td>v2 false positive</td><td><span class="sev crit">zero</span></td><td>Noise the SOC would have to absorb. Also halts</td></tr>
+            <tr><td>Missing verdict, either engine</td><td><span class="sev crit">zero</span></td><td>Violates invariant 1. Halts</td></tr>
+            <tr><td>Version skew during reload</td><td><span class="sev warn">transient</span></td><td>Excluded from the count when <code>RuleSetV</code> differs between the two rows. If this class is not empty at steady state, the reload is not atomic</td></tr>
+            <tr><td>Ordering</td><td><span class="sev ok">n/a</span></td><td>The join is on <code>Seq</code>, so arrival order cannot produce a divergence</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <div class="note">
+          <span class="lab">Keep the divergence log</span>
+          <p>Every disagreement found in shadow mode, with the rule, the event, the root cause, and the fix, goes in a running document. That document is the single best artifact this project produces, because it is direct evidence of the failure modes you found before users did. Expect the majority to come from the prefilter derivation and from null handling.</p>
+        </div>
+      </section>
+
+      <!-- 09 -->
+      <section id="cutover">
+        <div class="sec-head"><span class="num">09</span><h2>Cutover</h2></div>
+
+        <p>Routing is per rule, by <code>fnv(rule_id) % 100 &lt; rolloutPercent</code>. Rules move to v2 in a stable order, so advancing the percentage never moves a rule back, and a rule that has been serving from v2 keeps serving from v2. v1 continues to shadow every rule that v2 serves, for the entire rollout, which means the divergence detector is still armed on exactly the rules that are live.</p>
+
+        <ol class="gates">
+          <li><span class="step">G0</span><span><span class="what">Offline equivalence</span><span class="cond">Full corpus replay digests match on every partition. Differential fuzzer clean for <b>1e8 executions</b>. All property tests green.</span></span></li>
+          <li><span class="step">G1</span><span><span class="what">Shadow at full traffic</span><span class="cond">v2 shadows 100% of rules for <b>7 days</b> with <b>0</b> divergences in the three zero-budget classes. v2 p99 within target under production load.</span></span></li>
+          <li><span class="step">G2</span><span><span class="what">1% of rules served by v2</span><span class="cond">Hold <b>48 h</b>. v1 still shadowing. Alert volume per rule unchanged within noise. Rollback is a config flag, measured to take effect in under <b>30 s</b>.</span></span></li>
+          <li><span class="step">G3</span><span><span class="what">10%, then 50%</span><span class="cond"><b>48 h</b> at each step, same conditions. Any divergence at any step returns to the previous step, not to zero.</span></span></li>
+          <li><span class="step">G4</span><span><span class="what">100% served by v2</span><span class="cond">v1 keeps shadowing and keeps consuming. No configuration change other than the flag. Rollback still exercised.</span></span></li>
+          <li><span class="step">G5</span><span><span class="what">Rollback game day</span><span class="cond">Deliberately roll back to v1 at full traffic, during business hours, and roll forward again. Measure both. A rollback path that has never been executed is a hypothesis.</span></span></li>
+          <li><span class="step">G6</span><span><span class="what">Retirement</span><span class="cond"><b>14 days</b> at 100% with zero divergence, plus a successful game day. v1 is removed from the serving path and the shadow lane is torn down.</span></span></li>
+        </ol>
+
+        <div class="note">
+          <span class="lab">Decision / demote, do not delete</span>
+          <p>At G6, v1 leaves production but stays in the repository as the test oracle. The differential and replay tests keep running against it forever. The cost is one unused package. The benefit is that the codebase permanently contains two independent implementations of the semantics, and any future change to v2 has to convince both.</p>
+        </div>
+
+        <p>Write the retirement criteria before reaching G4, not after. Deciding what "safe enough" means while looking at a green dashboard is how systems get retired one week early.</p>
+      </section>
+
+      <!-- 10 -->
+      <section id="authors">
+        <div class="sec-head"><span class="num">10</span><h2>Author surface</h2></div>
+
+        <p>The users of a detection engine are not engineers. The product is a language, a CLI, and a feedback loop, and the loop has to close before merge rather than after deployment.</p>
+
+        <div class="code">
+          <div class="cap">CLI</div>
+<pre>signalman lint    rules/                 <span class="c"># parse, taxonomy resolve, style</span>
+signalman test    rules/proc_dump.yml    <span class="c"># run fixtures</span>
+signalman explain rules/proc_dump.yml \  <span class="c"># show why an event matched</span>
+                  --event samples/lsass.json
+signalman noise   rules/proc_dump.yml \  <span class="c"># FP load over the corpus</span>
+                  --corpus corpora/win-30d
+signalman bench   rules/                 <span class="c"># per-rule eval cost</span></pre>
+        </div>
+
+        <h3>Fixtures</h3>
+        <p>A rule ships with its test cases in a sibling file. Author-facing, so no Go, no build step.</p>
+
+        <div class="code">
+          <div class="cap">rules/proc_dump.test.yml</div>
+<pre>rule: proc_dump.yml
+cases:
+  - name:   comsvcs minidump via rundll32
+    expect: match
+    event:
+      Channel:     Microsoft-Windows-Sysmon/Operational
+      EventID:     1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: rundll32.exe comsvcs.dll, MiniDump 624 C:\t.dmp full
+
+  - name:   benign rundll32, printui
+    expect: no-match
+    event:
+      Channel:     Microsoft-Windows-Sysmon/Operational
+      EventID:     1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: rundll32.exe printui.dll,PrintUIEntry /in /n \\srv\hp</pre>
+        </div>
+
+        <h3>Explain</h3>
+        <p>The <code>explain</code> output is what turns the engine from a black box into a tool an analyst can argue with. Print the resolved condition tree with each node annotated by its result and each leaf annotated with the value it saw.</p>
+
+        <div class="code">
+          <div class="cap">signalman explain, abbreviated</div>
+<pre>rule  proc_dump  (T1003.001 / LSASS Memory)     =&gt; MATCH
+  AND
+    selection_img                                  true
+      Image|endswith '\rundll32.exe'               true   ("C:\Windows\System32\rundll32.exe")
+    selection_cli                                  true
+      OR
+        CommandLine|contains 'comsvcs.dll'         true   ("rundll32.exe comsvcs.dll, MiniDump 624 ...")
+        CommandLine|contains 'MiniDump'            true
+    NOT filter_backup                              true
+      ParentImage|endswith '\veeam.exe'            false  ("C:\Windows\explorer.exe")</pre>
+        </div>
+
+        <h3>CI gates on a rule pull request</h3>
+        <div class="tw">
+        <table>
+          <caption>Automatic checks, reported as a PR comment</caption>
+          <thead><tr><th style="width:26%">Gate</th><th>Fails when</th></tr></thead>
+          <tbody>
+            <tr><td>Parse</td><td>The rule does not load, or uses an unsupported feature</td></tr>
+            <tr><td>Fixtures</td><td>Any case disagrees, or the rule has fewer than one match and one no-match case</td></tr>
+            <tr><td>Noise budget</td><td>Matches per 100k corpus events exceed the rule's declared <code>budget:</code>. The comment shows the figure and ten sample matches</td></tr>
+            <tr><td>Latency budget</td><td>p99 evaluation cost above 50&micro;s, which usually means an unanchored regex that should be a <code>contains</code></td></tr>
+            <tr><td>Prefilter</td><td>The rule lands in the <code>Always</code> set. A warning, not a failure, but the author should know</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <p>The noise number is the one that matters. A rule author who sees "this would have fired 1,840 times in the last 30 days" before merging writes a different rule than one who finds out from an annoyed analyst two weeks later.</p>
+      </section>
+
+      <!-- 11 -->
+      <section id="ai">
+        <div class="sec-head"><span class="num">11</span><h2>AI tooling policy</h2></div>
+
+        <p>Use AI coding tools heavily on this project, and be able to say exactly where the trust boundary sits. In a detection system, a plausible-looking wrong answer is a security outcome, so the policy is about what counts as verification rather than about how much gets generated.</p>
+
+        <h3>Generate freely</h3>
+        <ul>
+          <li>The differential fuzzer harness and the pySigma subprocess bridge.</li>
+          <li>Test fixtures and corpus generators. Volume matters more than elegance.</li>
+          <li>The ClickHouse SQL backend, which has an independent oracle in the in-process evaluator.</li>
+          <li>Metric wiring, dashboards, and alert rule scaffolding.</li>
+          <li>The parser itself, because it is the most heavily oracle-checked component in the project.</li>
+        </ul>
+
+        <h3>Write and review by hand</h3>
+        <ul>
+          <li>The drop path. It decides what is allowed to disappear.</li>
+          <li>Offset commit ordering. Getting it backwards produces silent loss that no test will catch by accident.</li>
+          <li>The prefilter literal derivation. Subtly wrong here means missed detections, and it looks correct.</li>
+          <li>The cutover flag evaluation and the rollback path.</li>
+        </ul>
+
+        <div class="note">
+          <span class="lab">The position</span>
+          <p>Generated code is unverified until an independent oracle disagrees with it and loses. On this project the oracles are pySigma for the specification, v1 for the semantics, and corpus replay for the whole. The productive use of AI tools here was not writing the parser faster; it was that having a cheap way to generate ten thousand rule and event pairs made differential testing affordable, and the differential testing is what made the parser trustworthy.</p>
+        </div>
+      </section>
+
+      <!-- 12 -->
+      <section id="plan">
+        <div class="sec-head"><span class="num">12</span><h2>Schedule</h2></div>
+
+        <div class="tw">
+        <table>
+          <caption>Ten weeks, part time</caption>
+          <thead><tr><th style="width:14%">Week</th><th style="width:34%">Build</th><th>Done when</th></tr></thead>
+          <tbody>
+            <tr><td class="mono-col">1</td><td>Lexer, parser, AST, quantifier expansion</td><td>Every SigmaHQ rule either parses or is rejected with a specific reason</td></tr>
+            <tr><td class="mono-col">2</td><td>Modifiers, wildcard matcher, taxonomy loader</td><td>pySigma differential fuzzer green on the seed corpus</td></tr>
+            <tr><td class="mono-col">3</td><td>v1 evaluator, verdict digest, CLI <code>test</code> and <code>explain</code></td><td>Fixtures pass on 20 hand-written rules</td></tr>
+            <tr><td class="mono-col">4</td><td>Redpanda, ingest, normalizer, bounded stages, drop ledger</td><td>Events flow end to end. Invariant 1 audit job is green</td></tr>
+            <tr><td class="mono-col">5</td><td>ClickHouse sink, alert schema, SQL backend</td><td>Retro-hunt query returns the same rows as a replay</td></tr>
+            <tr><td class="mono-col">6</td><td>Metrics, dashboards, canary, silence detector</td><td>Killing a consumer pages within 2 minutes</td></tr>
+            <tr><td class="mono-col">7</td><td>Load harness, the seven experiments, the load document</td><td>The document answers all three questions per experiment</td></tr>
+            <tr><td class="mono-col">8</td><td>v2 compile, interning, prefilter, field gating</td><td>Corpus replay digests match v1. Targets hit</td></tr>
+            <tr><td class="mono-col">9</td><td>Shadow lane, differ, divergence report</td><td>7 days clean at full traffic</td></tr>
+            <tr><td class="mono-col">10</td><td>Rollout flags, gates G2 to G6, game day, writeups</td><td>v1 demoted. Three documents written</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <h3>The three documents</h3>
+        <p>These are the deliverables that a hiring panel will actually read. Write them as you go, because reconstructing them at the end produces a worse and less honest version.</p>
+
+        <ol class="prose-list">
+          <li><strong>Behavior under load.</strong> Where it queues, what falls behind, what happens to correctness when it does.</li>
+          <li><strong>Equivalence and cutover.</strong> The four arguments, the gate ladder, the divergence log, and the retirement criteria with their dates.</li>
+          <li><strong>Detection author guide.</strong> The supported subset of Sigma, what is rejected and why, how to read a noise report, and what the budgets mean.</li>
+        </ol>
+
+        <h3>Repository layout</h3>
+        <div class="code">
+          <div class="cap">tree, abbreviated</div>
+<pre>cmd/signalman/          <span class="c">// CLI: lint, test, explain, noise, bench</span>
+cmd/signalmand/         <span class="c">// the pipeline daemon</span>
+cmd/differ/             <span class="c">// shadow-mode verdict comparison</span>
+internal/sigma/         <span class="c">// lexer, parser, ast, modifiers, taxonomy</span>
+internal/engine/v1/     <span class="c">// reference evaluator, permanent oracle</span>
+internal/engine/v2/     <span class="c">// compiled evaluator</span>
+internal/backend/ch/    <span class="c">// AST -&gt; ClickHouse SQL</span>
+internal/pipe/          <span class="c">// stages, bounded queues, drop ledger</span>
+internal/obs/           <span class="c">// metrics, canary</span>
+test/fuzz/              <span class="c">// differential and parser fuzzers</span>
+test/replay/            <span class="c">// corpus replay, digest comparison</span>
+corpora/                <span class="c">// EVTX-ATTACK-SAMPLES, Security Datasets</span>
+docs/load.md docs/cutover.md docs/authoring.md</pre>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <footer>
+    Signalman build specification, version 1.0. Rule corpus from SigmaHQ. Event corpora from EVTX-ATTACK-SAMPLES and the Security Datasets project.
+  </footer>
+
+</div>
+
+</body></html>

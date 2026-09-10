@@ -1,0 +1,24 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+      - name: gofmt
+        run: |
+          if [ -f go.mod ]; then
+            out=$(gofmt -l .)
+            if [ -n "$out" ]; then echo "$out"; exit 1; fi
+          fi
+      - name: vet
+        run: if [ -f go.mod ]; then go vet ./...; fi
+      - name: test
+        run: if [ -f go.mod ]; then go test ./... -count=1; fi

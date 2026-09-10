@@ -1,0 +1,437 @@
+# Signalman backlog. Source of truth for what gets pushed to Jira.
+# Structure: epics -> stories. Sprints are two weeks, matching the spec's
+# ten-week schedule. Story keys (S-xx) are stable local ids; Jira keys are
+# recorded in docs/jira-map.json by scripts/jira_sync.py.
+#
+# Roles used in stories:
+#   detection engineer  writes and maintains Sigma rules
+#   SOC analyst         consumes alerts and triages them
+#   platform operator   runs the pipeline and gets paged
+#   release engineer    executes the v1 -> v2 cutover
+
+project:
+  name: Signalman
+  spec: docs/spec/signalman-v1.html
+  roadmap: docs/superpowers/plans/2026-09-10-signalman-roadmap.md
+  sprint_length_days: 14
+
+sprints:
+  - id: 1
+    name: "Sprint 1: Sigma frontend"
+    goal: Every SigmaHQ rule parses or is rejected with a reason; pySigma fuzzer green.
+    weeks: [1, 2]
+  - id: 2
+    name: "Sprint 2: Evaluator and pipeline"
+    goal: Events flow end to end through v1 with the invariant 1 audit green.
+    weeks: [3, 4]
+  - id: 3
+    name: "Sprint 3: Sink and observability"
+    goal: Alerts land in ClickHouse; killing a consumer pages within two minutes.
+    weeks: [5, 6]
+  - id: 4
+    name: "Sprint 4: Load and compiled engine"
+    goal: Load document written; v2 replays the corpus with digests equal to v1.
+    weeks: [7, 8]
+  - id: 5
+    name: "Sprint 5: Shadow, cutover, authoring"
+    goal: v1 demoted to oracle; three documents written.
+    weeks: [9, 10]
+
+epics:
+  # ---------------------------------------------------------------- E0
+  - key: E0
+    name: Project setup
+    summary: Repository, CI, and local infrastructure so every later story has a place to land.
+    stories:
+      - key: S-01
+        sprint: 1
+        title: Repository, CI, and branch protection
+        story: As a developer, I want a GitHub repository with CI running gofmt, vet, and tests on every PR, so that no story merges without passing the same checks locally and remotely.
+        acceptance:
+          - Repository exists under atontalapur/signalman with main as the default branch.
+          - GitHub Actions workflow runs gofmt -l, go vet, go test ./... on pull requests and on main.
+          - main requires a passing check and a PR; direct pushes are rejected.
+          - Commit messages follow Conventional Commits; a PR template links the Jira key.
+        plan: "Plan A, Task 1 (scaffold) plus .github/workflows/ci.yml"
+        points: 2
+      - key: S-02
+        sprint: 2
+        title: Local Redpanda and ClickHouse via Docker Compose
+        story: As a developer, I want a single docker compose up that starts Redpanda and ClickHouse with the topics and tables the pipeline expects, so that integration tests run the same way on every machine.
+        acceptance:
+          - deploy/docker-compose.yml starts Redpanda and ClickHouse.
+          - The six topics from spec phase 04 are created on startup with the documented keys and retention.
+          - make infra-up and make infra-down wrap the compose commands.
+        plan: "Plan C prerequisite"
+        points: 2
+
+  # ---------------------------------------------------------------- E1
+  - key: E1
+    name: Sigma frontend
+    summary: Rule YAML becomes a bound, evaluable AST, proven against pySigma.
+    plan: docs/superpowers/plans/2026-09-10-sigma-frontend.md
+    stories:
+      - key: S-10
+        sprint: 1
+        title: Event value model and verdict types
+        story: As a developer, I want a closed Value sum type and the Event and Verdict structs from the data contract, so that both engines and the differ agree on what is compared.
+        acceptance:
+          - event.Value carries its kind explicitly; null and empty string have different kinds.
+          - Event.Field returns null for an absent field.
+          - Verdict has Seq, Partition, RuleID, Matched, Engine, RuleSetV, TaxonomyV.
+        plan: "Plan A, Task 1"
+        points: 1
+      - key: S-11
+        sprint: 1
+        title: Condition lexer and parser
+        story: As a detection engineer, I want conditions like "1 of selection_* and not all of filter_*" parsed with correct precedence, so that rules from the SigmaHQ corpus evaluate the way the specification says.
+        acceptance:
+          - Precedence is not > and > or, left associative, with parentheses.
+          - Quantifiers 1 of, any of, all of, and them are expanded at parse time into AND and OR over the matching selections.
+          - A pipe in the condition fails with ErrAggregation and the phrase "aggregation is not supported".
+          - The parser fuzzer runs 60 seconds without a panic.
+        plan: "Plan A, Tasks 2 to 4"
+        points: 3
+      - key: S-12
+        sprint: 1
+        title: Wildcard matcher and string modifiers
+        story: As a detection engineer, I want contains, startswith, endswith, wildcards, and regex to behave exactly as Sigma defines them, so that a rule written against the spec matches the same events here as anywhere else.
+        acceptance:
+          - Wildcard matching is case insensitive, handles * and ?, honors backslash escapes, and does not translate to regex.
+          - re is case sensitive unless re|i.
+          - null matches an absent field or an explicit null, and does not match an empty string.
+          - A value list is an OR; |all makes it an AND.
+        plan: "Plan A, Tasks 5, 6, 9"
+        points: 3
+      - key: S-13
+        sprint: 1
+        title: Encoding, numeric, cidr, and fieldref modifiers
+        story: As a detection engineer, I want base64offset, utf16, windash, lt/gt, cidr, and fieldref supported, so that the encoded-command and network rules in the corpus load instead of being rejected.
+        acceptance:
+          - base64offset produces three encodings using pySigma's offset table.
+          - utf16le, utf16be, wide, utf16 apply before base64 when chained.
+          - windash expands a leading dash into five variants.
+          - cidr parses the prefix once at compile time.
+          - A numeric comparison against an unparsable string is a no-match, not an error.
+        plan: "Plan A, Tasks 7, 8"
+        points: 3
+      - key: S-14
+        sprint: 1
+        title: Detection block compilation
+        story: As a detection engineer, I want the implicit AND across map fields, OR across list values, and OR across a list of maps applied correctly, so that homegrown-implementation drift does not creep into verdicts.
+        acceptance:
+          - Each shape in the spec's implicit combination table has a test.
+          - Tree construction sorts map keys; twenty consecutive compiles produce an identical tree string.
+          - Bare keyword lists search every field value.
+        plan: "Plan A, Task 10"
+        points: 2
+      - key: S-15
+        sprint: 1
+        title: Taxonomy loader and logsource binding
+        story: As a platform operator, I want logsource-to-field mappings in versioned config that is hashed into every verdict, so that a taxonomy change is visible in the verdict stream instead of silently changing what matches.
+        acceptance:
+          - config/taxonomy/*.yml loads into entries with match criteria and field renames.
+          - TaxonomyV is a content hash, stable across loads of identical files.
+          - A rule with no taxonomy entry fails to load with code no-taxonomy.
+        plan: "Plan A, Task 11"
+        points: 2
+      - key: S-16
+        sprint: 1
+        title: Rule and rule set loader with structured rejections
+        story: As a detection engineer, I want every rule to either load or be rejected with a code, a reason, the rule id, and a line number, so that a missed detection never comes from a silently skipped rule.
+        acceptance:
+          - LoadError carries Path, RuleID, Code, Reason, Line.
+          - Rules sort by ID; RuleSetV is a content hash over id and bound tree.
+          - An aggregation rule is rejected with code aggregation and the condition line.
+        plan: "Plan A, Task 12"
+        points: 2
+      - key: S-17
+        sprint: 1
+        title: SigmaHQ corpus acceptance report
+        story: As a detection engineer, I want a report of how many SigmaHQ rules load and why the rest are rejected, so that the supported subset of Sigma is documented rather than discovered.
+        acceptance:
+          - cmd/corpusaccept prints accepted count and per-code rejection counts with samples.
+          - docs/corpus-acceptance.md records the numbers with a paragraph per code stating whether the rejection is intended.
+          - The corpus test asserts accepted plus rejected equals the file count.
+        plan: "Plan A, Task 13"
+        points: 2
+      - key: S-18
+        sprint: 1
+        title: pySigma differential fuzzer
+        story: As a developer, I want random rules and events evaluated by both Signalman and pySigma with disagreements failing the test, so that the frontend is checked against the specification by something other than my own reading of it.
+        acceptance:
+          - A long-lived Python subprocess converts rules with pySigma-backend-sqlite and evaluates them in SQLite.
+          - Every suppression in known() has a row in test/fuzz/KNOWN_DIVERGENCES.md.
+          - 1e6 executions clean, count recorded in docs/corpus-acceptance.md.
+        plan: "Plan A, Task 14"
+        points: 3
+
+  # ---------------------------------------------------------------- E2
+  - key: E2
+    name: Reference evaluator and CLI
+    summary: v1 tree walker, verdict digest, and the test and explain commands.
+    stories:
+      - key: S-20
+        sprint: 2
+        title: v1 tree-walking evaluator
+        story: As a release engineer, I want an evaluator that is obviously correct when read, so that it can serve as the permanent oracle every later engine is compared against.
+        acceptance:
+          - internal/engine/v1 evaluates every rule per event with no index, prefilter, or cache.
+          - A logsource mismatch emits an explicit false verdict, never an absent one.
+          - Evaluate returns exactly len(rules) verdicts for every event.
+        points: 2
+      - key: S-21
+        sprint: 2
+        title: Verdict stream digest
+        story: As a release engineer, I want a per-partition rolling hash over verdicts in Seq order, so that two engines can be compared with a string equality instead of a forty-million-row diff.
+        acceptance:
+          - internal/verdict/digest.go folds (seq, ruleID, matched) with FNV-1a 64.
+          - Determinism property test passes; rule set shuffled ten times, identical digest.
+          - Rule independence property test passes.
+        points: 2
+      - key: S-22
+        sprint: 3
+        title: Rule fixtures and the signalman test command
+        story: As a detection engineer, I want to ship match and no-match cases in a sibling .test.yml and run them with one command, so that a rule's behavior is pinned before it merges.
+        acceptance:
+          - signalman test rules/x.yml runs every case and exits non-zero on disagreement.
+          - A rule with fewer than one match and one no-match case fails.
+          - Twenty hand-written rules with fixtures pass.
+        points: 2
+      - key: S-23
+        sprint: 3
+        title: The signalman explain command
+        story: As a SOC analyst, I want to see the resolved condition tree with each node's result and each leaf's observed value, so that I can argue with a detection instead of trusting a black box.
+        acceptance:
+          - Output matches the spec's abbreviated explain format.
+          - Each leaf prints the value it saw.
+          - Works on any rule and any JSON event file.
+        points: 2
+
+  # ---------------------------------------------------------------- E3
+  - key: E3
+    name: Pipeline
+    summary: Redpanda ingest, normalizer, bounded stages, drop ledger, at-least-once delivery.
+    stories:
+      - key: S-30
+        sprint: 2
+        title: Ingest stage with Seq assignment
+        story: As a platform operator, I want every admitted event to get a per-partition monotonic Seq at ingest, so that everything downstream can be keyed and ordered on it.
+        acceptance:
+          - Consumer reads events.raw keyed by host_id and assigns Seq.
+          - Seq is monotonic within a partition across restarts.
+          - signalman_events_ingested_total increments per source and partition.
+        points: 3
+      - key: S-31
+        sprint: 2
+        title: Normalizer and drop ledger
+        story: As a platform operator, I want parse failures written to a drop ledger with a reason code and the raw bytes, so that the only way an event disappears is with a record of why.
+        acceptance:
+          - Normalizer maps fields through the taxonomy and writes events.norm.
+          - A record that panics the normalizer lands in drops with the raw bytes and does not wedge the partition.
+          - signalman_events_dropped_total increments per reason.
+        points: 3
+      - key: S-32
+        sprint: 2
+        title: Bounded stages and manual offset commit
+        story: As a platform operator, I want every stage boundary to be a bounded channel and offsets committed only after verdicts are durable, so that overload shows up as lag rather than as silent loss.
+        acceptance:
+          - No unbounded buffer exists in the process; the code review checklist has this line.
+          - Worker pool size is configured, not computed.
+          - Offsets commit after the batch's verdicts are durable; delivery is at-least-once.
+          - signalman_stage_queue_depth and signalman_consumer_lag_records are exported.
+        points: 3
+      - key: S-33
+        sprint: 2
+        title: Match stage wiring v1 and atomic rule set reload
+        story: As a platform operator, I want the v1 engine wired into the pipeline with rule set reload happening only at a batch boundary, so that no batch straddles two RuleSetV values.
+        acceptance:
+          - Matches go to alerts keyed by rule_id; all verdicts go to verdicts.v1.
+          - Reload swaps the rule set atomically between batches.
+          - signalman_ruleset_version_info reflects the active versions.
+        points: 3
+      - key: S-34
+        sprint: 2
+        title: Invariant 1 audit job
+        story: As a platform operator, I want a continuous job that checks ingested equals verdicts per rule plus drops, so that an event vanishing without a trace is caught as a P1 instead of noticed months later.
+        acceptance:
+          - The audit reconciles counts per partition over a sliding window.
+          - A deliberate discrepancy in a test causes the audit to fail loudly.
+          - Green for one hour under generated load.
+        points: 2
+
+  # ---------------------------------------------------------------- E4
+  - key: E4
+    name: Sink and SQL backend
+    summary: ClickHouse alert table, idempotent sink, AST to SQL for retro-hunting.
+    stories:
+      - key: S-40
+        sprint: 3
+        title: ClickHouse alert schema and idempotent sink
+        story: As a SOC analyst, I want alerts stored in ClickHouse with redelivered batches collapsing on merge, so that at-least-once delivery never shows me the same alert twice.
+        acceptance:
+          - alerts table uses ReplacingMergeTree ordered by (partition, seq, rule_id) with the spec's columns and TTL.
+          - Idempotence property test: re-ingesting an identical batch changes no row after merge.
+          - Sink backpressures the pipeline when ClickHouse is unavailable.
+        points: 3
+      - key: S-41
+        sprint: 3
+        title: AST to ClickHouse SQL compiler
+        story: As a SOC analyst, I want to run a Sigma rule as a query over historical alerts, so that a new rule can be back-tested against what already happened.
+        acceptance:
+          - internal/backend/ch compiles every node type and modifier the frontend accepts, or rejects with a reason.
+          - A retro-hunt query returns the same rows as an in-process replay over the same window.
+          - Dialect leaks (case folding, null, regex) are written down as they are found.
+        points: 3
+
+  # ---------------------------------------------------------------- E5
+  - key: E5
+    name: Observability
+    summary: Metrics, dashboards, and alerting on absence.
+    stories:
+      - key: S-50
+        sprint: 3
+        title: Core metrics and dashboard
+        story: As a platform operator, I want the ten core metrics from the spec exported with the fixed names and labels, so that the load document, the cutover gates, and the alert rules all read the same numbers.
+        acceptance:
+          - Every metric in the spec's core metrics table exists with the stated type and labels.
+          - Staleness and lag are separate metrics.
+          - A Grafana dashboard JSON is checked in under deploy/.
+        points: 2
+      - key: S-51
+        sprint: 3
+        title: Canary generator and stalled-canary page
+        story: As a platform operator, I want a synthetic event on every partition every 30 seconds that must produce an alert, so that a wedged consumer or broken sink pages within two minutes instead of being discovered by a missed detection.
+        acceptance:
+          - signalman-canary rule loads like any other rule.
+          - signalman_canary_age_seconds resets on each canary alert.
+          - Killing a consumer fires SignalmanCanaryStalled within two minutes.
+        points: 2
+      - key: S-52
+        sprint: 3
+        title: Rule silence detector
+        story: As a detection engineer, I want a ticket when a rule that matched in the last 30 days matches nothing today, so that a taxonomy rename that quietly disables a rule is caught without paging anyone.
+        acceptance:
+          - SignalmanRuleWentSilent rule as in the spec, severity ticket not page.
+          - Renaming a field in a test taxonomy triggers it for the affected rule.
+        points: 1
+
+  # ---------------------------------------------------------------- E6
+  - key: E6
+    name: Behavior under load
+    summary: Load harness, the seven experiments, docs/load.md.
+    stories:
+      - key: S-60
+        sprint: 4
+        title: Load harness
+        story: As a platform operator, I want a generator that replays a corpus into events.raw at a configurable multiple of capacity, so that the overload experiments are reproducible.
+        acceptance:
+          - cmd/loadgen replays corpora at N times a measured baseline rate.
+          - Baseline v1 throughput and p99 are measured and recorded before any v2 work.
+        points: 2
+      - key: S-61
+        sprint: 4
+        title: Overload and failure experiments
+        story: As a platform operator, I want the seven experiments from spec phase 05 run and their answers written down, so that I can say with evidence whether overload produces delayed or missed detections.
+        acceptance:
+          - Each of the seven experiments has a section in docs/load.md answering where work queued, what fell behind first, and what happened to correctness.
+          - 2x sustained shows zero drop-ledger entries.
+          - Consumer kill shows an unchanged digest after recovery.
+        points: 5
+
+  # ---------------------------------------------------------------- E7
+  - key: E7
+    name: Compiled engine
+    summary: v2 with predicate interning, literal prefilter, and field presence gating.
+    stories:
+      - key: S-70
+        sprint: 4
+        title: Predicate interning and bitset evaluation
+        story: As a platform operator, I want shared leaf predicates evaluated once per event, so that 1,500 rules do not cost 40,000 predicate evaluations each.
+        acceptance:
+          - Program.Preds is deduplicated; Trees read from a per-event bitset.
+          - Corpus replay digest equals v1 on every partition.
+          - Rule independence property test passes against the interned table.
+        points: 5
+      - key: S-71
+        sprint: 4
+        title: Literal prefilter with soundness proof
+        story: As a release engineer, I want an Aho-Corasick prefilter that only ever skips rules that could not have matched, so that an optimization cannot introduce a missed detection.
+        acceptance:
+          - Required literals are harvested only from conjunctive positions with no negation above.
+          - Property test over the full corpus: prefilter rejects implies v1 evaluates false.
+          - Rules with no safe literal go in Always and its size is a metric.
+        points: 5
+      - key: S-72
+        sprint: 4
+        title: Field presence gating and zero-allocation hot path
+        story: As a platform operator, I want a gated-out rule to skip the tree walk while still emitting an explicit false verdict, so that invariant 4 holds at 50k events per second.
+        acceptance:
+          - Bitset AND on field presence precedes tree evaluation.
+          - go test -bench with -benchmem shows 0 allocs per event in steady state.
+          - 50k ev/s and p99 under 400 microseconds on the 8-core reference machine; compile under 2 seconds.
+        points: 3
+
+  # ---------------------------------------------------------------- E8
+  - key: E8
+    name: Equivalence and cutover
+    summary: Shadow lane, differ, gate ladder, game day, retirement.
+    stories:
+      - key: S-80
+        sprint: 5
+        title: Shadow lane and differ
+        story: As a release engineer, I want v2 consuming events.norm alongside v1 and a differ classifying every disagreement, so that divergence is found on real traffic before v2 serves a single alert.
+        acceptance:
+          - v2 writes verdicts.v2 and emits no alerts.
+          - cmd/differ joins on (partition, seq, rule_id) and classifies into the five spec classes.
+          - Version skew during reload is excluded only when RuleSetV differs.
+        points: 5
+      - key: S-81
+        sprint: 5
+        title: Per-rule rollout flag and rollback
+        story: As a release engineer, I want rules routed to v2 by fnv(rule_id) mod 100 under a percentage flag, so that advancing the rollout never moves a rule back and rollback is a config change.
+        acceptance:
+          - Routing is stable across restarts.
+          - v1 continues to shadow every rule v2 serves.
+          - Rollback measured to take effect in under 30 seconds.
+        points: 3
+      - key: S-82
+        sprint: 5
+        title: Gate ladder G0 to G6 and game day
+        story: As a release engineer, I want each gate's criteria checked and recorded with dates, and a deliberate rollback exercised at full traffic, so that retirement is a decision made against written criteria rather than a green dashboard.
+        acceptance:
+          - docs/cutover.md contains the four arguments, the gate ladder with dates, the divergence log, and the retirement criteria written before G4.
+          - Game day rollback and roll-forward both measured.
+          - v1 removed from the serving path and kept as the test oracle.
+        points: 5
+
+  # ---------------------------------------------------------------- E9
+  - key: E9
+    name: Author surface
+    summary: lint, noise, bench, and rule PR gates.
+    stories:
+      - key: S-90
+        sprint: 5
+        title: signalman lint and bench
+        story: As a detection engineer, I want lint to catch parse, taxonomy, and style problems and bench to show per-rule evaluation cost, so that an unanchored regex is caught before it costs 50 microseconds per event in production.
+        acceptance:
+          - lint exits non-zero on any LoadError and prints it in the structured format.
+          - bench reports p99 per rule and flags anything over 50 microseconds.
+        points: 2
+      - key: S-91
+        sprint: 5
+        title: signalman noise and the budget field
+        story: As a detection engineer, I want to see how many times a rule would have fired over a 30-day corpus before it merges, so that I write a different rule than I would after an analyst complains.
+        acceptance:
+          - noise reports matches per 100k corpus events and ten sample matches.
+          - A rule may declare budget: and noise exits non-zero when exceeded.
+        points: 3
+      - key: S-92
+        sprint: 5
+        title: Rule PR CI gates and authoring guide
+        story: As a detection engineer, I want parse, fixtures, noise budget, latency budget, and prefilter checks reported as a PR comment, so that the feedback loop closes before merge.
+        acceptance:
+          - A GitHub Actions workflow on rules/** runs the five gates and comments the results.
+          - Prefilter Always membership is a warning, not a failure.
+          - docs/authoring.md covers the supported Sigma subset, rejections, noise reports, and budgets.
+        points: 3
