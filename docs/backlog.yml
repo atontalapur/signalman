@@ -21,19 +21,19 @@ sprints:
     goal: Every SigmaHQ rule parses or is rejected with a reason; pySigma fuzzer green.
     weeks: [1, 2]
   - id: 2
-    name: "Sprint 2: Evaluator and pipeline"
+    name: "Sprint 2: Evaluator, pipeline"
     goal: Events flow end to end through v1 with the invariant 1 audit green.
     weeks: [3, 4]
   - id: 3
-    name: "Sprint 3: Sink and observability"
+    name: "Sprint 3: Sink, observability"
     goal: Alerts land in ClickHouse; killing a consumer pages within two minutes.
     weeks: [5, 6]
   - id: 4
-    name: "Sprint 4: Load and compiled engine"
+    name: "Sprint 4: Load, v2 engine"
     goal: Load document written; v2 replays the corpus with digests equal to v1.
     weeks: [7, 8]
   - id: 5
-    name: "Sprint 5: Shadow, cutover, authoring"
+    name: "Sprint 5: Cutover, authoring"
     goal: v1 demoted to oracle; three documents written.
     weeks: [9, 10]
 
@@ -271,7 +271,7 @@ epics:
         story: As a SOC analyst, I want alerts stored in ClickHouse with redelivered batches collapsing on merge, so that at-least-once delivery never shows me the same alert twice.
         acceptance:
           - alerts table uses ReplacingMergeTree ordered by (partition, seq, rule_id) with the spec's columns and TTL.
-          - Idempotence property test: re-ingesting an identical batch changes no row after merge.
+          - "Idempotence property test: re-ingesting an identical batch changes no row after merge."
           - Sink backpressures the pipeline when ClickHouse is unavailable.
         points: 3
       - key: S-41
@@ -359,7 +359,7 @@ epics:
         story: As a release engineer, I want an Aho-Corasick prefilter that only ever skips rules that could not have matched, so that an optimization cannot introduce a missed detection.
         acceptance:
           - Required literals are harvested only from conjunctive positions with no negation above.
-          - Property test over the full corpus: prefilter rejects implies v1 evaluates false.
+          - "Property test over the full corpus: prefilter rejects implies v1 evaluates false."
           - Rules with no safe literal go in Always and its size is a metric.
         points: 5
       - key: S-72
@@ -424,7 +424,7 @@ epics:
         story: As a detection engineer, I want to see how many times a rule would have fired over a 30-day corpus before it merges, so that I write a different rule than I would after an analyst complains.
         acceptance:
           - noise reports matches per 100k corpus events and ten sample matches.
-          - A rule may declare budget: and noise exits non-zero when exceeded.
+          - "A rule may declare budget: and noise exits non-zero when exceeded."
         points: 3
       - key: S-92
         sprint: 5
