@@ -3,22 +3,91 @@ on:
   pull_request:
   push:
     branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      has_go: ${{ steps.probe.outputs.has_go }}
+      has_compose: ${{ steps.probe.outputs.has_compose }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: probe
+        run: |
+          echo "has_go=$([ -f go.mod ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "has_compose=$([ -f deploy/docker-compose.yml ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  # Same checks as `make check` locally. Skipped until go.mod lands (Plan A, Task 1).
   go:
+    needs: detect
+    if: needs.detect.outputs.has_go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: go.mod
           cache: true
-      - name: gofmt
+      - run: make check
+
+  # Runs against real Redpanda and ClickHouse. Skipped until deploy/docker-compose.yml lands (Plan C).
+  integration:
+    needs: detect
+    if: needs.detect.outputs.has_go == 'true' && needs.detect.outputs.has_compose == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: docker compose -f deploy/docker-compose.yml up -d --wait
+      - run: make integration
+      - if: always()
+        run: docker compose -f deploy/docker-compose.yml down -v
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff pyyaml
+      - run: make check-python check-backlog
+
+  # PR title is a Conventional Commit; body names the Jira story.
+  pr-policy:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            chore
+            docs
+            refactor
+            test
+            perf
+            ci
+      - name: Jira key present
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [ -f go.mod ]; then
-            out=$(gofmt -l .)
-            if [ -n "$out" ]; then echo "$out"; exit 1; fi
+          if ! printf '%s\n%s' "$TITLE" "$BODY" | grep -Eq 'SIG-[0-9]+'; then
+            echo "PR title or body must reference a Jira story (SIG-<n>)"; exit 1
           fi
-      - name: vet
-        run: if [ -f go.mod ]; then go vet ./...; fi
-      - name: test
-        run: if [ -f go.mod ]; then go test ./... -count=1; fi

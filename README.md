@@ -7,4 +7,6 @@ A Sigma detection engine and event pipeline in Go, built so that its evaluation 
 - Backlog (source of truth for Jira): `docs/backlog.yml`
 - Sync backlog to Jira: `JIRA_SITE=... JIRA_EMAIL=... JIRA_TOKEN=... scripts/jira_sync.py`
 
+Before every commit: `make check`. CI runs the same target on every PR (`.github/workflows/ci.yml`), fuzzers run nightly, and a `v*` tag cuts a release with binaries and a GHCR image (`.goreleaser.yaml`).
+
 Work is tracked in Jira project SIG. Every branch is `feat/SIG-<n>-<slug>` and every PR names its story.

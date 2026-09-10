@@ -6,5 +6,5 @@ SIG-
 
 ## How verified
 
-- [ ] gofmt, go vet, go test ./... clean locally
+- [ ] `make check` clean locally (gofmt, vet, tidy, build, race tests, staticcheck, govulncheck)
 - [ ] Acceptance criteria on the Jira story checked
