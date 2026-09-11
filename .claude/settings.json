@@ -24,8 +24,12 @@
     ],
     "deny": [
       "Read(.env)",
+      "Bash(cat .env:*)",
       "Bash(git push --force:*)",
-      "Bash(git push -f:*)"
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push origin --force:*)",
+      "Bash(git push origin -f:*)"
     ]
   },
   "hooks": {

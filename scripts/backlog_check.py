@@ -18,12 +18,22 @@ EPIC_FIELDS = ("key", "name", "summary", "stories")
 
 
 def main() -> int:
-    data = yaml.safe_load(BACKLOG.read_text())
+    try:
+        data = yaml.safe_load(BACKLOG.read_text()) or {}
+    except yaml.YAMLError as exc:
+        print(f"{BACKLOG}: {exc}", file=sys.stderr)
+        return 1
     errors = []
-    sprints = {s["id"] for s in data.get("sprints", [])}
+    sprint_ids = [s.get("id") for s in data.get("sprints") or []]
+    sprints = set(sprint_ids)
+    if len(sprints) != len(sprint_ids):
+        errors.append("duplicate sprint id")
     seen = set()
 
-    for epic in data.get("epics", []):
+    for epic in data.get("epics") or []:
+        if not isinstance(epic, dict):
+            errors.append(f"epic is not a mapping: {epic!r}")
+            continue
         for field in EPIC_FIELDS:
             if field not in epic:
                 errors.append(f"epic {epic.get('key', '?')}: missing {field}")
@@ -32,7 +42,10 @@ def main() -> int:
             errors.append(f"duplicate key {key}")
         seen.add(key)
 
-        for story in epic.get("stories", []):
+        for story in epic.get("stories") or []:
+            if not isinstance(story, dict):
+                errors.append(f"epic {key}: story is not a mapping: {story!r}")
+                continue
             skey = story.get("key", "?")
             for field in STORY_FIELDS:
                 if field not in story:
