@@ -41,6 +41,10 @@ Copied from the spec. Do not trade any of these for a shortcut.
 - Tests first. Each plan task in `docs/superpowers/plans/` is written as
   failing test, then implementation. Follow that order.
 - A plan is done when its gate in the roadmap passes, not when tasks are ticked.
+- If a change alters what the project is or does (a new binary, a new
+  pipeline stage, a new document, a gate passed, a dependency on new
+  infrastructure), update `README.md` in the same PR so it still describes
+  the project accurately. Config tweaks and bug fixes do not qualify.
 - No emojis in code, comments, docs, or commits. Keep prose short.
 
 ## Skill routing
