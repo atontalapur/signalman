@@ -23,7 +23,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - if: steps.probe.outputs.has_go == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       # The differential fuzzer shells out to pySigma as its oracle.
@@ -32,7 +32,7 @@ jobs:
       - if: steps.probe.outputs.has_go == 'true'
         run: make fuzz FUZZTIME=10m
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crashers
           path: "**/testdata/fuzz/**"
