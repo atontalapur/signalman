@@ -18,7 +18,7 @@ jobs:
       - id: probe
         run: echo "has_go=$([ -f go.mod ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - if: steps.probe.outputs.has_go == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
