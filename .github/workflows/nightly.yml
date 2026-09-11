@@ -23,7 +23,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - if: steps.probe.outputs.has_go == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       # The differential fuzzer shells out to pySigma as its oracle.
