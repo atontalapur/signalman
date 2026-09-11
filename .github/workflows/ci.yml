@@ -6,7 +6,7 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -29,6 +29,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.has_go == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -42,6 +43,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.has_go == 'true' && needs.detect.outputs.has_compose == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -55,12 +57,13 @@ jobs:
 
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff pyyaml
+      - run: pip install ruff==0.16.7 pyyaml==6.0.3
       - run: make check-python check-backlog
 
   # PR title is a Conventional Commit; body names the Jira story.
@@ -83,7 +86,9 @@ jobs:
             test
             perf
             ci
+      # Dependabot PRs carry no Jira story; the title check above still applies.
       - name: Jira key present
+        if: github.actor != 'dependabot[bot]'
         env:
           BODY: ${{ github.event.pull_request.body }}
           TITLE: ${{ github.event.pull_request.title }}

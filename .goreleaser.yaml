@@ -7,8 +7,8 @@ before:
 
 builds:
   - id: cmds
-    # Builds every package with a main function, so binaries appear as each
-    # plan adds its cmd/ directory (signalman, signalmand, differ).
+    # Builds every package with a main function (GoReleaser 2.15+), named
+    # after their directory, so binaries appear as each plan adds its cmd/.
     main: ./...
     env:
       - CGO_ENABLED=0
@@ -47,7 +47,7 @@ dockers_v2:
       - ghcr.io/atontalapur/signalman
     tags:
       - "v{{ .Version }}"
-      - latest
+      - "{{ if not .Prerelease }}latest{{ end }}"
     platforms: [linux/amd64, linux/arm64]
     labels:
       org.opencontainers.image.source: "{{ .GitURL }}"

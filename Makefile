@@ -8,17 +8,16 @@ GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.1.3
 .PHONY: check fmt vet test build lint tidy-check fuzz check-backlog check-python integration
 
 ## check: everything a PR must pass. Same as the ci workflow's go job.
-check: fmt vet tidy-check build test lint
+check: fmt tidy-check vet build test lint
 
 fmt:
-	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
+	@out=$$(gofmt -l . 2>&1) || { echo "$$out"; exit 1; }; if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 vet:
 	go vet $(GO_PKGS)
 
 tidy-check:
-	go mod tidy
-	@git diff --exit-code -- go.mod go.sum || { echo "go mod tidy changed go.mod/go.sum; commit the result"; exit 1; }
+	go mod tidy -diff
 
 build:
 	go build $(GO_PKGS)
@@ -34,15 +33,17 @@ lint:
 integration:
 	go test -race -count=1 -tags integration $(GO_PKGS)
 
-## fuzz: run every Fuzz* target for FUZZTIME each. Nightly runs this with 10m.
+## fuzz: run every Fuzz* target for FUZZTIME each, keep going after a crasher,
+## fail at the end. Nightly runs this with 10m.
 FUZZTIME ?= 30s
 fuzz:
-	@for pkg in $$(go list $(GO_PKGS)); do \
-	  for f in $$(go test -list '^Fuzz' $$pkg 2>/dev/null | grep '^Fuzz'); do \
+	@rc=0; for pkg in $$(go list $(GO_PKGS)); do \
+	  list=$$(go test -list '^Fuzz' $$pkg) || exit 1; \
+	  for f in $$(printf '%s\n' "$$list" | grep '^Fuzz'); do \
 	    echo "== $$pkg $$f"; \
-	    go test -run '^$$' -fuzz "^$$f\$$" -fuzztime $(FUZZTIME) $$pkg || exit 1; \
+	    go test -run '^$$' -fuzz "^$$f\$$" -fuzztime $(FUZZTIME) $$pkg || rc=1; \
 	  done; \
-	done
+	done; exit $$rc
 
 check-backlog:
 	python3 scripts/backlog_check.py

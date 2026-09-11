@@ -1,5 +1,5 @@
-# Long-running checks that do not belong on a PR: fuzzers with a real time
-# budget, and the full vulnerability scan. Crashers are uploaded as artifacts.
+# Long-running checks that do not belong on a PR: every fuzz target with a
+# real time budget. Crashers are uploaded as artifacts.
 name: nightly
 on:
   schedule:
@@ -28,10 +28,10 @@ jobs:
           python-version: "3.12"
       # The differential fuzzer shells out to pySigma as its oracle.
       - if: steps.probe.outputs.has_go == 'true'
-        run: pip install pysigma
+        run: pip install pysigma==1.5.0
       - if: steps.probe.outputs.has_go == 'true'
         run: make fuzz FUZZTIME=10m
-      - if: failure()
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-crashers
