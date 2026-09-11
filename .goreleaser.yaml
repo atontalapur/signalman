@@ -1,0 +1,59 @@
+version: 2
+project_name: signalman
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: cmds
+    # Builds every package with a main function (GoReleaser 2.15+), named
+    # after their directory, so binaries appear as each plan adds its cmd/.
+    main: ./...
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .Commit }} -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat'
+    - title: Fixes
+      regexp: '^fix'
+    - title: Other
+      order: 999
+  filters:
+    exclude: ["^chore", "^ci", "^docs", "^test"]
+
+dockers_v2:
+  - id: signalman
+    ids: [cmds]
+    dockerfile: deploy/Dockerfile
+    images:
+      - ghcr.io/atontalapur/signalman
+    tags:
+      - "v{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms: [linux/amd64, linux/arm64]
+    labels:
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+
+release:
+  draft: false
+  prerelease: auto

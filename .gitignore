@@ -4,3 +4,5 @@ corpora/
 .venv/
 .env
 __pycache__/
+dist/
+.claude/settings.local.json

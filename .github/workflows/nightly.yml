@@ -1,0 +1,39 @@
+# Long-running checks that do not belong on a PR: every fuzz target with a
+# real time budget. Crashers are uploaded as artifacts.
+name: nightly
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - id: probe
+        run: echo "has_go=$([ -f go.mod ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - if: steps.probe.outputs.has_go == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: steps.probe.outputs.has_go == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The differential fuzzer shells out to pySigma as its oracle.
+      - if: steps.probe.outputs.has_go == 'true'
+        run: pip install pysigma==1.5.0
+      - if: steps.probe.outputs.has_go == 'true'
+        run: make fuzz FUZZTIME=10m
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
