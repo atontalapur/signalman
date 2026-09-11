@@ -43,7 +43,7 @@ Copied from the spec. Do not trade any of these for a shortcut.
 - A plan is done when its gate in the roadmap passes, not when tasks are ticked.
 - No emojis in code, comments, docs, or commits. Keep prose short.
 
-## Skills
+## Skill routing
 
 gstack lives at `~/.claude/skills/gstack`. Install if missing:
 `git clone --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup`.
