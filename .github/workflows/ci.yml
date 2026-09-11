@@ -86,6 +86,9 @@ jobs:
             test
             perf
             ci
+          # /ship prefixes titles with the version, e.g. "v0.1.0 ci(SIG-11): ...".
+          headerPattern: '^(?:v\d+\.\d+\.\d+ )?(\w+)(?:\(([^)]*)\))?!?: (.+)$'
+          headerPatternCorrespondence: type, scope, subject
       # Dependabot PRs carry no Jira story; the title check above still applies.
       - name: Jira key present
         if: github.actor != 'dependabot[bot]'
