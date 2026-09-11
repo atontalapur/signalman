@@ -60,7 +60,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install ruff==0.16.7 pyyaml==6.0.3
@@ -90,8 +90,10 @@ jobs:
           headerPattern: '^(?:v\d+\.\d+\.\d+ )?(\w+)(?:\(([^)]*)\))?!?: (.+)$'
           headerPatternCorrespondence: type, scope, subject
       # Dependabot PRs carry no Jira story; the title check above still applies.
+      # Keyed on the PR author, not github.actor: a branch update after a merge
+      # to main re-runs the job as whoever clicked, and would fail otherwise.
       - name: Jira key present
-        if: github.actor != 'dependabot[bot]'
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           BODY: ${{ github.event.pull_request.body }}
           TITLE: ${{ github.event.pull_request.title }}
