@@ -68,9 +68,10 @@ func HasWildcard(pattern string) bool {
 	return !CompileWildcard(pattern).plain
 }
 
-// MatchString runs the classic linear-backtracking wildcard match over the
-// lowercased input. The star pointer means backtracking is bounded by the
-// number of stars rather than exponential.
+// MatchString runs the classic backtracking wildcard match over the
+// lowercased input. The star pointer makes the worst case
+// O(len(input) * longest literal run between stars), never exponential.
+// Input length is bounded at ingest, not here.
 func (w *Wildcard) MatchString(s string) bool {
 	low := strings.ToLower(s)
 	if w.plain {

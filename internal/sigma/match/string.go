@@ -7,6 +7,10 @@ import (
 	"github.com/atontalapur/signalman/internal/event"
 )
 
+// String tests compare on Value.Text, so an int or bool field matches the
+// rule text of its decimal or true/false form. This is looser than pySigma,
+// which types its columns; the differential fuzzer covers the gap.
+//
 // Matcher is the value test at a leaf predicate. It has the same method set
 // as ast.Matcher, which it satisfies structurally, so this package does not
 // import ast.

@@ -107,3 +107,23 @@ func escapeAll(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`)
 	return r.Replace(s)
 }
+
+// Case folding is strings.ToLower, simple mapping, no full Unicode folding.
+// It is part of the verdict contract v1 and v2 must share, so these rows
+// pin the observable behavior. The pySigma oracle is fed ASCII only.
+func TestWildcardCaseFoldContract(t *testing.T) {
+	cases := []struct {
+		pat, in string
+		want    bool
+	}{
+		{"microsoft", "MİCROSOFT", true}, // dotted capital I lowers to i
+		{"svchost", "ſvchost", false},    // long s does not fold to s
+		{"kernel32", "Kernel32", true},   // Kelvin sign lowers to k
+		{"ΣΑΣ", "σας", false},            // no final-sigma rule
+	}
+	for _, c := range cases {
+		if got := CompileWildcard(c.pat).MatchString(c.in); got != c.want {
+			t.Errorf("CompileWildcard(%q).MatchString(%q) = %v want %v", c.pat, c.in, got, c.want)
+		}
+	}
+}
