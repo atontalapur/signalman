@@ -23,10 +23,18 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 ### Revisit Value layout and Text() allocation for the v2 hot path
 **What:** `event.Value` is 64 bytes with every payload slot present, and `Value.Text()` allocates a string per call for `KindInt` and `KindBool`. Both sit on the per-field, per-rule comparison path.
 **Why:** Flagged by the SIG-13 pre-landing review. v1 is never optimized by rule, and the v2 hot path is Plan G, so the layout stays as the plan specifies until there is a benchmark to justify changing it.
-**Context:** Options noted in review: fold `I` and `B` into one slot, move `L` behind a pointer, add `AppendText(dst []byte)` using `strconv.AppendInt`, and a `BenchmarkValueText` asserting 0 allocs/op. Decide in Plan G with numbers.
+**Context:** Options noted in review: fold `I` and `B` into one slot, move `L` behind a pointer, add `AppendText(dst []byte)` using `strconv.AppendInt`, and a `BenchmarkValueText` asserting 0 allocs/op. From the SIG-15 review, on the same path: `Wildcard.MatchString` lowercases and rune-decodes the input per call, `Any`/`All` repeat that per value in a list, and `Contains`/`StartsWith`/`EndsWith` without author wildcards could use `strings.Contains`/`HasPrefix`/`HasSuffix` on a once-lowered input. Decide in Plan G with numbers.
 **Effort:** M
 **Priority:** P3
 **Depends on:** Plan G
+
+### Decide event value limits at decode time
+**What:** The decoder (Plan C) needs three stated decisions: a maximum field value length, what to do with invalid UTF-8 (reject, replace, or pass through), and whether nested lists are flattened or rejected.
+**Why:** From the SIG-15 adversarial review. `Wildcard.MatchString` is O(input x longest literal run), so a 1 MiB value against a rule with a 2000-character `contains` costs seconds and nothing upstream caps it. `strings.ToLower` maps invalid bytes to U+FFFD on both sides, so `Equals("a\xff")` matches `"a\xfe"` by accident. A list nested in a list never matches and never reaches the drop ledger, which the verdict invariant forbids.
+**Context:** All three are ingest-side rules, not matcher rules; the matcher must stay a pure function of the value it is given. Write the decisions into the spec's data contract section when Plan C lands.
+**Effort:** S
+**Priority:** P2
+**Depends on:** Plan C
 
 ### Add integration test entrypoint when compose lands
 **What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.

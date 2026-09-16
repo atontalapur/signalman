@@ -1,6 +1,9 @@
 package event
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+)
 
 // ValueKind tags which payload slot of a Value is live.
 type ValueKind uint8
@@ -13,6 +16,24 @@ const (
 	KindBool
 	KindList
 )
+
+// String names the kind for error messages.
+func (k ValueKind) String() string {
+	switch k {
+	case KindNull:
+		return "null"
+	case KindString:
+		return "string"
+	case KindInt:
+		return "int"
+	case KindBool:
+		return "bool"
+	case KindList:
+		return "list"
+	default:
+		return fmt.Sprintf("kind(%d)", uint8(k))
+	}
+}
 
 // Value is a closed sum type. Sigma comparison semantics differ per kind,
 // so the kind is carried explicitly rather than inferred.

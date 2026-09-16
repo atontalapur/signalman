@@ -83,3 +83,17 @@ func TestEventFieldExplicitNullIsNull(t *testing.T) {
 		t.Fatal("explicit null must have no text")
 	}
 }
+
+func TestValueKindString(t *testing.T) {
+	cases := map[ValueKind]string{
+		KindNull: "null", KindString: "string", KindInt: "int", KindBool: "bool", KindList: "list",
+	}
+	for k, want := range cases {
+		if got := k.String(); got != want {
+			t.Errorf("ValueKind(%d).String() = %q want %q", k, got, want)
+		}
+	}
+	if got := (KindList + 1).String(); got != "kind(5)" {
+		t.Errorf("unknown kind String() = %q want kind(5)", got)
+	}
+}
