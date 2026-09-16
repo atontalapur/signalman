@@ -95,6 +95,10 @@ that needs them.
 - Debt too small for a story lives in `TODOS.md`.
 - Jira project SIG. One story per branch, `feat/SIG-<n>-<slug>`. PR titles are
   Conventional Commits; CI rejects PRs without a `SIG-<n>` in the title or body.
+  `docs/backlog.yml` is the source for what the stories are (`scripts/jira_sync.py`
+  pushes it); Jira is the source for where they stand. The GitHub for Jira app
+  links branches and PRs to their story, and a Jira automation rule moves the
+  story to Done when its PR merges.
 - Releases are `v*` tags. The tag must match `VERSION` and sit on `main`;
   GoReleaser then publishes binaries for linux and darwin (amd64, arm64) and a
   `ghcr.io/atontalapur/signalman` image.
