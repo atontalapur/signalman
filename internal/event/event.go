@@ -6,6 +6,8 @@ import "time"
 
 // Event is the unit of work. Seq is assigned once, at ingest, and is
 // monotonic within a partition. Everything downstream is keyed on it.
+// An Event is frozen after ingest: engines share it concurrently and
+// nothing writes to Fields, Raw, or any list payload once it is built.
 type Event struct {
 	Seq       uint64
 	Partition int32
