@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.3.0] - 2026-09-16
+
+### Added
+
+- `internal/sigma/match`: Sigma value comparison. A purpose-built wildcard
+  matcher (`*`, `?`, and the spec's backslash escapes) that never translates
+  to regex, so metacharacters in command lines stay literal. String
+  modifiers `contains`, `startswith`, `endswith` fold case; `re` is case
+  sensitive unless `re|i`; `null` matches absent and explicit null, never
+  the empty string. A list-valued event field matches when any element does.
+- `match.Build` turns a detection key's modifier chain into one matcher,
+  combining values with OR, or AND under `all`. Unknown modifiers, two
+  comparisons, `i` without `re`, and a comparison on a null value are load
+  errors wrapping `ErrUnsupportedModifier`. Encoding modifiers arrive in
+  the next story.
+- `event.ValueKind.String`, so errors name the kind.
+
 ## [0.2.0] - 2026-09-16
 
 ### Added
