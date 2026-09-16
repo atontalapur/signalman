@@ -1,6 +1,9 @@
 package match
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestWildcard(t *testing.T) {
 	cases := []struct {
@@ -18,6 +21,10 @@ func TestWildcard(t *testing.T) {
 		{"a?c", "ac", false},
 		{`a\*c`, "a*c", true},
 		{`a\*c`, "abc", false},
+		{`a\?c`, "a?c", true},
+		{`a\?c`, "abc", false},
+		{"**a", "xa", true},
+		{"a*", "", false},
 		{`a\\c`, `a\c`, true},
 		// Sigma escaping: a wildcard after a path separator needs \\*,
 		// since \* is a literal asterisk.
@@ -38,6 +45,25 @@ func TestWildcard(t *testing.T) {
 		// matcher exists instead of a translation to regex.
 		{"cmd.exe (x86)", "cmd.exe (x86)", true},
 		{"c+d", "ccccd", false},
+		// A literal mismatch before any star fails without backtracking.
+		{"a?c", "xbc", false},
+		{"abc*", "xbc", false},
+		// ? needs one rune of input; it does not match end of input.
+		{"ab?", "ab", false},
+		{"ab?", "abc", true},
+		{"?", "", false},
+		// A run of trailing stars matches the empty tail.
+		{"a**", "a", true},
+		{"a**", "axyz", true},
+		{"", "", true},
+		{"", "a", false},
+		// A backslash at the end of the pattern is a literal backslash.
+		{`a\`, `a\`, true},
+		{`a\`, `a`, false},
+		// Wildcards work on runes, not bytes.
+		{"?", "é", true},
+		{"caf?", "café", true},
+		{"café", "CAFÉ", true},
 	}
 	for _, c := range cases {
 		t.Run(c.pat+"|"+c.in, func(t *testing.T) {
@@ -52,7 +78,7 @@ func TestHasWildcard(t *testing.T) {
 	if !HasWildcard("a*b") || !HasWildcard("a?b") {
 		t.Fatal("expected wildcards to be detected")
 	}
-	if HasWildcard(`a\*b`) || HasWildcard("ab") {
+	if HasWildcard(`a\*b`) || HasWildcard(`a\?b`) || HasWildcard("ab") {
 		t.Fatal("escaped star and plain text are not wildcards")
 	}
 }
@@ -62,5 +88,22 @@ func FuzzWildcard(f *testing.F) {
 	f.Add(`a\*b`, "a*b")
 	f.Fuzz(func(t *testing.T, pat, in string) {
 		_ = CompileWildcard(pat).MatchString(in)
+		// Properties with a cheap oracle: a string matches its own escaped
+		// form, a lone star matches everything, and *s* finds s.
+		if !CompileWildcard(escapeAll(pat)).MatchString(pat) {
+			t.Fatalf("escaped %q does not match itself", pat)
+		}
+		if !CompileWildcard("*").MatchString(in) {
+			t.Fatalf("* does not match %q", in)
+		}
+		if !CompileWildcard("*" + escapeAll(in) + "*").MatchString(in) {
+			t.Fatalf("*%q* does not match itself", in)
+		}
 	})
+}
+
+// escapeAll turns s into a pattern that matches exactly s.
+func escapeAll(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`)
+	return r.Replace(s)
 }

@@ -23,7 +23,7 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 ### Revisit Value layout and Text() allocation for the v2 hot path
 **What:** `event.Value` is 64 bytes with every payload slot present, and `Value.Text()` allocates a string per call for `KindInt` and `KindBool`. Both sit on the per-field, per-rule comparison path.
 **Why:** Flagged by the SIG-13 pre-landing review. v1 is never optimized by rule, and the v2 hot path is Plan G, so the layout stays as the plan specifies until there is a benchmark to justify changing it.
-**Context:** Options noted in review: fold `I` and `B` into one slot, move `L` behind a pointer, add `AppendText(dst []byte)` using `strconv.AppendInt`, and a `BenchmarkValueText` asserting 0 allocs/op. Decide in Plan G with numbers.
+**Context:** Options noted in review: fold `I` and `B` into one slot, move `L` behind a pointer, add `AppendText(dst []byte)` using `strconv.AppendInt`, and a `BenchmarkValueText` asserting 0 allocs/op. From the SIG-15 review, on the same path: `Wildcard.MatchString` lowercases and rune-decodes the input per call, `Any`/`All` repeat that per value in a list, and `Contains`/`StartsWith`/`EndsWith` without author wildcards could use `strings.Contains`/`HasPrefix`/`HasSuffix` on a once-lowered input. Decide in Plan G with numbers.
 **Effort:** M
 **Priority:** P3
 **Depends on:** Plan G

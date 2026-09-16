@@ -136,3 +136,70 @@ func TestBuildIntValueComparesAsText(t *testing.T) {
 		t.Fatal("an int rule value compares by its decimal text")
 	}
 }
+
+func TestBuildAllWithSingleValue(t *testing.T) {
+	m := build(t, "contains|all", "alpha")
+	if !hit(t, m, event.String("xxalphaxx")) || hit(t, m, event.String("beta")) {
+		t.Fatal("all over one value is a plain contains")
+	}
+}
+
+func TestBuildAllWithoutComparison(t *testing.T) {
+	m := build(t, "all", "a", "b")
+	if hit(t, m, event.String("a")) {
+		t.Fatal("all with equals over a scalar cannot satisfy two different values")
+	}
+	if !hit(t, m, event.List(event.String("a"), event.String("b"))) {
+		t.Fatal("all with equals is satisfied by a list holding every value")
+	}
+}
+
+func TestBuildModifierOrderDoesNotMatter(t *testing.T) {
+	a := build(t, "contains|all", "alpha", "beta")
+	b := build(t, "all|contains", "alpha", "beta")
+	c := build(t, "i|re", "^alpha")
+	for _, in := range []string{"alpha beta", "beta", "ALPHA"} {
+		if hit(t, a, event.String(in)) != hit(t, b, event.String(in)) {
+			t.Fatalf("contains|all and all|contains differ on %q", in)
+		}
+	}
+	if !hit(t, c, event.String("ALPHA")) {
+		t.Fatal("i|re is the same as re|i")
+	}
+}
+
+func TestBuildRegexInList(t *testing.T) {
+	m := build(t, "re", "^a", "b$")
+	if !hit(t, m, event.String("xb")) || hit(t, m, event.String("xbx")) {
+		t.Fatal("a regex list is an OR of compiled patterns")
+	}
+	if _, err := Build([]string{"re"}, []event.Value{event.String("ok"), event.String("(")}); err == nil {
+		t.Fatal("an invalid regex anywhere in the list must be an error")
+	}
+}
+
+func TestBuildBoolValueComparesAsText(t *testing.T) {
+	m, err := Build(nil, []event.Value{event.Bool(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hit(t, m, event.String("TRUE")) || !hit(t, m, event.Bool(true)) || hit(t, m, event.Bool(false)) {
+		t.Fatal("a bool rule value compares by its text")
+	}
+}
+
+func TestBuildRejectsNullWithComparison(t *testing.T) {
+	for _, mods := range []string{"contains", "startswith", "endswith", "re"} {
+		_, err := Build([]string{mods}, []event.Value{event.Null()})
+		if err == nil || !errors.Is(err, ErrUnsupportedModifier) {
+			t.Errorf("Build(%q, null): want ErrUnsupportedModifier, got %v", mods, err)
+		}
+	}
+}
+
+func TestBuildListValueErrorNamesKind(t *testing.T) {
+	_, err := Build(nil, []event.Value{event.List()})
+	if err == nil || !strings.Contains(err.Error(), "list") {
+		t.Fatalf("want an error naming the kind, got %v", err)
+	}
+}

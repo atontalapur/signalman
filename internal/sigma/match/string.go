@@ -45,19 +45,18 @@ func Equals(pattern string) Matcher {
 }
 
 // Contains is "field|contains: value".
-func Contains(sub string) Matcher { return Equals("*" + escapeWildcards(sub) + "*") }
+func Contains(sub string) Matcher { return Equals("*" + padTrailingBackslash(sub) + "*") }
 
 // StartsWith is "field|startswith: value".
-func StartsWith(pre string) Matcher { return Equals(escapeWildcards(pre) + "*") }
+func StartsWith(pre string) Matcher { return Equals(padTrailingBackslash(pre) + "*") }
 
 // EndsWith is "field|endswith: value".
-func EndsWith(suf string) Matcher { return Equals("*" + escapeWildcards(suf)) }
+func EndsWith(suf string) Matcher { return Equals("*" + padTrailingBackslash(suf)) }
 
-// escapeWildcards leaves the author's own * and ? alone, since Sigma allows
-// wildcards inside contains values. Only a trailing run of backslashes needs
-// care: an odd run would escape the star about to be appended, so one more
-// backslash is added to make the run even.
-func escapeWildcards(s string) string {
+// padTrailingBackslash makes a trailing run of backslashes even. It does not
+// escape anything else: Sigma allows the author's own * and ? inside contains
+// values. An odd run would escape the star the modifier is about to append.
+func padTrailingBackslash(s string) string {
 	n := len(s) - len(strings.TrimRight(s, `\`))
 	if n%2 == 1 {
 		return s + `\`
