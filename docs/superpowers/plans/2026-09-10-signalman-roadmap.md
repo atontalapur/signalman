@@ -12,7 +12,7 @@ This roadmap splits the spec into seven sub-plans. Each one produces working, te
 
 These apply to every plan. Copied from the spec.
 
-- Go 1.23. Install on the host before Plan A Task 1 (`brew install go`).
+- Go 1.27. Install on the host before Plan A Task 1 (`brew install go`).
 - Kafka wire protocol via Redpanda, run locally with Docker Compose. ClickHouse likewise.
 - Rules are Sigma, SigmaHQ corpus. Aggregation and correlation rules (`|` in the condition) are rejected at load time with rule ID, line number, and the phrase "aggregation is not supported". Never silently skipped.
 - A verdict is a pure function of `(Event, RuleSetV, TaxonomyV)`. No wall clock, no randomness, no dependence on Go map iteration order or rule load order.

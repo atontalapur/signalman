@@ -6,13 +6,13 @@
 
 **Architecture:** A lexer and precedence-climbing parser turn the `condition` string into an AST whose leaves are selection identifiers. Quantifiers (`1 of selection_*`) expand at parse time so the evaluator only ever sees AND, OR, NOT, and leaf predicates. The detection block compiles into predicate subtrees, which are then substituted for the identifiers. Taxonomy config binds abstract logsources to concrete field names and match criteria, and its content hash plus the rule set's content hash pin every verdict.
 
-**Tech Stack:** Go 1.23, `gopkg.in/yaml.v3`, Go native fuzzing, Python 3 with pySigma as a subprocess oracle.
+**Tech Stack:** Go 1.27, `gopkg.in/yaml.v3`, Go native fuzzing, Python 3 with pySigma as a subprocess oracle.
 
 **Spec:** `docs/spec/signalman-v1.html`, phase 02 and the type definitions in phase 01. Roadmap: `docs/superpowers/plans/2026-09-10-signalman-roadmap.md`.
 
 ## Global Constraints
 
-- Go 1.23. `go version` must report 1.23 or later before Task 1.
+- Go 1.27. `go version` must report 1.27 or later before Task 1.
 - Sigma string comparison is case insensitive by default. `|re` is case sensitive unless `|re|i`.
 - A condition containing `|` means aggregation. Reject at load with rule ID, line number, and the phrase "aggregation is not supported".
 - A logsource with no taxonomy entry is a load failure, not a rule that matches nothing.
@@ -71,7 +71,7 @@ Step 2 ships `match.Build` handling `contains`, `startswith`, `endswith`, `re`, 
 
 **Task 14.** Rewrite the bridge:
 - `EvalOnce` uses `LoadRuleBytes` (no temp file) and does not gate on the logsource; the fuzzer tests condition semantics, the taxonomy has its own tests.
-- `pysigma_eval.py` builds the table from the union of the rule's field names (pySigma exposes them from the parsed detection) and the event's keys, so an absent field is NULL, not "no such column". Columns are typed: INTEGER for ints, TEXT COLLATE NOCASE for strings, NULL for null. Register a `REGEXP` function via `create_function` using Python `re.search`. Verify the NOCASE behavior against `=` and `LIKE` empirically on the first run; adjust and document.
+- `pysigma_eval.py` builds the table from the union of the rule's field names (pySigma exposes them from the parsed detection) and the event's keys, so an absent field is NULL, not "no such column". Columns are typed: INTEGER for ints, TEXT COLLATE NOCASE for strings, NULL for null. Bools have no natural SQLite type; Go renders them as the text `true`/`false`, so decide the column type (TEXT of that form, or INTEGER 0/1 with the rule value coerced the same way) before the first fuzz run and record it in `KNOWN_DIVERGENCES.md`. Register a `REGEXP` function via `create_function` using Python `re.search`. Verify the NOCASE behavior against `=` and `LIKE` empirically on the first run; adjust and document.
 - Events are typed: the Go side generates `map[string]event.Value` and sends JSON with native ints, bools, nulls, and strings.
 - The fuzz target uses the fuzz bytes to seed a structured generator (field name, modifier chain from an allowlist, value, event) rather than mutating raw YAML. The allowlist starts as the step 2 modifier set and grows in step 9.
 - `known()` gains rows for: oracle cannot evaluate keyword lists (`NotImplementedError`), Python `re` vs Go RE2 syntax differences, and the keyword `Contains` deviation. Every row has a section in `KNOWN_DIVERGENCES.md`.

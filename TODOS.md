@@ -20,6 +20,14 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P4
 **Depends on:** Plan A Task 13
 
+### Revisit Value layout and Text() allocation for the v2 hot path
+**What:** `event.Value` is 64 bytes with every payload slot present, and `Value.Text()` allocates a string per call for `KindInt` and `KindBool`. Both sit on the per-field, per-rule comparison path.
+**Why:** Flagged by the SIG-13 pre-landing review. v1 is never optimized by rule, and the v2 hot path is Plan G, so the layout stays as the plan specifies until there is a benchmark to justify changing it.
+**Context:** Options noted in review: fold `I` and `B` into one slot, move `L` behind a pointer, add `AppendText(dst []byte)` using `strconv.AppendInt`, and a `BenchmarkValueText` asserting 0 allocs/op. Decide in Plan G with numbers.
+**Effort:** M
+**Priority:** P3
+**Depends on:** Plan G
+
 ### Add integration test entrypoint when compose lands
 **What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.
 **Why:** The job is wired now so Plan C only has to add the compose file and tagged tests.

@@ -2,8 +2,8 @@
 # adding new checks here, not in the workflow files.
 
 GO_PKGS := ./...
-STATICCHECK := honnef.co/go/tools/cmd/staticcheck@2024.1.1
-GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.1.3
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.1
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 .PHONY: check fmt vet test build lint tidy-check fuzz check-backlog check-python integration
 

@@ -34,7 +34,7 @@ Copied from the spec. Do not trade any of these for a shortcut.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`.
 - `make fuzz FUZZTIME=30s` runs every fuzz target; nightly CI runs 10m each.
 - `make check-backlog` after editing `docs/backlog.yml`.
-- Go 1.23. Module path `github.com/atontalapur/signalman`.
+- Go 1.27. Module path `github.com/atontalapur/signalman`.
 
 ## Workflow
 
