@@ -6,13 +6,13 @@
 
 **Architecture:** A lexer and precedence-climbing parser turn the `condition` string into an AST whose leaves are selection identifiers. Quantifiers (`1 of selection_*`) expand at parse time so the evaluator only ever sees AND, OR, NOT, and leaf predicates. The detection block compiles into predicate subtrees, which are then substituted for the identifiers. Taxonomy config binds abstract logsources to concrete field names and match criteria, and its content hash plus the rule set's content hash pin every verdict.
 
-**Tech Stack:** Go 1.23, `gopkg.in/yaml.v3`, Go native fuzzing, Python 3 with pySigma as a subprocess oracle.
+**Tech Stack:** Go 1.27, `gopkg.in/yaml.v3`, Go native fuzzing, Python 3 with pySigma as a subprocess oracle.
 
 **Spec:** `docs/spec/signalman-v1.html`, phase 02 and the type definitions in phase 01. Roadmap: `docs/superpowers/plans/2026-09-10-signalman-roadmap.md`.
 
 ## Global Constraints
 
-- Go 1.23. `go version` must report 1.23 or later before Task 1.
+- Go 1.27. `go version` must report 1.27 or later before Task 1.
 - Sigma string comparison is case insensitive by default. `|re` is case sensitive unless `|re|i`.
 - A condition containing `|` means aggregation. Reject at load with rule ID, line number, and the phrase "aggregation is not supported".
 - A logsource with no taxonomy entry is a load failure, not a rule that matches nothing.

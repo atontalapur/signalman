@@ -81,7 +81,7 @@ that needs them.
 
 ## Working on it
 
-- Go 1.23, module `github.com/atontalapur/signalman`.
+- Go 1.27, module `github.com/atontalapur/signalman`.
 - `make check` before every commit: gofmt, vet, `go mod tidy` diff, build,
   race tests, staticcheck, govulncheck. CI runs the same target.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`.
