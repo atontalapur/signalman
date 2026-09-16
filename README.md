@@ -9,12 +9,13 @@ old engine is retired.
 
 ## Status
 
-Pre-code. The spec, roadmap, backlog, CI, and release tooling exist; `go.mod`
-does not yet. Plan A (Sigma frontend) is next.
+Plan A is in progress. The module exists on Go 1.27 with one package,
+`internal/event` (Task 1 of the Sigma frontend plan). The spec, roadmap,
+backlog, CI, and release tooling were in place before the first Go code.
 
 | Plan | What it delivers | State |
 |---|---|---|
-| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | planned, tasks written |
+| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: event model done, lexer next |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | not started |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
@@ -88,6 +89,7 @@ that needs them.
 - `make fuzz FUZZTIME=30s` runs every fuzz target. Nightly CI runs them for
   10 minutes each and uploads any crashers.
 - `make check-backlog` after editing `docs/backlog.yml`.
+- Debt too small for a story lives in `TODOS.md`.
 - Jira project SIG. One story per branch, `feat/SIG-<n>-<slug>`. PR titles are
   Conventional Commits; CI rejects PRs without a `SIG-<n>` in the title or body.
 - Releases are `v*` tags. The tag must match `VERSION` and sit on `main`;
