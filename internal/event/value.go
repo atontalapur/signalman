@@ -1,11 +1,11 @@
-// Package event defines the unit of work that flows through the pipeline
-// and the verdict that every engine emits for it.
 package event
 
 import "strconv"
 
+// ValueKind tags which payload slot of a Value is live.
 type ValueKind uint8
 
+// The closed set of kinds. Sigma comparison branches on these.
 const (
 	KindNull ValueKind = iota
 	KindString
@@ -24,10 +24,19 @@ type Value struct {
 	L    []Value
 }
 
-func String(s string) Value  { return Value{Kind: KindString, S: s} }
-func Int(i int64) Value      { return Value{Kind: KindInt, I: i} }
-func Bool(b bool) Value      { return Value{Kind: KindBool, B: b} }
-func Null() Value            { return Value{Kind: KindNull} }
+// String returns a string Value. The empty string is a string, not null.
+func String(s string) Value { return Value{Kind: KindString, S: s} }
+
+// Int returns an integer Value.
+func Int(i int64) Value { return Value{Kind: KindInt, I: i} }
+
+// Bool returns a boolean Value.
+func Bool(b bool) Value { return Value{Kind: KindBool, B: b} }
+
+// Null returns the null Value. It is also what an absent field reads as.
+func Null() Value { return Value{Kind: KindNull} }
+
+// List returns a list Value holding vs. The slice is used as given, not copied.
 func List(vs ...Value) Value { return Value{Kind: KindList, L: vs} }
 
 // Text returns the canonical string form used for Sigma string comparison.

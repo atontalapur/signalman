@@ -1,3 +1,5 @@
+// Package event defines the unit of work that flows through the pipeline
+// and the verdict that every engine emits for it.
 package event
 
 import "time"
