@@ -20,8 +20,68 @@
 - Wildcards are matched by a purpose-built matcher, never by translating to regex.
 - Logsource mismatch must be representable as an explicit `false`, so the logsource test stays separate from the condition tree.
 - `gofmt -l .` empty, `go vet ./...` clean, `go test ./...` green before every commit.
-- Conventional Commits. Work on branch `feat/sigma-frontend`, PR to `main`.
+- Conventional Commits. One branch and one PR per Jira story (`feat/SIG-<n>-<slug>`), opened with `/ship`. See Review amendments, Execution order.
 - No emojis anywhere.
+
+---
+
+## Review amendments (2026-09-11)
+
+Settled by `/office-hours` and `/plan-eng-review`; design record in `docs/designs/plan-a-sigma-frontend.md`. Where an amendment below disagrees with drafted code in a task, the amendment wins. Apply it when implementing that task, test first.
+
+### Execution order
+
+Tasks run corpus-first so the acceptance report and the fuzzer exist before the encoding and comparison modifiers are built. Nine branches, one per story.
+
+| Step | Tasks | Story | Branch |
+|---|---|---|---|
+| 1 | 1 | S-10 / SIG-13 | `feat/SIG-13-event-value-model` |
+| 2 | 5, 6, 9 (minimal) | S-12 / SIG-15 | `feat/SIG-15-wildcard-string-modifiers` |
+| 3 | 2, 3, 4 | S-11 / SIG-14 | `feat/SIG-14-condition-parser` |
+| 4 | 10 | S-14 / SIG-17 | `feat/SIG-17-detection-compile` |
+| 5 | 11 | S-15 / SIG-18 | `feat/SIG-18-taxonomy` |
+| 6 | 12 | S-16 / SIG-19 | `feat/SIG-19-rule-loader` |
+| 7 | 13 | S-17 / SIG-20 | `feat/SIG-20-corpus-acceptance` |
+| 8 | 14 | S-18 / SIG-21 | `feat/SIG-21-pysigma-fuzzer` |
+| 9 | 7, 8, rest of 9, fuzz allowlist growth | S-13 / SIG-16 | `feat/SIG-16-encoding-modifiers` |
+
+Step 2 ships `match.Build` handling `contains`, `startswith`, `endswith`, `re`, `i`, `all`, and null; every other modifier returns `ErrUnsupportedModifier`. Step 9 adds the remaining cases to the same function. Before the step 9 PR, edit `docs/backlog.yml`: S-13 `plan:` becomes "Plan A, Tasks 7, 8, rest of 9" and its windash acceptance line becomes every-dash expansion; run `make check-backlog`.
+
+### Per-task amendments
+
+**Task 1.** No `.gitignore` write (already fixed in the step above).
+
+**Task 3 / ast.** Add `func Eval(n Node, ev *event.Event) bool`: the single tree walker for And, Or, Not, Pred; panics with the node type on Ident or Quant. Add `func Canonical(n Node) string` for hashing: same shape as `String` but every string is written with `%q` so quotes and separators cannot collide. `String` stays for explain output. Plan B's v1 may wrap `Eval` or reimplement it as its own obviously-correct walker; decide there.
+
+**Task 6.** `escapeWildcards` counts the run of trailing backslashes and appends one when the count is odd. Table test: `a`, `a\`, `a\\`, `a\\\`, `a\\\\`.
+
+**Task 7.** `WinDashVariants` matches pySigma and the spec: every `-` or `/` at a word boundary (`\B[-/]\b`) is replaced by each of the five dash characters, and the result is the cartesian product. Cap the number of dash positions at 5 (3125 variants) and return an error above it, surfaced as a `modifier` load error. Test `-nop -w hidden -enc` yields 125 variants and includes the all-slash and all-en-dash forms.
+
+**Task 8.** Add tests for each of `lt`, `lte`, `gte` (only `gt` and `lt` are exercised in the draft).
+
+**Task 9.** `var ErrUnsupportedModifier = errors.New("unsupported modifier")`; `Build` returns `fmt.Errorf("%w %q", ErrUnsupportedModifier, m)`. After collecting modifiers, validate the chain before building: transforms combined with `re`, `cidr`, `lt/lte/gt/gte`, or `fieldref` is an error; `i` without `re` is an error; two comparison modifiers is an error. All wrap `ErrUnsupportedModifier`. Table test of bad chains plus a test that `errors.Is(err, ErrUnsupportedModifier)` holds.
+
+**Task 10.** Keywords stay `Contains` over every field value; this is a deliberate, documented deviation from the spec's whole-value reading (row in `KNOWN_DIVERGENCES.md`). Use `ast.Eval` in tests; delete `walkForTest`. Add a test that `toValue` rejects an unsupported YAML type with an error naming the type.
+
+**Task 11.** `Resolve` is an exact match on all three components, blank equal to blank; no rule-side wildcard. `LoadTaxonomy` rejects two entries with the same logsource with an error naming both files. `LogSourceMatcher.Matches` calls `ast.Eval`; delete `walkNode`. Tests: a second windows entry with a different category resolves independently; duplicate logsource fails to load; TaxonomyV changes when one match value in a `t.TempDir` copy of the fixtures changes.
+
+**Task 12.** Classify the `modifier` code with `errors.Is(err, match.ErrUnsupportedModifier)`, never by error text. Accept `condition` as a YAML list of strings: parse each, wrap in `ast.Or`; any other type is a `condition` error naming the type. `LoadRuleSet` rejects the second file carrying an already-seen `id` with code `duplicate-id`, naming both paths. `RuleSetV` hashes `r.ID` and `ast.Canonical(r.Cond)`. Add `LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError)`; `LoadRule` reads the file and calls it. Fixtures and tests: list-form condition, duplicate id, missing id, malformed yaml, RuleSetV changes when a rule value changes and when TaxonomyV changes.
+
+**Task 13.** The corpus test loads all of `corpora/sigmahq/rules`, walks the tree for the file count, and skips under `testing.Short()`. Log the corpus commit SHA (`git -C corpora/sigmahq rev-parse HEAD`) and record it in `docs/corpus-acceptance.md` with each run.
+
+**Task 14.** Rewrite the bridge:
+- `EvalOnce` uses `LoadRuleBytes` (no temp file) and does not gate on the logsource; the fuzzer tests condition semantics, the taxonomy has its own tests.
+- `pysigma_eval.py` builds the table from the union of the rule's field names (pySigma exposes them from the parsed detection) and the event's keys, so an absent field is NULL, not "no such column". Columns are typed: INTEGER for ints, TEXT COLLATE NOCASE for strings, NULL for null. Register a `REGEXP` function via `create_function` using Python `re.search`. Verify the NOCASE behavior against `=` and `LIKE` empirically on the first run; adjust and document.
+- Events are typed: the Go side generates `map[string]event.Value` and sends JSON with native ints, bools, nulls, and strings.
+- The fuzz target uses the fuzz bytes to seed a structured generator (field name, modifier chain from an allowlist, value, event) rather than mutating raw YAML. The allowlist starts as the step 2 modifier set and grows in step 9.
+- `known()` gains rows for: oracle cannot evaluate keyword lists (`NotImplementedError`), Python `re` vs Go RE2 syntax differences, and the keyword `Contains` deviation. Every row has a section in `KNOWN_DIVERGENCES.md`.
+- Python discovery: `$SIGNALMAN_PYTHON`, falling back to `test/fuzz/.venv/bin/python`. When `CI=true` a missing oracle is `f.Fatal`, not `f.Skip`. `test/fuzz/requirements.txt` pins `pysigma` and `pysigma-backend-sqlite` to exact versions; `.github/workflows/nightly.yml` installs from it and sets `SIGNALMAN_PYTHON=python3` (run `/cso` for the workflow edit).
+- Restrict generated strings to ASCII, since SQLite NOCASE is ASCII-only and Go's `ToLower` is not.
+
+### Test additions not tied to a fix
+
+- `internal/event`: `Event.Field` on an absent name returns a value of `KindNull`.
+- `internal/sigma`: parser depth cap test, `strings.Repeat("(", 200) + "a" + strings.Repeat(")", 200)` returns an error, not a stack overflow.
 
 ---
 
@@ -66,10 +126,11 @@
 
 ```bash
 cd /Users/advaithtontalapur/Documents/Projects/signalman
-git checkout -b feat/sigma-frontend
+git checkout -b feat/SIG-13-event-value-model
 go mod init github.com/atontalapur/signalman
-printf 'bin/\ncorpora/\n*.test\n.venv/\n' > .gitignore
 ```
+
+`.gitignore` already exists and already covers `bin/`, `corpora/`, `*.test`, and `.venv/`. Do not recreate it.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -220,7 +281,7 @@ Expected: PASS for both tests.
 
 ```bash
 gofmt -l . && go vet ./...
-git add go.mod .gitignore internal/event
+git add go.mod internal/event
 git commit -m "feat(event): add value model, event, and verdict types"
 ```
 
@@ -3869,25 +3930,34 @@ git commit -m "test(fuzz): add pySigma differential fuzzer with a documented ora
 
 ## Plan A exit
 
-Run before opening the PR:
+Each story ships through `/ship`, which runs `make check`, bumps `VERSION`, updates `CHANGELOG.md`, and opens the PR. Never `gh pr create` by hand. The plan is done when the gate passes, checked on the last story's branch:
 
 ```bash
-gofmt -l .
-go vet ./...
-go test ./... -count=1
+make check
 go test ./internal/sigma/ -run TestCorpus -v
+go test ./test/fuzz/ -run '^$' -fuzz FuzzAgainstPySigma -fuzztime 30m
 ```
 
-The gate: every rule in the corpus either parses or is rejected with a specific reason, the counts are in `docs/corpus-acceptance.md` with commentary, and the differential fuzzer has run 1e6 executions clean.
-
-```bash
-git push -u origin feat/sigma-frontend
-gh pr create --base main --title "feat(sigma): Sigma frontend, parser, modifiers, and taxonomy" --body "Implements Plan A. See docs/superpowers/plans/2026-09-10-sigma-frontend.md and docs/corpus-acceptance.md."
-```
+The gate: every rule in the corpus either parses or is rejected with a specific reason, the counts and the corpus commit SHA are in `docs/corpus-acceptance.md` with commentary, and the differential fuzzer has run 1e6 executions clean with every suppression documented in `test/fuzz/KNOWN_DIVERGENCES.md`.
 
 ## What Plan B consumes from this
 
 - `sigma.RuleSet` with `Rules []Rule`, `Version`, `TaxonomyV`.
 - `Rule.LogSource.Matches(ev)` and `Rule.Cond`, which together give the v1 evaluator its two-step shape: a logsource test that emits an explicit `false` verdict, and a condition tree of only `And`, `Or`, `Not`, and `Pred`.
 - `Rule.Fields`, for the field presence gating v2 needs in Plan G.
-- `walkNode` in `taxonomy.go`, which Plan B moves into `internal/engine/v1` and deletes from here.
+- `ast.Eval`, the single tree walker. Plan B's v1 may wrap it or reimplement it as its own obviously-correct walker; decide there.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 13 issues, 0 critical gaps, all resolved; 14 test gaps folded into amendments |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | no UI |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **CROSS-MODEL:** A fresh Claude subagent (same family, cold read) surfaced 15 findings during `/office-hours`; all 15 were resolved in issues 1 to 13 or folded into the amendments. No open tension.
+- **VERDICT:** ENG CLEARED — ready to implement. Execution order and per-task amendments above are authoritative.
+
+NO UNRESOLVED DECISIONS

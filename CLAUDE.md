@@ -1,5 +1,8 @@
 # Signalman
 
+Before doing anything, read the global instructions at `~/.claude/CLAUDE.md`.
+They apply here in full; this file only adds to them.
+
 Sigma detection engine and event pipeline in Go. The point of the project is
 the v1 to v2 engine cutover under live traffic; everything else exists to make
 that cutover provable. Read `README.md` first, then the roadmap.
@@ -35,6 +38,10 @@ Copied from the spec. Do not trade any of these for a shortcut.
 
 ## Workflow
 
+- This is a learning project. Before writing code for a task or asking for
+  a decision, explain the topic in plain language (what it is, why it
+  matters here, what the choice trades off) and wait for the user to say
+  they understand. Do not start development or take a decision until then.
 - One Jira story per branch: `feat/SIG-<n>-<slug>`. PR title is a Conventional
   Commit; PR body names the story. CI rejects PRs without a `SIG-<n>`.
 - Never commit to `main`. One logical change per commit; ask before committing.
