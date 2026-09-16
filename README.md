@@ -9,13 +9,15 @@ old engine is retired.
 
 ## Status
 
-Plan A is in progress. The module exists on Go 1.27 with one package,
-`internal/event` (Task 1 of the Sigma frontend plan). The spec, roadmap,
-backlog, CI, and release tooling were in place before the first Go code.
+Plan A is in progress. The module exists on Go 1.27 with two packages:
+`internal/event` (the event value model) and `internal/sigma/match` (the
+wildcard matcher, core string modifiers, and `match.Build`, which turns a
+modifier chain into one matcher). The spec, roadmap, backlog, CI, and
+release tooling were in place before the first Go code.
 
 | Plan | What it delivers | State |
 |---|---|---|
-| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: event model done, lexer next |
+| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: event model and string matching done, condition parser next |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | not started |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
@@ -62,6 +64,7 @@ cmd/signalmand/         the pipeline daemon
 cmd/differ/             shadow-mode verdict comparison
 internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, modifiers, taxonomy, rule loader
+internal/sigma/match/   wildcard matcher, string modifiers, modifier chain to Matcher
 internal/engine/v1/     reference evaluator, permanent oracle
 internal/engine/v2/     compiled evaluator
 internal/backend/ch/    AST to ClickHouse SQL
