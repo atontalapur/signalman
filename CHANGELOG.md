@@ -3,6 +3,30 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.4.0] - 2026-09-19
+
+### Added
+
+- `internal/sigma`: the condition frontend. `lex` tokenizes a condition
+  string, folding keyword case and treating `*` as an identifier rune so
+  `selection_*` stays one token; a `|` anywhere returns `ErrAggregation`,
+  since an aggregation rule silently skipped is a missed detection with no
+  signal attached.
+- `ParseCondition`, recursive descent with one function per precedence
+  level, giving `not` over `and` over `or`, left associative, with
+  parentheses. `And` and `Or` are n-ary. Nesting is capped at 100 levels so
+  a hostile condition cannot overflow the stack. A fuzz target asserts no
+  input panics.
+- `internal/sigma/ast`: the node types, plus `Eval`, the single walker over
+  a bound tree, which panics on `Ident` and `Quant` because those reaching
+  an evaluator is a binding bug, not bad input. `String` renders a node for
+  explain output; `Canonical` quotes every name so a crafted selection name
+  cannot collide with the tree structure when hashed.
+- `Expand` rewrites `1 of`, `any of`, and `all of` into `And` and `Or` over
+  the rule's defined selections, and rejects an identifier naming no
+  selection. Names are copied and sorted first, so YAML key order and map
+  iteration cannot reach the tree shape.
+
 ## [0.3.0] - 2026-09-16
 
 ### Added
