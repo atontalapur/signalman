@@ -1,0 +1,12 @@
+logsource:
+  product: windows
+  service: security
+  category: process_creation
+match:
+  channel: Security
+  event_id: 4688
+fields:
+  Image: NewProcessName
+  CommandLine: CommandLine
+  ParentImage: ParentProcessName
+  User: SubjectUserName
