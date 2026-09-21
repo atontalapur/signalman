@@ -1,0 +1,9 @@
+title: References a selection that is not there
+id: 1f1a1f1a-0008-4000-8000-000000000008
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\cmd.exe'
+  condition: selection and not filter_missing
