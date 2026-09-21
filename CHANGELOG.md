@@ -3,6 +3,47 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.5.0] - 2026-09-21
+
+### Added
+
+- Every remaining Sigma modifier. Encoding transforms (`base64`,
+  `base64offset`, `utf16le`, `utf16be`, `utf16`, `wide`, `windash`) expand a
+  rule value at load time into the variants an attacker could have written,
+  so the per-event path stays a flat OR with no decoding on it.
+  `base64offset` uses pySigma's start offsets and end trims, because pySigma
+  is the differential oracle; `windash` follows pySigma's rule for which
+  dashes introduce a switch and expands each over five dash characters.
+- Numeric comparison (`lt`, `lte`, `gt`, `gte`), `cidr`, and `fieldref`. A
+  numeric comparison against an event value that does not parse is a
+  no-match rather than an error, so one malformed field cannot stop the
+  pipeline; an unparsable rule value is a load error, because that is an
+  author mistake and there is somebody to tell. `cidr` parses and masks its
+  prefix once, at load. `fieldref` compares two fields on the same event and
+  treats absence as not a value, so two absent fields are not equal.
+- A list-valued event field is an OR under every comparison, including the
+  numeric operators, `cidr`, and `fieldref` on both sides. A `cidr` rule
+  against a multi-valued IP field used to never match, and a silent
+  never-match reads exactly like a clean no-match.
+- `docs/modifiers.md`: the supported modifier surface, the three-stage chain
+  pipeline, every validation rule, and the deliberate divergences from
+  pySigma.
+
+### Changed
+
+- Modifier chains are validated before anything is built, so a nonsensical
+  chain fails at load naming the chain instead of producing a matcher that
+  ignores half of it. Rejected: two comparisons, `i` without `re`, a
+  transform feeding `re`/`cidr`/a numeric comparison/`fieldref`, `fieldref`
+  beside a comparison, any chain on a null value, and a chain whose variants
+  are all empty. Every one wraps `ErrUnsupportedModifier`, which callers
+  classify on with `errors.Is` rather than by error text.
+- A modifier chain may not expand to more than 4096 variants in total.
+  Per-transform caps could not see the multiplication across a chain, where
+  `windash|base64offset` reaches 9375 matchers, each scanned on every
+  non-matching event. No rule in the SigmaHQ corpus chains `windash` with an
+  encoding, so nothing in practice is rejected.
+
 ## [0.4.0] - 2026-09-19
 
 ### Added

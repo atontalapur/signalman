@@ -36,6 +36,14 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P2
 **Depends on:** Plan C (S-02)
 
+### Case folding applied to base64 text widens matching
+**What:** `Equals` lowercases both sides, and encoding transforms run before that fold, so a `base64offset|contains` matcher compares lowercased base64. Two different plaintext bytes can encode to base64 characters that differ only in case (`A` and `a`), so a value can match a blob it did not encode.
+**Why:** Sigma string matching is case insensitive by default and pySigma's backends fold case the same way, so following the spec here is right and the fuzzer will confirm it. The cost is a wider match on encoded values, which is a false positive, never a missed detection.
+**Context:** From SIG-16. Options if it shows up in practice: a case-sensitive `Matcher` variant selected when the chain carries an encoding transform, or a note in `docs/authoring.md` (Plan H) telling authors that encoded values are effectively case sensitive anyway. Decide with fuzzer evidence in Task 14, not before. `docs/modifiers.md` records the current behavior and `internal/sigma/match/build_test.go` pins it in `TestBuildEncodedValuesAreCaseSensitiveInPractice`.
+**Effort:** S
+**Priority:** P3
+**Depends on:** Plan A Task 14
+
 ## Completed
 
 ### Connect GitHub to Jira so merged PRs transition stories
