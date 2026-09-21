@@ -101,16 +101,6 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 		return nil, fail(CodeCondition, err.Error(), condLine)
 	}
 
-	ls := LogSource{
-		Category: f.LogSource.Category,
-		Product:  f.LogSource.Product,
-		Service:  f.LogSource.Service,
-	}
-	entry, ok := tax.Resolve(ls)
-	if !ok {
-		return nil, fail(CodeNoTaxonomy, fmt.Sprintf("no taxonomy entry for %s", ls), 1)
-	}
-
 	sels, names, err := CompileDetection(f.Detection)
 	if err != nil {
 		code := CodeDetection
@@ -146,6 +136,21 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 		cond = arms[0]
 	} else {
 		cond = &ast.Or{Children: arms}
+	}
+
+	// The taxonomy is resolved last, after everything that decides whether
+	// this engine can express the rule at all. A rule carrying an
+	// aggregation pipe reports "aggregation" even on a logsource nobody
+	// mapped, so the corpus acceptance report measures the engine rather
+	// than this deployment's config. Either way the rule is rejected.
+	ls := LogSource{
+		Category: f.LogSource.Category,
+		Product:  f.LogSource.Product,
+		Service:  f.LogSource.Service,
+	}
+	entry, ok := tax.Resolve(ls)
+	if !ok {
+		return nil, fail(CodeNoTaxonomy, fmt.Sprintf("no taxonomy entry for %s", ls), 1)
 	}
 
 	bound := bind(cond, sels)

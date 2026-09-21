@@ -19,9 +19,13 @@ subpackage.
 
 A rule now goes from YAML to a bound, evaluable tree, or to a rejection
 carrying a code, a reason, the rule id, and a line number. `config/taxonomy/`
-holds the logsource bindings. What remains in Plan A is the SigmaHQ corpus
-acceptance report and the pySigma differential fuzzer, both of which need
-vendored external inputs.
+holds the logsource bindings. `cmd/corpusaccept` reports how much of
+the real SigmaHQ corpus loads: 1478 of 3760 live rules against a
+three-logsource taxonomy, with three rules using Sigma features this engine
+cannot express and the rest rejected as unmapped logsources. The numbers and
+the per-code commentary are in `docs/corpus-acceptance.md`. What remains in
+Plan A is the pySigma differential fuzzer, which proves the accepted rules
+evaluate correctly rather than merely load.
 
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
@@ -31,7 +35,7 @@ the first Go code.
 
 | Plan | What it delivers | State |
 |---|---|---|
-| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: event model, matching, parser, modifiers, detection compilation, taxonomy, and rule loading done; corpus report and pySigma fuzzer left |
+| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: frontend loads 1478 of 3760 corpus rules with coded rejections; pySigma differential fuzzer left |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | not started |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
@@ -76,6 +80,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 cmd/signalman/          CLI: lint, test, explain, noise, bench
 cmd/signalmand/         the pipeline daemon
 cmd/differ/             shadow-mode verdict comparison
+cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
 internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
 internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
@@ -92,6 +97,8 @@ docs/spec/              the spec (signalman-v1.html)
 docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
+docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
+corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
