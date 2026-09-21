@@ -1,0 +1,309 @@
+package sigma
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/atontalapur/signalman/internal/event"
+	"github.com/atontalapur/signalman/internal/sigma/ast"
+)
+
+func TestLoadRuleBindsFieldsAndCondition(t *testing.T) {
+	tax := loadTax(t)
+	r, lerr := LoadRule("testdata/rules/proc_dump.yml", tax)
+	if lerr != nil {
+		t.Fatalf("load: %v", lerr)
+	}
+	if r.ID != "1f1a1f1a-0001-4000-8000-000000000001" {
+		t.Fatalf("id = %q", r.ID)
+	}
+	if r.Level != "high" || r.Status != "test" {
+		t.Fatalf("level = %q status = %q", r.Level, r.Status)
+	}
+
+	matching := &event.Event{Fields: map[string]event.Value{
+		"channel":     event.String("Microsoft-Windows-Sysmon/Operational"),
+		"event_id":    event.Int(1),
+		"Image":       event.String(`C:\Windows\System32\rundll32.exe`),
+		"CommandLine": event.String(`rundll32.exe comsvcs.dll, MiniDump 624 C:\t.dmp full`),
+		"ParentImage": event.String(`C:\Windows\explorer.exe`),
+	}}
+	if !r.LogSource.Matches(matching) {
+		t.Fatal("logsource should match")
+	}
+	if !ast.Eval(r.Cond, matching) {
+		t.Fatal("rule should match the comsvcs minidump event")
+	}
+
+	filtered := &event.Event{Fields: map[string]event.Value{
+		"Image":       event.String(`C:\Windows\System32\rundll32.exe`),
+		"CommandLine": event.String(`rundll32.exe comsvcs.dll, MiniDump 624 C:\t.dmp full`),
+		"ParentImage": event.String(`C:\Program Files\veeam.exe`),
+	}}
+	if ast.Eval(r.Cond, filtered) {
+		t.Fatal("the veeam filter should suppress the match")
+	}
+}
+
+func TestLoadRuleReportsTheFieldsItReads(t *testing.T) {
+	tax := loadTax(t)
+	r, lerr := LoadRule("testdata/rules/proc_dump.yml", tax)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	want := []string{"CommandLine", "Image", "ParentImage"}
+	if len(r.Fields) != len(want) {
+		t.Fatalf("fields = %v, want %v", r.Fields, want)
+	}
+	for i := range want {
+		if r.Fields[i] != want[i] {
+			t.Fatalf("fields = %v, want %v (sorted)", r.Fields, want)
+		}
+	}
+}
+
+func TestLoadRuleRenamesFieldsThroughTheTaxonomy(t *testing.T) {
+	// The security entry maps Image to NewProcessName, so the loaded rule
+	// must read the event's field, not the rule's abstract name.
+	tax := loadTax(t)
+	r, lerr := LoadRule("testdata/rules/list_condition.yml", tax)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if len(r.Fields) != 1 || r.Fields[0] != "NewProcessName" {
+		t.Fatalf("fields = %v, want [NewProcessName]", r.Fields)
+	}
+	ev := &event.Event{Fields: map[string]event.Value{
+		"NewProcessName": event.String(`C:\Windows\System32\certutil.exe`),
+	}}
+	if !ast.Eval(r.Cond, ev) {
+		t.Fatal("the renamed field must be the one the condition reads")
+	}
+	if ast.Eval(r.Cond, &event.Event{Fields: map[string]event.Value{
+		"Image": event.String(`C:\Windows\System32\certutil.exe`),
+	}}) {
+		t.Fatal("the rule must not still read the unmapped name")
+	}
+}
+
+func TestLoadRuleAcceptsAListCondition(t *testing.T) {
+	tax := loadTax(t)
+	r, lerr := LoadRule("testdata/rules/list_condition.yml", tax)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	// A list of conditions is an OR, so either selection alone matches.
+	for _, image := range []string{`c:\certutil.exe`, `c:\bitsadmin.exe`} {
+		ev := &event.Event{Fields: map[string]event.Value{"NewProcessName": event.String(image)}}
+		if !ast.Eval(r.Cond, ev) {
+			t.Fatalf("%s should match one arm of the list condition", image)
+		}
+	}
+	if ast.Eval(r.Cond, &event.Event{Fields: map[string]event.Value{
+		"NewProcessName": event.String(`c:\cmd.exe`),
+	}}) {
+		t.Fatal("an unrelated image must not match either arm")
+	}
+}
+
+func TestLoadRuleRejectsAggregationLoudly(t *testing.T) {
+	tax := loadTax(t)
+	_, lerr := LoadRule("testdata/rules/aggregated.yml", tax)
+	if lerr == nil {
+		t.Fatal("an aggregation rule must fail to load")
+	}
+	if lerr.Code != "aggregation" {
+		t.Fatalf("code = %q want aggregation", lerr.Code)
+	}
+	if !strings.Contains(lerr.Reason, "aggregation is not supported") {
+		t.Fatalf("reason = %q", lerr.Reason)
+	}
+	if lerr.RuleID == "" || lerr.Line == 0 {
+		t.Fatalf("an aggregation error must carry the rule id and the condition line: %+v", lerr)
+	}
+	if lerr.Line != 9 {
+		t.Fatalf("line = %d, want the condition line 9", lerr.Line)
+	}
+}
+
+func TestLoadRuleRejectsUnmappedLogsource(t *testing.T) {
+	tax := loadTax(t)
+	_, lerr := LoadRule("testdata/rules/unmapped.yml", tax)
+	if lerr == nil || lerr.Code != "no-taxonomy" {
+		t.Fatalf("expected a no-taxonomy failure, got %+v", lerr)
+	}
+	if !strings.Contains(lerr.Reason, "macos") {
+		t.Fatalf("the reason must name the logsource it could not resolve: %q", lerr.Reason)
+	}
+}
+
+func TestLoadRuleErrorCodes(t *testing.T) {
+	tax := loadTax(t)
+	cases := map[string]string{
+		"no_id.yml":               "missing-id",
+		"malformed.yml":           "yaml",
+		"no_condition.yml":        "condition",
+		"bad_modifier.yml":        "modifier",
+		"undefined_selection.yml": "condition",
+	}
+	for file, code := range cases {
+		_, lerr := LoadRule(filepath.Join("testdata/rules_bad", file), tax)
+		if lerr == nil {
+			t.Errorf("%s: expected a rejection", file)
+			continue
+		}
+		if lerr.Code != code {
+			t.Errorf("%s: code = %q want %q (reason %q)", file, lerr.Code, code, lerr.Reason)
+		}
+		if lerr.Path == "" {
+			t.Errorf("%s: rejection carries no path", file)
+		}
+	}
+}
+
+func TestLoadErrorMessageCarriesEveryField(t *testing.T) {
+	e := &LoadError{Path: "rules/x.yml", RuleID: "abc", Code: "aggregation", Reason: "nope", Line: 12}
+	msg := e.Error()
+	for _, want := range []string{"rules/x.yml", "12", "aggregation", "abc", "nope"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q omits %q", msg, want)
+		}
+	}
+}
+
+func TestLoadRuleMissingFileIsAnError(t *testing.T) {
+	tax := loadTax(t)
+	if _, lerr := LoadRule("testdata/rules/does_not_exist.yml", tax); lerr == nil {
+		t.Fatal("a missing file must be a rejection, not a nil rule with no error")
+	}
+}
+
+func TestLoadRuleBytesTakesSourceDirectly(t *testing.T) {
+	tax := loadTax(t)
+	src, err := os.ReadFile("testdata/rules/proc_dump.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, lerr := LoadRuleBytes("in-memory.yml", src, tax)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if r.Path != "in-memory.yml" {
+		t.Fatalf("path = %q", r.Path)
+	}
+}
+
+func TestLoadRuleSetIsDeterministic(t *testing.T) {
+	tax := loadTax(t)
+	a, aerrs, err := LoadRuleSet("testdata/rules", tax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, berrs, err := LoadRuleSet("testdata/rules", tax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Version != b.Version {
+		t.Fatal("RuleSetV must be stable across loads")
+	}
+	if a.TaxonomyV != tax.Version {
+		t.Fatal("the rule set must carry the taxonomy version")
+	}
+	if len(a.Rules) != 2 {
+		t.Fatalf("expected 2 loadable rules, got %d", len(a.Rules))
+	}
+	if len(aerrs) != 2 || len(berrs) != 2 {
+		t.Fatalf("expected 2 rejections, got %d and %d", len(aerrs), len(berrs))
+	}
+	if a.Rules[0].ID > a.Rules[1].ID {
+		t.Fatal("rules must be sorted by id")
+	}
+}
+
+func TestLoadRuleSetRejectsADuplicateID(t *testing.T) {
+	tax := loadTax(t)
+	rs, errs, err := LoadRuleSet("testdata/rules_dup", tax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Rules) != 1 {
+		t.Fatalf("the first claim on an id loads, the second does not: got %d rules", len(rs.Rules))
+	}
+	if len(errs) != 1 || errs[0].Code != "duplicate-id" {
+		t.Fatalf("expected one duplicate-id rejection, got %+v", errs)
+	}
+	for _, want := range []string{"first.yml", "second.yml"} {
+		if !strings.Contains(errs[0].Reason, want) {
+			t.Errorf("reason %q does not name %q", errs[0].Reason, want)
+		}
+	}
+}
+
+func TestRuleSetVersionTracksRuleContent(t *testing.T) {
+	tax := loadTax(t)
+	base, _, err := LoadRuleSet("testdata/rules", tax)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One changed detection value has to move RuleSetV, or a rule edit
+	// could ship without the verdict stream admitting that anything changed.
+	dir := t.TempDir()
+	for _, name := range []string{"proc_dump.yml", "list_condition.yml"} {
+		src, err := os.ReadFile(filepath.Join("testdata/rules", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "proc_dump.yml" {
+			src = []byte(strings.Replace(string(src), "comsvcs.dll", "comsvcs2.dll", 1))
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	edited, _, err := LoadRuleSet(dir, tax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Version == base.Version {
+		t.Fatal("RuleSetV must change when a detection value changes")
+	}
+}
+
+func TestRuleSetVersionTracksTheTaxonomy(t *testing.T) {
+	tax := loadTax(t)
+	base, _, err := LoadRuleSet("testdata/rules", tax)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	src, err := os.ReadFile("testdata/taxonomy/sysmon.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sysmon.yml"),
+		[]byte(strings.Replace(string(src), "event_id: 1", "event_id: 2", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	other, err := LoadTaxonomy(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _, err := LoadRuleSet("testdata/rules", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Version == base.Version {
+		t.Fatal("RuleSetV must change when the taxonomy it was bound against changes")
+	}
+}
+
+func TestLoadRuleSetMissingDirIsAnError(t *testing.T) {
+	tax := loadTax(t)
+	if _, _, err := LoadRuleSet("testdata/does_not_exist", tax); err == nil {
+		t.Fatal("a missing rule directory is an operator error, not an empty rule set")
+	}
+}

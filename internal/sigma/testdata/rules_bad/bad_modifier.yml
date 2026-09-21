@@ -1,0 +1,9 @@
+title: A modifier nobody implements
+id: 1f1a1f1a-0007-4000-8000-000000000007
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    CommandLine|expandvar: '%COMSPEC%'
+  condition: selection

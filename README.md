@@ -12,16 +12,26 @@ old engine is retired.
 Plan A is in progress. The module exists on Go 1.27 with three packages:
 `internal/event` (the event value model), `internal/sigma/match` (the
 wildcard matcher, every supported Sigma modifier, and `match.Build`, which
-turns a modifier chain into one matcher), and `internal/sigma` with its `ast`
-subpackage (the condition lexer, parser, AST, and quantifier expansion).
-The supported modifier surface and its deliberate divergences from pySigma
-are documented in `docs/modifiers.md`.
+turns a modifier chain into one matcher), and `internal/sigma` (the condition
+lexer, parser, quantifier expansion, detection block compilation, the
+taxonomy loader, and the rule and rule set loaders) with its `ast`
+subpackage.
+
+A rule now goes from YAML to a bound, evaluable tree, or to a rejection
+carrying a code, a reason, the rule id, and a line number. `config/taxonomy/`
+holds the logsource bindings. What remains in Plan A is the SigmaHQ corpus
+acceptance report and the pySigma differential fuzzer, both of which need
+vendored external inputs.
+
+Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
+rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
+and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
 
 | Plan | What it delivers | State |
 |---|---|---|
-| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: event model, string matching, condition parser, and the full modifier surface done; detection block compilation next |
+| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: event model, matching, parser, modifiers, detection compilation, taxonomy, and rule loading done; corpus report and pySigma fuzzer left |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | not started |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
@@ -67,7 +77,7 @@ cmd/signalman/          CLI: lint, test, explain, noise, bench
 cmd/signalmand/         the pipeline daemon
 cmd/differ/             shadow-mode verdict comparison
 internal/event/         Event, Value, Verdict
-internal/sigma/         lexer, parser, ast, modifiers, taxonomy, rule loader
+internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
 internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
 internal/engine/v1/     reference evaluator, permanent oracle
 internal/engine/v2/     compiled evaluator
@@ -80,6 +90,9 @@ test/replay/            corpus replay, digest comparison
 deploy/                 Dockerfile; docker compose for Redpanda and ClickHouse
 docs/spec/              the spec (signalman-v1.html)
 docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
+docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
+docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
+config/taxonomy/        logsource bindings, hashed into every verdict
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
 scripts/                backlog validator, Jira sync
