@@ -87,6 +87,32 @@ handed a confident wrong answer.
 agree on the digest but disagree on the counts were not fed the same stream,
 and that is worth catching separately from a hash mismatch.
 
+## Measured baseline
+
+Apple M1 Pro, `go test -bench . -benchtime 3s ./internal/engine/v1/`, corpus
+commit `2e8fd89`, one Sysmon process creation event:
+
+| Benchmark | Rules | ns/event | verdicts/s | B/event | allocs/event |
+|---|---|---|---|---|---|
+| `BenchmarkEvaluateFixtures` | 3 | 1,108 | 2,708,682 | 472 | 7 |
+| `BenchmarkEvaluateCorpus` | 1236 | 3,553,219 | 347,854 | 2,297,217 | 18,593 |
+
+Single-threaded, that is roughly 282 events per second against the full
+accepted corpus. v1 has no index and no prefilter by design, so the cost is a
+linear scan and the per-rule figure is what matters: about 2.9 microseconds
+and 15 allocations per rule per event.
+
+Fifteen allocations per rule is the number v2 has to attack, and it is
+evidence rather than a guess: `Value.Text` allocates a string for int and
+bool values, and the wildcard matcher lowercases and rune-decodes its input
+on every call. Both sit on the per-field, per-rule path. The entry in
+`TODOS.md` carries the options; the decision belongs to Plan G, with these
+numbers as the baseline.
+
+This is not a pipeline throughput figure. There is no ingest, no
+normalization, and no sink yet, and events per second under real traffic is
+Plan F's measurement.
+
 ## The gate property
 
 `TestDigestSurvivesARuleSetShuffle` in `internal/engine/v1` is the Plan B
