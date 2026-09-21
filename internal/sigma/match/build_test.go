@@ -354,3 +354,102 @@ func TestBuildEncodedValuesAreCaseSensitiveInPractice(t *testing.T) {
 		t.Fatal("an encoded value in the wrong case must not match")
 	}
 }
+
+func TestBuildEmptyValueUnderAnEncodingIsALoadError(t *testing.T) {
+	// base64offset of an empty plaintext yields three empty variants, which
+	// expand drops. An entry with nothing left to match could never fire, so
+	// it fails at load rather than silently never matching.
+	for _, mods := range []string{"base64offset", "utf16le", "base64offset|contains"} {
+		_, err := Build(strings.Split(mods, "|"), []event.Value{event.String("")})
+		if err == nil || !errors.Is(err, ErrUnsupportedModifier) {
+			t.Errorf("Build(%q, \"\"): want ErrUnsupportedModifier, got %v", mods, err)
+		}
+	}
+}
+
+func TestBuildRejectsNullWithFieldRefOrTransform(t *testing.T) {
+	// Both disjuncts of the null guard, not just the comparison one.
+	for _, mods := range []string{"fieldref", "base64", "utf16le", "windash"} {
+		_, err := Build([]string{mods}, []event.Value{event.Null()})
+		if err == nil || !errors.Is(err, ErrUnsupportedModifier) {
+			t.Errorf("Build(%q, null): want ErrUnsupportedModifier, got %v", mods, err)
+		}
+	}
+}
+
+func TestBuildStartsAndEndsWithUnderATransform(t *testing.T) {
+	// Every other encoding test pairs with contains. startswith and endswith
+	// run the same fan-out through a different comparison.
+	pre := build(t, "utf16le|startswith", "IEX")
+	if !hit(t, pre, event.String(UTF16LE("IEX payload"))) {
+		t.Fatal("utf16le|startswith")
+	}
+	if hit(t, pre, event.String(UTF16LE("payload IEX"))) {
+		t.Fatal("startswith must still anchor at the start")
+	}
+	suf := build(t, "utf16le|endswith", "IEX")
+	if !hit(t, suf, event.String(UTF16LE("payload IEX"))) {
+		t.Fatal("utf16le|endswith")
+	}
+	if hit(t, suf, event.String(UTF16LE("IEX payload"))) {
+		t.Fatal("endswith must still anchor at the end")
+	}
+}
+
+func TestBuildRejectsEveryNumericComparisonUnderATransform(t *testing.T) {
+	// The validateChain switch lists four numeric operators; only gt was
+	// exercised, so the other three arms were unproven.
+	for _, op := range []string{"lt", "lte", "gt", "gte"} {
+		_, err := Build([]string{"utf16le", op}, []event.Value{event.String("5")})
+		if err == nil || !errors.Is(err, ErrUnsupportedModifier) {
+			t.Errorf("Build(utf16le|%s): want ErrUnsupportedModifier, got %v", op, err)
+		}
+	}
+}
+
+func TestBuildThreadsEveryNumericComparison(t *testing.T) {
+	cases := []struct {
+		mods string
+		in   int64
+		want bool
+	}{
+		{"lt", 4, true}, {"lt", 5, false},
+		{"lte", 5, true}, {"lte", 6, false},
+		{"gt", 6, true}, {"gt", 5, false},
+		{"gte", 5, true}, {"gte", 4, false},
+	}
+	for _, c := range cases {
+		m := build(t, c.mods, "5")
+		if got := hit(t, m, event.Int(c.in)); got != c.want {
+			t.Errorf("Build(%q) on %d = %v, want %v", c.mods, c.in, got, c.want)
+		}
+	}
+}
+
+func TestBuildCapsTheCombinedTransformFanOut(t *testing.T) {
+	// windash alone is capped at five dash positions, 3125 variants. Chaining
+	// another transform multiplies that, and the per-transform cap cannot see
+	// it. A chain that would build thousands of matchers, each scanned on
+	// every event, is rejected at load with the count in the message.
+	_, err := Build([]string{"windash", "base64offset", "contains"},
+		[]event.Value{event.String("-a -b -c -d -e")})
+	if err == nil || !errors.Is(err, ErrUnsupportedModifier) {
+		t.Fatalf("want ErrUnsupportedModifier for an over-budget chain, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "variant") {
+		t.Fatalf("the error must say what blew the budget: %v", err)
+	}
+}
+
+func TestBuildAllowsRealisticChainsUnderTheBudget(t *testing.T) {
+	// The corpus chains windash with contains and nothing else, and pairs
+	// base64offset only with contains. Neither may be rejected.
+	m := build(t, "windash|contains", "-a -b -c -d -e")
+	if !hit(t, m, event.String("cmd /a /b /c /d /e")) {
+		t.Fatal("five dash positions alone is 3125 variants and stays legal")
+	}
+	enc := build(t, "utf16le|base64offset|contains", "IEX")
+	if !hit(t, enc, event.String(Base64(UTF16LE("xIEX payload")))) {
+		t.Fatal("a two-transform encoding chain stays legal")
+	}
+}

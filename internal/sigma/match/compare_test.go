@@ -151,3 +151,68 @@ func TestFieldRefComparesIntAsText(t *testing.T) {
 		t.Fatal("an int field compares against a string field by its decimal text")
 	}
 }
+
+func TestCIDRIgnoresHostBitsInThePrefix(t *testing.T) {
+	// A rule author writing 10.1.2.3/8 means the /8 network. The prefix is
+	// masked at load, and matching must not depend on the host bits they
+	// happened to type.
+	m, err := CIDR("10.1.2.3/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hit(t, m, event.String("10.9.9.9")) {
+		t.Fatal("host bits in the rule prefix must not narrow the network")
+	}
+	if hit(t, m, event.String("11.9.9.9")) {
+		t.Fatal("11.9.9.9 is outside 10.0.0.0/8")
+	}
+}
+
+func TestCompareReachesInsideAListValue(t *testing.T) {
+	// A field can hold several values. Every other comparison in Sigma treats
+	// a list as an OR, and these must too, or a multi-valued field silently
+	// never matches.
+	m, err := Compare("gt", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hit(t, m, event.List(event.Int(5), event.Int(200))) {
+		t.Fatal("any element over 100 is a match")
+	}
+	if !hit(t, m, event.List(event.String("nope"), event.String("200"))) {
+		t.Fatal("an unparsable sibling must not suppress a parsable match")
+	}
+	if hit(t, m, event.List(event.Int(5), event.Int(7))) {
+		t.Fatal("no element over 100 is not a match")
+	}
+	if hit(t, m, event.List()) {
+		t.Fatal("an empty list has no element to satisfy the comparison")
+	}
+}
+
+func TestCIDRReachesInsideAListValue(t *testing.T) {
+	m, err := CIDR("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hit(t, m, event.List(event.String("192.168.1.1"), event.String("10.9.9.9"))) {
+		t.Fatal("any address inside the prefix is a match")
+	}
+	if hit(t, m, event.List(event.String("192.168.1.1"), event.String("garbage"))) {
+		t.Fatal("no address inside the prefix is not a match")
+	}
+}
+
+func TestFieldRefReachesInsideListsOnBothSides(t *testing.T) {
+	ev := &event.Event{Fields: map[string]event.Value{
+		"Users":   event.List(event.String("alice"), event.String("SYSTEM")),
+		"Allowed": event.List(event.String("root"), event.String("system")),
+		"Denied":  event.List(event.String("guest")),
+	}}
+	if !FieldRef("Allowed").Match(ev.Field("Users"), ev) {
+		t.Fatal("any pair matching across the two lists is a match")
+	}
+	if FieldRef("Denied").Match(ev.Field("Users"), ev) {
+		t.Fatal("no matching pair is not a match")
+	}
+}

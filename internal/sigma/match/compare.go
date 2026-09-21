@@ -28,15 +28,17 @@ func Compare(op string, want int64) (Matcher, error) {
 		return nil, fmt.Errorf("unknown comparison modifier %q", op)
 	}
 	return funcMatcher{func(v event.Value, _ *event.Event) bool {
-		switch v.Kind {
-		case event.KindInt:
-			return test(v.I)
-		case event.KindString:
-			n, err := strconv.ParseInt(strings.TrimSpace(v.S), 10, 64)
-			return err == nil && test(n)
-		default:
-			return false
-		}
+		return anyValue(v, func(item event.Value) bool {
+			switch item.Kind {
+			case event.KindInt:
+				return test(item.I)
+			case event.KindString:
+				n, err := strconv.ParseInt(strings.TrimSpace(item.S), 10, 64)
+				return err == nil && test(n)
+			default:
+				return false
+			}
+		})
 	}}, nil
 }
 
@@ -48,13 +50,31 @@ func CIDR(prefix string) (Matcher, error) {
 	}
 	p = p.Masked()
 	return funcMatcher{func(v event.Value, _ *event.Event) bool {
-		s, ok := v.Text()
-		if !ok {
-			return false
-		}
-		addr, err := netip.ParseAddr(s)
-		return err == nil && p.Contains(addr)
+		return anyValue(v, func(item event.Value) bool {
+			s, ok := item.Text()
+			if !ok {
+				return false
+			}
+			addr, err := netip.ParseAddr(s)
+			return err == nil && p.Contains(addr)
+		})
 	}}, nil
+}
+
+// anyValue applies f to v, or to each element of a list, and reports whether
+// any application held. A list is an OR everywhere else in Sigma, and a
+// comparison that skipped list elements would read as a clean no-match while
+// silently never firing on a multi-valued field.
+func anyValue(v event.Value, f func(event.Value) bool) bool {
+	if v.Kind == event.KindList {
+		for _, item := range v.L {
+			if f(item) {
+				return true
+			}
+		}
+		return false
+	}
+	return f(v)
 }
 
 // FieldRef compares the value against another field on the same event. It
@@ -62,14 +82,16 @@ func CIDR(prefix string) (Matcher, error) {
 // which is why Matcher takes the event.
 func FieldRef(otherField string) Matcher {
 	return funcMatcher{func(v event.Value, ev *event.Event) bool {
-		got, ok := v.Text()
-		if !ok {
-			return false
-		}
-		want, ok := ev.Field(otherField).Text()
-		if !ok {
-			return false
-		}
-		return strings.EqualFold(got, want)
+		other := ev.Field(otherField)
+		return anyValue(v, func(left event.Value) bool {
+			got, ok := left.Text()
+			if !ok {
+				return false
+			}
+			return anyValue(other, func(right event.Value) bool {
+				want, ok := right.Text()
+				return ok && strings.EqualFold(got, want)
+			})
+		})
 	}}
 }

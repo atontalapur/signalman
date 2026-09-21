@@ -161,3 +161,42 @@ func TestWinDashCapsExpansion(t *testing.T) {
 		t.Fatal("six dash positions must be an error, not 15625 variants")
 	}
 }
+
+func TestWinDashAtTheCapSucceeds(t *testing.T) {
+	// The cap is "more than five positions is an error", so exactly five must
+	// still build. Without this, an off-by-one to >= would go unnoticed.
+	got, err := WinDashVariants("-a -b -c -d -e")
+	if err != nil {
+		t.Fatalf("exactly five dash positions must be allowed: %v", err)
+	}
+	if len(got) != 3125 {
+		t.Fatalf("got %d variants, want 5^5 = 3125", len(got))
+	}
+}
+
+func TestEncodersOnTheEmptyString(t *testing.T) {
+	if got := UTF16LE(""); got != "" {
+		t.Fatalf("UTF16LE(\"\") = %q", got)
+	}
+	if got := UTF16(""); got != "\xff\xfe" {
+		t.Fatalf("UTF16(\"\") = %q, want the BOM alone", got)
+	}
+	if got := Base64(""); got != "" {
+		t.Fatalf("Base64(\"\") = %q", got)
+	}
+	// An empty plaintext determines no base64 character at any alignment, so
+	// every offset is empty. Build turns that into a load error rather than a
+	// matcher that can never fire.
+	for i, o := range Base64Offsets("") {
+		if o != "" {
+			t.Fatalf("Base64Offsets(\"\")[%d] = %q, want empty", i, o)
+		}
+	}
+	got, err := WinDashVariants("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "" {
+		t.Fatalf("WinDashVariants(\"\") = %q", got)
+	}
+}

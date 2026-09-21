@@ -14,8 +14,10 @@ import (
 // The rule loader classifies on it with errors.Is, never on error text.
 var ErrUnsupportedModifier = errors.New("unsupported modifier")
 
-// Modifier names as written in a detection key. Each comparison appears in
-// exactly two places: the chain parser and the leaf builder.
+// Modifier names as written in a detection key. A comparison is consumed in
+// three places: the chain parser above, validateChain, and either buildOne's
+// dedicated switch (re, cidr, the numeric operators) or the variant loop that
+// follows it.
 const (
 	modContains   = "contains"
 	modStartsWith = "startswith"
@@ -207,6 +209,15 @@ func buildOne(v event.Value, transforms []transform, comparison string, reInsens
 	return Any(ms), nil
 }
 
+// maxVariants bounds the whole chain, not one transform. Each transform caps
+// its own fan-out, but the counts multiply: windash at its five-position
+// limit is 3125 variants, and chaining base64offset makes that 9375, every
+// one of them a matcher scanned on every event that does not match. No rule
+// in the SigmaHQ corpus chains windash with an encoding, so nothing real is
+// rejected here; the budget exists so that a rule that would do it fails at
+// load instead of quietly costing the pipeline orders of magnitude.
+const maxVariants = 4096
+
 // expand runs the transforms in written order. Order is the contract: the
 // utf16 family encodes the text, then base64 encodes those bytes, never the
 // other way around.
@@ -224,6 +235,10 @@ func expand(text string, transforms []transform) ([]string, error) {
 					next = append(next, out)
 				}
 			}
+		}
+		if len(next) > maxVariants {
+			return nil, fmt.Errorf("%w: the modifier chain expands to %d variants, over the limit of %d",
+				ErrUnsupportedModifier, len(next), maxVariants)
 		}
 		variants = next
 	}

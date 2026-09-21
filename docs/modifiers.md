@@ -75,6 +75,20 @@ so per-event work is one `ParseAddr` and one `Contains`. IPv4 and IPv6 both
 work, and they do not match across families: `10.1.2.3` is not inside
 `2001:db8::/32`. An event value that is not an address is a no-match.
 
+### List-valued event fields
+
+A field can hold a list. Every comparison treats it as an OR: the field
+matches if any element does. That holds for the string comparisons, for
+`lt`/`lte`/`gt`/`gte`, for `cidr`, and for `fieldref` on both sides.
+
+The alternative, having only the string comparisons reach inside lists, was
+rejected: a `cidr` rule against a multi-valued IP field would then never
+match, and a silent never-match is indistinguishable from a clean no-match.
+That is the exact failure this engine exists to rule out.
+
+A list nested inside a list does not match, and what the decoder does with
+one is an open ingest-side question recorded in `TODOS.md`.
+
 ### fieldref
 
 `fieldref` compares the event field against another field on the same event,
@@ -144,6 +158,13 @@ classifies on with `errors.Is` and never by error text:
 - An encoding transform feeding `re`, `cidr`, a numeric comparison, or
   `fieldref`. Encoded bytes are not a regex, an address, a number, or a field
   name.
+- A chain whose transforms expand to more than 4096 variants in total. Each
+  transform caps its own fan-out, but the counts multiply: `windash` at its
+  five-position limit is 3125 variants, and chaining `base64offset` makes
+  that 9375, every one a matcher scanned on every event that does not match.
+  No rule in the SigmaHQ corpus chains `windash` with an encoding, so the
+  budget rejects nothing real; it exists so a rule that would do it fails at
+  load instead of quietly costing the pipeline orders of magnitude.
 - `fieldref` beside a comparison.
 - Any modifier chain on a `null` rule value. `field: null` is the only null
   form.
