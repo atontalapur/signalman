@@ -11,15 +11,17 @@ old engine is retired.
 
 Plan A is in progress. The module exists on Go 1.27 with three packages:
 `internal/event` (the event value model), `internal/sigma/match` (the
-wildcard matcher, core string modifiers, and `match.Build`, which turns a
-modifier chain into one matcher), and `internal/sigma` with its `ast`
+wildcard matcher, every supported Sigma modifier, and `match.Build`, which
+turns a modifier chain into one matcher), and `internal/sigma` with its `ast`
 subpackage (the condition lexer, parser, AST, and quantifier expansion).
+The supported modifier surface and its deliberate divergences from pySigma
+are documented in `docs/modifiers.md`.
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
 
 | Plan | What it delivers | State |
 |---|---|---|
-| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: event model, string matching, and condition parser done; detection block compilation next |
+| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: event model, string matching, condition parser, and the full modifier surface done; detection block compilation next |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | not started |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
@@ -66,7 +68,7 @@ cmd/signalmand/         the pipeline daemon
 cmd/differ/             shadow-mode verdict comparison
 internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, modifiers, taxonomy, rule loader
-internal/sigma/match/   wildcard matcher, string modifiers, modifier chain to Matcher
+internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
 internal/engine/v1/     reference evaluator, permanent oracle
 internal/engine/v2/     compiled evaluator
 internal/backend/ch/    AST to ClickHouse SQL
@@ -77,6 +79,7 @@ test/fuzz/              differential and parser fuzzers
 test/replay/            corpus replay, digest comparison
 deploy/                 Dockerfile; docker compose for Redpanda and ClickHouse
 docs/spec/              the spec (signalman-v1.html)
+docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
 scripts/                backlog validator, Jira sync
