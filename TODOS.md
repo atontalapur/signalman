@@ -16,6 +16,8 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **What:** `event.Value` is 64 bytes with every payload slot present, and `Value.Text()` allocates a string per call for `KindInt` and `KindBool`. Both sit on the per-field, per-rule comparison path.
 **Why:** Flagged by the SIG-13 pre-landing review. v1 is never optimized by rule, and the v2 hot path is Plan G, so the layout stays as the plan specifies until there is a benchmark to justify changing it.
 **Context:** Options noted in review: fold `I` and `B` into one slot, move `L` behind a pointer, add `AppendText(dst []byte)` using `strconv.AppendInt`, and a `BenchmarkValueText` asserting 0 allocs/op. From the SIG-15 review, on the same path: `Wildcard.MatchString` lowercases and rune-decodes the input per call, `Any`/`All` repeat that per value in a list, and `Contains`/`StartsWith`/`EndsWith` without author wildcards could use `strings.Contains`/`HasPrefix`/`HasSuffix` on a once-lowered input. Decide in Plan G with numbers.
+
+**Numbers, from SIG-22 (`BenchmarkEvaluateCorpus`, M1 Pro, corpus 2e8fd89):** 1236 accepted corpus rules against one Sysmon process creation event cost 3.55 ms, 2.30 MB, and 18,593 allocations per event, which is about 15 allocations per rule per event, single-threaded 347,854 verdicts/s. The baseline is recorded in `docs/evaluation.md`. This is the evidence the entry was waiting for; the decision is still Plan G's.
 **Effort:** M
 **Priority:** P3
 **Depends on:** Plan G
