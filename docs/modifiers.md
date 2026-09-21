@@ -145,6 +145,33 @@ The expansion is capped at five dash positions, which is already 3125
 matchers for one detection value. Above the cap the chain is rejected as an
 unsupported modifier, with the count and the value in the message.
 
+## Detection block shapes
+
+`sigma.CompileDetection` turns the detection block into one predicate subtree
+per selection name, and the shapes combine as the spec's implicit table says:
+
+| Shape | Meaning |
+|---|---|
+| A map of field keys | AND across the keys |
+| A list of values under one key | OR across the values, AND with `all` |
+| A list of maps | OR across the maps, each map an AND |
+| A list of bare scalars | keyword search: OR over every field value |
+| A bare scalar | one keyword |
+
+Map keys are sorted before the tree is built, so twenty compiles of the same
+block produce the same tree. That matters because the tree feeds the rule set
+hash, and a hash that moved with map iteration order would make two identical
+rule sets look different.
+
+`field: null` is the only null form, and it matches an absent field and an
+explicit null but never an empty string. An empty string matches only a
+present empty string.
+
+A keyword predicate carries no field name. Its matcher ignores the value it
+is handed and walks every field on the event in sorted order, reaching inside
+list-valued fields. A null keyword is a load error, because `Contains("")`
+would match every event carrying any field at all.
+
 ## Chain validation
 
 Validated before anything is built, so a nonsensical chain is a load error
@@ -183,6 +210,8 @@ differential fuzzer lands.
 | `windash` above five dash positions is rejected | Unbounded load-time fan-out. 3125 matchers for one value is already generous. |
 | A chain whose variants are all empty is rejected | pySigma would build an entry that can never match. The verdict invariant prefers a loud load error. |
 | Int and bool event values compare by their decimal and `true`/`false` text | pySigma types its columns. The differential fuzzer covers the gap. |
+| A bare keyword is `contains` over every field value, not a whole-value match | The spec reads whole-value. Every real corpus rule means substring, and a whole-value keyword matches almost nothing. |
+| A null keyword is rejected | It would compile to a matcher that fires on every event with any field. |
 
 ## Where this is enforced
 
@@ -191,3 +220,4 @@ differential fuzzer lands.
 - `internal/sigma/match/wildcard.go` — the wildcard matcher, never a regex translation
 - `internal/sigma/match/encode.go` — the encoding transforms
 - `internal/sigma/match/compare.go` — numeric, cidr, and fieldref
+- `internal/sigma/detection.go` — detection block shapes, keywords, YAML scalars
