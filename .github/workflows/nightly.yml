@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: probe
         run: echo "has_go=$([ -f go.mod ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - if: steps.probe.outputs.has_go == 'true'
