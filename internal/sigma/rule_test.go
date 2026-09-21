@@ -307,3 +307,47 @@ func TestLoadRuleSetMissingDirIsAnError(t *testing.T) {
 		t.Fatal("a missing rule directory is an operator error, not an empty rule set")
 	}
 }
+
+func TestLoadRuleReportsExpressibilityBeforeTaxonomy(t *testing.T) {
+	// A rule this engine cannot express must say so even when its logsource
+	// is unmapped, so the corpus acceptance report counts engine gaps
+	// separately from sources this deployment does not ingest.
+	tax := loadTax(t)
+	src := []byte(`
+title: Aggregated on a source nobody mapped
+id: 1f1a1f1a-000a-4000-8000-00000000000a
+logsource:
+  product: macos
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '/curl'
+  condition: selection | count() > 5
+`)
+	_, lerr := LoadRuleBytes("synthetic.yml", src, tax)
+	if lerr == nil {
+		t.Fatal("expected a rejection")
+	}
+	if lerr.Code != CodeAggregation {
+		t.Fatalf("code = %q, want %q", lerr.Code, CodeAggregation)
+	}
+}
+
+func TestLoadRuleReportsModifierGapsBeforeTaxonomy(t *testing.T) {
+	tax := loadTax(t)
+	src := []byte(`
+title: Unsupported modifier on an unmapped source
+id: 1f1a1f1a-000b-4000-8000-00000000000b
+logsource:
+  product: macos
+  category: process_creation
+detection:
+  selection:
+    CommandLine|expandvar: x
+  condition: selection
+`)
+	_, lerr := LoadRuleBytes("synthetic.yml", src, tax)
+	if lerr == nil || lerr.Code != CodeModifier {
+		t.Fatalf("want a modifier rejection, got %+v", lerr)
+	}
+}
