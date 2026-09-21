@@ -36,7 +36,7 @@ the first Go code.
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: frontend loads 1478 of 3760 corpus rules with coded rejections; pySigma differential fuzzer left |
-| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | in progress: v1 evaluator done |
+| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | in progress: v1 evaluator and verdict digest done; gate property green |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
@@ -89,7 +89,7 @@ internal/engine/v2/     compiled evaluator
 internal/backend/ch/    AST to ClickHouse SQL
 internal/pipe/          stages, bounded queues, drop ledger
 internal/obs/           metrics, canary
-internal/verdict/       digest
+internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              differential and parser fuzzers
 test/replay/            corpus replay, digest comparison
 deploy/                 Dockerfile; docker compose for Redpanda and ClickHouse
@@ -98,6 +98,7 @@ docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
+docs/evaluation.md      the v1 evaluator and how verdict streams are compared
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
 docs/superpowers/plans/ roadmap and per-plan task lists
