@@ -36,7 +36,7 @@ the first Go code.
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: frontend loads 1478 of 3760 corpus rules with coded rejections; pySigma differential fuzzer left |
-| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | not started |
+| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | in progress: v1 evaluator done |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
@@ -84,7 +84,7 @@ cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
 internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
 internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
-internal/engine/v1/     reference evaluator, permanent oracle
+internal/engine/v1/     reference evaluator, permanent oracle (no index, no cache)
 internal/engine/v2/     compiled evaluator
 internal/backend/ch/    AST to ClickHouse SQL
 internal/pipe/          stages, bounded queues, drop ledger
