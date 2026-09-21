@@ -1,0 +1,13 @@
+logsource:
+  product: windows
+  category: process_creation
+match:
+  channel: Microsoft-Windows-Sysmon/Operational
+  event_id: 1
+fields:
+  Image: Image
+  CommandLine: CommandLine
+  ParentImage: ParentImage
+  User: User
+  OriginalFileName: OriginalFileName
+  Hashes: Hashes

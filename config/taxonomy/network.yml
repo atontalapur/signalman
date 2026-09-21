@@ -1,0 +1,10 @@
+logsource:
+  product: windows
+  category: network_connection
+match:
+  channel: Microsoft-Windows-Sysmon/Operational
+  event_id: 3
+fields:
+  Image: Image
+  DestinationIp: DestinationIp
+  DestinationPort: DestinationPort
