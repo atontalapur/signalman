@@ -50,9 +50,13 @@ func Base64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s
 // The leading and trailing characters of each encoding are trimmed because
 // they carry bits of the neighbouring plaintext, which is unknown.
 //
-// The start and end offsets are the ones pySigma uses. Keeping them
-// identical matters, because pySigma is the oracle for the differential
-// fuzzer.
+// The start and end offsets are the ones pySigma uses, but the trim is
+// indexed by the plaintext's length in bytes, not in characters. base64
+// works on bytes, so byte length is the right index; pySigma uses the
+// character count and so trims a multi-byte plaintext wrongly. The two agree
+// on ASCII and nowhere else, which is why the differential fuzzer's oracle
+// declines base64offset on a non-ASCII value. See
+// test/fuzz/KNOWN_DIVERGENCES.md.
 func Base64Offsets(s string) [3]string {
 	starts := [3]int{0, 2, 3}
 	ends := [3]int{0, -3, -2} // indexed by (len(s)+i)%3; 0 means no trim

@@ -116,12 +116,69 @@ a rule without one cannot be reported on or compared across engines.
 No rule in the corpus has a detection block shape the compiler rejects, and
 no two rules share an id.
 
+## Differential fuzzer runs
+
+Loading is not matching, so `test/fuzz` checks the frontend's semantics
+against pySigma rather than against another reading of the specification.
+How the oracle works, and every difference that is suppressed rather than
+fixed, is in `test/fuzz/KNOWN_DIVERGENCES.md`.
+
+Run with `make fuzz-differential FUZZTIME=30m`. It needs the oracle's
+virtualenv; without it every case skips and the run proves nothing.
+
+**Executions are not comparisons.** Go reports executions, and an input
+neither engine evaluated says nothing about either. The target counts what
+each case actually did and `scripts/fuzz_stats.py` sums the per-worker
+counters, so the number below is comparisons.
+
+### Run of 2026-09-21
+
+| | 20 min, 2 workers | 30 min, 4 workers |
+|---|---|---|
+| Executions | 1,989,112 | 5,670,565 |
+| Verdicts compared and equal | 755,860 | 2,193,509 |
+| Rejected by both engines | 100,150 | 296,839 |
+| Landed in a documented gap | 241,997 | 628,122 |
+| Never reached both engines | 885,197 | 2,559,675 |
+| Oracle timeouts | 0 | 0 |
+| Divergences | 0 | 0 |
+
+- pySigma 1.5.1, pySigma-backend-sqlite 1.2.4, Python 3.14.3
+- Taxonomy `33c005fb8a7c69be`, the same three logsources as above
+- The 30 minute run was killed by the host at 29m29s for memory, with
+  nothing found; the 20 minute run ran to completion. Each worker holds an
+  interpreter with pySigma loaded, so worker count is a memory budget.
+
+Plan A's gate wants 1e6 executions clean and both runs clear that by
+comparisons alone. Spec gate G0 wants 1e8, which accumulates in nightly CI
+rather than in one sitting.
+
+### What the fuzzer found
+
+Every divergence it surfaced was on the oracle's side of the bridge. Two
+were defects rather than dialect:
+
+- `pySigma-backend-sqlite` converts a negated multi-variant selection to
+  `NOT a LIKE x OR a LIKE y` with no parentheses. `NOT` binds tighter than
+  `OR`, so the query asks `(NOT a) OR b`.
+- pySigma indexes the `base64offset` trim table by the plaintext's character
+  count. base64 works on bytes, so the two agree on ASCII and nowhere else.
+
+The rest were SQLite's semantics (`=` is case sensitive, which the oracle
+now corrects with `COLLATE NOCASE`), its limits (no NUL in a query, no
+expression tree past depth 1000), and the gap between RE2 and Python's regex
+engine. One open question came out of it and is carried in `TODOS.md`:
+Signalman encodes a wildcard inside an encoded value as a literal byte where
+pySigma rejects the rule.
+
 ## What this does and does not prove
 
 It proves that the frontend accounts for every file, that its rejections are
 attributable, and that the engine's expressive gaps against the real corpus
 are three rules wide.
 
-It does not prove the accepted rules **evaluate correctly**. Loading is not
-matching. That is the pySigma differential fuzzer's job, and until it has run
-clean, "1236 rules load" means only that they load.
+It proves that on the shapes the fuzzer generates, the accepted rules
+evaluate the way an independent implementation evaluates them. It does not
+prove that for the shapes it does not generate: `cidr`, the numeric
+comparisons, `fieldref`, and keyword searches are outside the oracle's
+reach, and their coverage is unit tests in `internal/sigma/match`.

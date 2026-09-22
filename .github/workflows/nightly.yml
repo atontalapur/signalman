@@ -26,11 +26,19 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      # The differential fuzzer shells out to pySigma as its oracle.
+      # The differential fuzzer shells out to pySigma as its oracle, and
+      # looks for it at test/fuzz/.venv. Installing pySigma anywhere else
+      # makes every case in test/fuzz skip without failing.
       - if: steps.probe.outputs.has_go == 'true'
-        run: pip install pysigma==1.5.0
+        run: |
+          python3 -m venv test/fuzz/.venv
+          test/fuzz/.venv/bin/pip install -r test/fuzz/requirements.txt
       - if: steps.probe.outputs.has_go == 'true'
         run: make fuzz FUZZTIME=10m
+      # Run again through the differential target, which reports how many
+      # cases reached both engines. Executions are not comparisons.
+      - if: steps.probe.outputs.has_go == 'true'
+        run: make fuzz-differential FUZZTIME=10m
       - if: always()
         uses: actions/upload-artifact@v7
         with:

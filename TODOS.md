@@ -46,6 +46,14 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P3
 **Depends on:** Plan A Task 14
 
+### Decide whether a wildcard inside an encoded value is a load error
+**What:** `CommandLine|base64|contains: '*foo*'` encodes the asterisks as literal bytes here and matches the base64 of `*foo*`. pySigma rejects the rule outright ("Base64 encoding of strings with wildcards is not allowed").
+**Why:** Found by the SIG-21 differential fuzzer. An author who writes that almost certainly means a wildcard, and gets a rule that silently matches something else. Signalman already prefers a loud load error for a chain that cannot mean what it says: a chain whose variants are all empty is rejected for exactly this reason.
+**Context:** Two options. Reject at load with a new `modifier` rejection reason, which matches pySigma and costs a line in `docs/modifiers.md`, `docs/corpus-acceptance.md`, and a recount of the corpus (no corpus rule does this today). Or keep the literal reading and document it in `docs/modifiers.md` as a divergence. Either way the suppression in `test/fuzz/oracle.go` and its section in `test/fuzz/KNOWN_DIVERGENCES.md` come out. Not decided inside SIG-21: it changes frontend semantics, which is its own story.
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
 ## Completed
 
 ### Connect GitHub to Jira so merged PRs transition stories

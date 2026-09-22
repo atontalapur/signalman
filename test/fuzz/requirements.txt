@@ -1,0 +1,6 @@
+# The oracle's dependencies, pinned: a conversion difference between
+# pySigma versions would look like a Signalman change.
+pysigma==1.5.1
+pysigma-backend-sqlite==1.2.4
+# A direct import in pysigma_eval.py, not only a pySigma dependency.
+PyYAML==6.0.3
