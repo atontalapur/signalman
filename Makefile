@@ -55,6 +55,7 @@ check-backlog:
 check-python:
 	python3 -m ruff check scripts test/fuzz
 	python3 -m py_compile scripts/*.py test/fuzz/*.py
+	cd scripts && python3 -m unittest discover -q -p 'test_*.py'
 	@if [ -x test/fuzz/.venv/bin/python ]; then \
 	  cd test/fuzz && ./.venv/bin/python -m unittest -q test_pysigma_eval; \
 	else \
@@ -73,9 +74,16 @@ FUZZWORKERS ?= 4
 ## A run that compares nothing passes every other check. Nightly holds a
 ## floor; interactive runs default to 0 so a 30s smoke run is not a failure.
 FUZZMINCOMPARED ?= 0
+## Caps on the share of cases suppressed or timed out. A suppression that
+## matches too much turns mismatches into skips while the floor above still
+## passes. Unset means no cap; nightly sets both.
+FUZZMAXSUPPRESSED ?=
+FUZZMAXTIMEOUT ?=
 fuzz-differential:
 	@rm -rf $(FUZZSTATS) && mkdir -p $(FUZZSTATS)
 	SIGNALMAN_FUZZ_STATS=$(FUZZSTATS) go test ./test/fuzz/ \
 	  -run '^$$' -fuzz '^FuzzAgainstPySigma$$' -parallel $(FUZZWORKERS) \
 	  -fuzztime $(FUZZTIME)
-	@python3 scripts/fuzz_stats.py $(FUZZSTATS) --min-compared $(FUZZMINCOMPARED)
+	@python3 scripts/fuzz_stats.py $(FUZZSTATS) --min-compared $(FUZZMINCOMPARED) \
+	  $(if $(FUZZMAXSUPPRESSED),--max-suppressed-ratio $(FUZZMAXSUPPRESSED)) \
+	  $(if $(FUZZMAXTIMEOUT),--max-timeout-ratio $(FUZZMAXTIMEOUT))
