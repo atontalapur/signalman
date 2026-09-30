@@ -106,6 +106,7 @@ docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 evaluator and how verdict streams are compared
+docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
 docs/superpowers/plans/ roadmap and per-plan task lists
