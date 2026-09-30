@@ -22,6 +22,13 @@ const venvPython = "./.venv/bin/python"
 // buffer would turn that into a dead oracle rather than a skipped case.
 const maxOracleLine = 4 << 20
 
+// oracleStartup bounds the subprocess's warm-up. Importing pySigma takes
+// seconds, and on a loaded machine (the race detector, several test packages
+// at once) it takes more than the per-request budget. The subprocess says
+// when it is ready, so the request deadline bounds evaluation and nothing
+// else.
+const oracleStartup = 60 * time.Second
+
 // oracleTimeout bounds one request. Python's re engine backtracks, so a
 // generated |re pattern can hang the subprocess for longer than the fuzz run
 // and is not interruptible from inside Python. A blocked read there stalls a
@@ -121,7 +128,36 @@ func startProc() (*oracleProc, error) {
 		stderr: stderr,
 	}
 	go p.drain(stdout)
+
+	if err := p.awaitReady(); err != nil {
+		p.kill()
+		return nil, err
+	}
 	return p, nil
+}
+
+// awaitReady consumes the readiness line. A subprocess that dies during
+// import reports the traceback here rather than as a timeout on whatever
+// request happened to be first.
+func (p *oracleProc) awaitReady() error {
+	timer := time.NewTimer(oracleStartup)
+	defer timer.Stop()
+
+	select {
+	case line, ok := <-p.lines:
+		if !ok {
+			return fmt.Errorf("oracle exited during startup:\n%s", p.stderr.String())
+		}
+		var res struct {
+			Ready bool `json:"ready"`
+		}
+		if err := json.Unmarshal(line, &res); err != nil || !res.Ready {
+			return fmt.Errorf("oracle sent %q before announcing readiness", line)
+		}
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("oracle did not start within %s", oracleStartup)
+	}
 }
 
 // drain reads responses so Eval can wait on a channel with a deadline
@@ -179,7 +215,13 @@ func (o *Oracle) Eval(ruleYAML string, ev map[string]string) (bool, Result, erro
 		}
 		line = l
 	case <-timer.C:
-		return false, Result{}, fmt.Errorf("%w after %s", ErrOracleTimeout, oracleTimeout)
+		// Replace the subprocess rather than leaving it hung. It still owns
+		// an unanswered request, and whenever it finishes, that line would
+		// be handed to the next Eval as though it answered that one: from
+		// the first timeout onward every verdict would be compared against
+		// the previous case's. restart wraps the cause, so the caller can
+		// still recognize this with errors.Is.
+		return false, Result{}, o.restart(fmt.Errorf("%w after %s", ErrOracleTimeout, oracleTimeout))
 	}
 
 	var res Result
@@ -271,8 +313,6 @@ func known(errG, errP error) bool {
 			return true // Python's engine rejects what RE2 accepts
 		case strings.Contains(msg, "Unknown modifier"):
 			return true // a modifier name pySigma does not carry
-		case strings.Contains(msg, "SigmaFeatureNotSupportedByBackendError"):
-			return true // a Sigma feature the sqlite backend declines
 		}
 	}
 	return false

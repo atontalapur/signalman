@@ -2,7 +2,8 @@
 
 Reads newline-delimited JSON on stdin, one object per request:
     {"rule": "<yaml>", "event": {"Field": "value", ...}}
-Writes one object per response:
+Writes {"ready": true} once the imports are done, then one object per
+request:
     {"matched": true, "fields": ["Field", ...]}
     {"error": "..."}
 
@@ -57,6 +58,19 @@ def non_ascii(node) -> bool:
     if isinstance(node, list):
         return any(non_ascii(v) for v in node)
     return False
+
+
+def ident(name: str) -> str:
+    """Quote a column name for SQLite, doubling any embedded quote.
+
+    Field names come from the rule, and a name carrying a double quote would
+    otherwise close the identifier and let the rest of it run as SQL against
+    this connection, which can ATTACH files. The generator only produces
+    names from a fixed list today, so nothing reaches this yet; the escaping
+    does not depend on that staying true. Doubling rather than rejecting,
+    because a Sigma field name legitimately carries dots and dashes.
+    """
+    return '"' + name.replace('"', '""') + '"'
 
 
 def contains_nul(node) -> bool:
@@ -187,9 +201,9 @@ def evaluate(rule_yaml: str, event: dict, fields):
         # contains and case sensitive through a plain equals. NOCASE folds
         # ASCII only; a non-ASCII case difference stays a divergence and is
         # recorded in KNOWN_DIVERGENCES.md.
-        quoted = ", ".join(f'"{c}" COLLATE NOCASE' for c in cols)
+        quoted = ", ".join(f"{ident(c)} COLLATE NOCASE" for c in cols)
         conn.execute(f"CREATE TABLE {TABLE} ({quoted})")
-        insert_cols = ", ".join(f'"{c}"' for c in cols)
+        insert_cols = ", ".join(ident(c) for c in cols)
         placeholders = ", ".join("?" for _ in cols)
         conn.execute(
             f"INSERT INTO {TABLE} ({insert_cols}) VALUES ({placeholders})",
@@ -248,6 +262,13 @@ def handle(req: dict) -> dict:
 
 
 def main() -> None:
+    # Announce readiness once the imports are done. pySigma takes seconds to
+    # load, and the Go side's per-request deadline is meant to bound a
+    # backtracking regex, not interpreter warm-up: without this line the
+    # first request pays for both and times out on a loaded machine.
+    sys.stdout.write(json.dumps({"ready": True}) + "\n")
+    sys.stdout.flush()
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
