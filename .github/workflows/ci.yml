@@ -36,6 +36,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # The oracle for test/fuzz. Without this venv every oracle test
+      # skips and the job is green without having run them.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: |
+          python3 -m venv test/fuzz/.venv
+          test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt
       - run: make check
 
   # Runs against real Redpanda and ClickHouse. Skipped until deploy/docker-compose.yml lands (Plan C).
@@ -62,8 +70,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - run: pip install ruff==0.16.7 pyyaml==6.0.3
+      - run: |
+          python3 -m venv test/fuzz/.venv
+          test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt
       - run: make check-python check-backlog
 
   # PR title is a Conventional Commit; body names the Jira story.

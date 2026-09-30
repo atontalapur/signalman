@@ -40,10 +40,13 @@ integration:
 ## fuzz: run every Fuzz* target for FUZZTIME each, keep going after a crasher,
 ## fail at the end. Nightly runs this with 10m.
 FUZZTIME ?= 30s
+## FuzzAgainstPySigma is left to fuzz-differential, which sums its counters
+## and fails a run that compared too little. Run here, it would spend its
+## budget with nothing checking what it did.
 fuzz:
 	@rc=0; for pkg in $$(go list $(GO_PKGS)); do \
 	  list=$$(go test -list '^Fuzz' $$pkg) || exit 1; \
-	  for f in $$(printf '%s\n' "$$list" | grep '^Fuzz'); do \
+	  for f in $$(printf '%s\n' "$$list" | grep '^Fuzz' | grep -vx 'FuzzAgainstPySigma'); do \
 	    echo "== $$pkg $$f"; \
 	    go test -run '^$$' -fuzz "^$$f\$$" -fuzztime $(FUZZTIME) $$pkg || rc=1; \
 	  done; \

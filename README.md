@@ -123,12 +123,13 @@ that needs them.
 - `make check` before every commit: gofmt, vet, `go mod tidy` diff, build,
   race tests, staticcheck, govulncheck. CI runs the same target.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`.
-- `make fuzz FUZZTIME=30s` runs every fuzz target. Nightly CI runs them for
-  10 minutes each and uploads any crashers.
+- `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
+  one. Nightly CI runs them for 10 minutes each and uploads any crashers.
 - `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer
   and prints how many cases actually reached both engines; executions are not
-  comparisons. It needs the oracle's virtualenv, which is gitignored:
-  `python3 -m venv test/fuzz/.venv && test/fuzz/.venv/bin/pip install -r test/fuzz/requirements.txt`.
+  comparisons. `FUZZMINCOMPARED`, `FUZZMAXSUPPRESSED` and `FUZZMAXTIMEOUT`
+  turn the counts into a pass or fail; nightly sets all three. It needs the oracle's virtualenv, which is gitignored:
+  `python3 -m venv test/fuzz/.venv && test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt`.
   Without it every case in `test/fuzz` skips, so a green `make check` on a
   machine with no venv says nothing about the fuzzer.
 - `make check-backlog` after editing `docs/backlog.yml`.
