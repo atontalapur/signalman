@@ -72,8 +72,10 @@ Signalman.
 
 ## The oracle will not answer
 
-These are refused in `pysigma_eval.py` before conversion, so the failure is
-one clear sentence rather than whatever the backend raises.
+Some are refused in `pysigma_eval.py` before or after conversion, so the
+failure is one clear sentence rather than whatever the backend raises. The
+rest are raised by pySigma or SQLite and suppressed in `known()`; each
+section names which.
 
 ### `cidr`
 
@@ -133,8 +135,8 @@ three characters off an encoding that needed no trim at all and produces `4`
 where the whole encoding `4oCp` is correct. The two agree on ASCII, where
 bytes and characters coincide, and disagree on everything else.
 
-`Base64Offsets` in `internal/sigma/match/encode.go` says its offsets are the
-ones pySigma uses. That is true of the table and not of the indexing.
+`Base64Offsets` in `internal/sigma/match/encode.go` uses pySigma's table and
+documents why its indexing is by bytes instead.
 
 ### A modifier pySigma does not carry
 
@@ -198,8 +200,8 @@ Python's engine backtracks and RE2 does not, so a pattern such as `(a+)+$`
 answers in microseconds on one side and runs for minutes on the other, and
 is not interruptible from inside Python. The oracle call has a five second
 deadline; a timeout replaces the subprocess and counts the case as
-unevaluated. The generator also declines to build nested quantifiers, so
-these are rare rather than routine.
+unevaluated. The fuzz target also skips patterns with a quantifier inside a
+group (`reSafe`), so these are rare rather than routine.
 
 ## Both engines evaluate, and the verdicts differ
 

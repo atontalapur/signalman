@@ -195,8 +195,8 @@ func TestOracleEvalRestartsAfterProcessDeath(t *testing.T) {
 	}
 }
 
-// TestOracleEvalRestartsOnTimeout pins the behavior the uncommitted change to
-// Eval's timeout branch adds: on a timeout the hung subprocess is killed and
+// TestOracleEvalRestartsOnTimeout pins the behavior of Eval's timeout
+// branch: on a timeout the hung subprocess is killed and
 // replaced, not merely reported. Without that, the subprocess would still be
 // computing when it finally answers, and that stale line would be handed to
 // whatever Eval call happens to be reading next -- comparing one case's

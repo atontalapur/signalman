@@ -18,7 +18,7 @@ import (
 // from here. Those are pinned by TestKnownAcceptanceDivergences instead,
 // which is a better place for them: they are a closed set, not a search.
 
-// fuzzFields are the fields the sysmon process_creation binding maps. The
+// fuzzFields are four fields both process_creation bindings map. The
 // event carries all of them, so a rule never reads an absent field and the
 // SQL three-valued-logic gap stays out of the comparison.
 var fuzzFields = []string{"Image", "CommandLine", "ParentImage", "User"}
@@ -73,8 +73,8 @@ func buildRule(fieldSel, modSel, condSel uint8, ruleVal, ruleVal2, eventVal stri
 		key = field + "|" + mods
 	}
 
-	// all needs more than one value to mean anything, and a single-value
-	// list is a different tree from a scalar, so both shapes get generated.
+	// all needs more than one value to mean anything, so an all chain gets a
+	// two-value list and every other chain a scalar.
 	value := quoted(ruleVal)
 	if strings.HasPrefix(mods, "all") {
 		value = sequence(ruleVal, ruleVal2)

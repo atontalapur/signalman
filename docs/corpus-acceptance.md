@@ -149,7 +149,8 @@ counters, so the number below is comparisons.
   nothing found; the 20 minute run ran to completion. Each worker holds an
   interpreter with pySigma loaded, so worker count is a memory budget.
 
-Plan A's gate wants 1e6 executions clean and both runs clear that by
+Plan A's gate wants 1e6 executions clean. Both runs clear that by cases
+reaching both engines, and the 30 minute run clears it by verdict
 comparisons alone. Spec gate G0 wants 1e8, which accumulates in nightly CI
 rather than in one sitting.
 

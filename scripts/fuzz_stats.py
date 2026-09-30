@@ -3,7 +3,8 @@
 
 Fuzzing runs the target in worker processes, so the only number the
 coordinator reports is executions. That count includes every input the
-mutator produced that was not valid YAML and never reached either engine.
+fuzz target skipped before either engine: empty values, invalid UTF-8, and
+regex patterns reSafe declines.
 The gate cares about comparisons, not executions, so each worker writes its
 counters to SIGNALMAN_FUZZ_STATS/<pid>.json and this sums them.
 

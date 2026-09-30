@@ -9,8 +9,9 @@ import (
 )
 
 // The raw execution count go test prints is not the number the gate cares
-// about. Most inputs the mutator produces are not valid YAML, and an input
-// that never reached either engine proves nothing. These counters separate
+// about. Many inputs are skipped before either engine (empty values,
+// invalid UTF-8, patterns reSafe declines), and an input that never reached
+// either engine proves nothing. These counters separate
 // the outcomes so what gets recorded in docs/corpus-acceptance.md is the
 // number of real comparisons.
 var (

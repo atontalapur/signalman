@@ -6,32 +6,49 @@ from the spec are listed separately and stay there until a run replaces them.
 
 ## Differential fuzzer (Plan A gate)
 
-Run of 2026-09-30 on branch `feat/SIG-21-pysigma-differential-fuzzer`,
-commit `365ed2d`. Apple M1 Pro, Go 1.27.1, `-parallel 4`.
+Three runs, all on an Apple M1 Pro, all with zero verdict mismatches. The
+2026-09-21 runs are recorded in `docs/corpus-acceptance.md` with pySigma
+1.5.1 and pySigma-backend-sqlite 1.2.4.
 
 ```bash
 make fuzz-differential FUZZTIME=10m FUZZMINCOMPARED=100000
 ```
 
-| Counter | Value |
-|---|---|
-| Wall time | 10m15s |
-| Executions | 1,819,797 |
-| Verdict comparisons | 696,202 |
-| Rejected by both engines | 97,968 |
-| Suppressed (documented divergence) | 225,532 |
-| Reached both engines | 1,019,702 |
-| Oracle timeouts | 0 |
-| Skipped before either engine | 801,025 |
-| Verdict mismatches | 0 |
+| | 2026-09-21, 20 min, 2 workers | 2026-09-21, 30 min, 4 workers | 2026-09-30, 10 min, 4 workers |
+|---|---|---|---|
+| Executions | 1,989,112 | 5,670,565 | 1,819,797 |
+| Verdict comparisons | 755,860 | 2,193,509 | 696,202 |
+| Rejected by both engines | 100,150 | 296,839 | 97,968 |
+| Suppressed (documented divergence) | 241,997 | 628,122 | 225,532 |
+| Skipped before either engine | 885,197 | 2,559,675 | 801,025 |
+| Oracle timeouts | 0 | 0 | 0 |
+| Verdict mismatches | 0 | 0 | 0 |
 
-Skipped cases are mutator output that is not a valid rule, mostly invalid
-YAML. The gate counts cases that reached both engines, not executions: the
-first version of the fuzzer ran 684,594 executions with zero comparisons and
-still passed CI. `--min-compared` exists because of that run.
+Total: 9,479,474 executions and 3,645,571 verdict comparisons with no
+mismatch. The 30 minute run was killed by the host at 29m29s for memory
+(each worker holds a Python interpreter with pySigma loaded); its counters
+are what the workers had flushed by then. The 2026-09-30 run is on commit
+`365ed2d`, after the oracle timeout fix; the earlier runs had no timeouts,
+so the response desync that fix closes could not have affected them.
+
+Skipped cases never reached either engine: empty values, invalid UTF-8,
+and regex patterns `reSafe` declines. The gate counts comparisons, not executions: the first version of the
+fuzzer ran 684,594 executions with zero comparisons and still passed CI.
+`--min-compared` exists because of that run.
 
 Every suppression has a section in `test/fuzz/KNOWN_DIVERGENCES.md`; there
 are 25.
+
+### Defects found in the oracle
+
+Every divergence the fuzzer surfaced was on pySigma's side. Two were bugs,
+not dialect differences:
+
+- `pySigma-backend-sqlite` renders a negated multi-variant selection as
+  `NOT a LIKE x OR a LIKE y` with no parentheses, so the query asks
+  `(NOT a) OR b`.
+- pySigma indexes the `base64offset` trim table by character count instead
+  of byte count, so it is wrong on any non-ASCII plaintext.
 
 ## SigmaHQ corpus acceptance
 
@@ -82,5 +99,5 @@ From the spec. These are goals, not results.
 
 Built a Sigma detection engine in Go that loads, or rejects with a coded
 reason, every rule in the 3,760-rule SigmaHQ corpus, and verified it
-against pySigma with a differential fuzzer that ran 696k verdict comparisons
-with zero mismatches.
+against pySigma with a differential fuzzer: 3.6M verdict comparisons, zero
+mismatches, and two bugs found in pySigma's SQLite backend.

@@ -4,7 +4,7 @@ Reads newline-delimited JSON on stdin, one object per request:
     {"rule": "<yaml>", "event": {"Field": "value", ...}}
 Writes {"ready": true} once the imports are done, then one object per
 request:
-    {"matched": true, "fields": ["Field", ...]}
+    {"matched": true, "fields": ["Field", ...], "degenerate": false}
     {"error": "..."}
 
 pySigma converts rules, it does not evaluate events. So the rule is converted
