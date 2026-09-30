@@ -1,8 +1,10 @@
 package sigma
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"regexp/syntax"
 	"strings"
 	"testing"
 
@@ -349,5 +351,33 @@ detection:
 	_, lerr := LoadRuleBytes("synthetic.yml", src, tax)
 	if lerr == nil || lerr.Code != CodeModifier {
 		t.Fatalf("want a modifier rejection, got %+v", lerr)
+	}
+}
+
+// A detection error keeps its cause, so a caller can tell an RE2 syntax
+// rejection from other detection errors by type rather than by message.
+// The message quotes the rule's value, so text matching can be forged by
+// the value.
+func TestLoadErrorUnwrapsDetectionCause(t *testing.T) {
+	src := []byte(`title: t
+id: 00000000-0000-4000-8000-000000000000
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|re: '(?<!a)b'
+  condition: selection
+`)
+	_, lerr := LoadRuleBytes("re.yml", src, loadTax(t))
+	if lerr == nil {
+		t.Fatal("expected RE2 to reject a lookbehind")
+	}
+	if lerr.Code != CodeDetection {
+		t.Fatalf("code = %q, want %q", lerr.Code, CodeDetection)
+	}
+	var synErr *syntax.Error
+	if !errors.As(lerr, &synErr) {
+		t.Fatalf("LoadError does not unwrap to *syntax.Error: %v", lerr)
 	}
 }
