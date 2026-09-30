@@ -55,6 +55,11 @@ check-backlog:
 check-python:
 	python3 -m ruff check scripts test/fuzz
 	python3 -m py_compile scripts/*.py test/fuzz/*.py
+	@if [ -x test/fuzz/.venv/bin/python ]; then \
+	  cd test/fuzz && ./.venv/bin/python -m unittest -q test_pysigma_eval; \
+	else \
+	  echo "note: test/fuzz oracle venv absent, the oracle's Python tests will not run"; \
+	fi
 
 ## fuzz-differential: the pySigma differential fuzzer, with the per-worker
 ## counters summed at the end. Executions are not comparisons: see

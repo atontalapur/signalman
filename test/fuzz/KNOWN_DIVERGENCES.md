@@ -10,6 +10,20 @@ oracle-side load suppressions live in `known()` in `oracle.go`; the oracle's
 own refusals are raised in `pysigma_eval.py`; the verdict-level suppressions
 are in the fuzz body in `differential_test.go`.
 
+Every suppression keys on a code or an error type, never on message text.
+Signalman's rejections are matched on `LoadError.Code` or, for RE2, on
+`*syntax.Error` through `Unwrap`. The oracle's refusals carry a code from a
+closed set (`refusalCodes` in `oracle.go`); pySigma and SQLite exceptions get
+their code in `refusal_code()` from the exception class and the fixed start
+of its message, which comes before any quoted value. Error messages quote
+rule values and the fuzzer controls rule values, so a text match is one a
+generated value can trigger. An oracle error without a code, or a broken
+bridge (`ErrOracleBroken`), fails the case.
+
+Checks on the generated SQL run with every string literal blanked first
+(`strip_literals`), and checks about one modifier look only at that
+modifier's values, for the same reason.
+
 ## How the oracle works, and what that costs
 
 pySigma converts rules, it does not evaluate events. The oracle converts the
@@ -74,8 +88,9 @@ Signalman.
 
 Some are refused in `pysigma_eval.py` before or after conversion, so the
 failure is one clear sentence rather than whatever the backend raises. The
-rest are raised by pySigma or SQLite and suppressed in `known()`; each
-section names which.
+rest are raised by pySigma or SQLite and given a refusal code in
+`refusal_code()`. Either way the Go side sees a code; each section names
+which.
 
 ### `cidr`
 
@@ -123,7 +138,9 @@ For a negated selection with more than one variant, the backend emits
 `NOT a LIKE x OR a LIKE y` with no parentheses. `NOT` binds tighter than
 `OR` in SQL, so the query means `(NOT a) OR b`, which is not what the rule
 says. This is a backend defect, and the oracle cannot answer a query it has
-mis-generated. Detected on the generated SQL, not guessed from the rule.
+mis-generated. Detected on the generated SQL, not guessed from the rule:
+refused only when a bare `NOT` is followed by an `OR` in its own
+parenthesis group, with literals blanked. Code `unparenthesized-not`.
 
 ### `base64offset` on a non-ASCII value
 
@@ -211,10 +228,10 @@ SQL is three-valued. A comparison against a column the event does not carry
 is NULL, and `NOT NULL` is NULL, which returns no row. Sigma says an absent
 field does not match, so a negated condition over an absent field is true.
 
-Suppressed only when the oracle reports that the rule read a field the event
-does not carry, which is why the oracle returns the field list with every
-verdict. The generator populates every mapped field, so this is a guard
-rather than a routine skip.
+Not suppressed: excluded by construction. The generator populates every
+field a rule can read, and the fuzz target fails the case if the oracle
+reports a field the event does not carry, since that means the generator
+changed. `TestOracleReportsAbsentFieldGap` pins that the gap still exists.
 
 ### An empty encoded variant
 
@@ -226,7 +243,10 @@ whose variants are all empty, which `docs/modifiers.md` records as a
 deliberate divergence.
 
 The oracle flags a query carrying a match-anything term so the Go side
-recognizes the shape instead of reporting a decision as a bug.
+recognizes the shape instead of reporting a decision as a bug. Only under
+`base64offset`, and only outside string literals: SQL writes a `'` in a
+value as `''`, so a value such as `a='` used to read as an empty comparison
+and suppress a real mismatch.
 
 ## The bridge cannot express the case
 

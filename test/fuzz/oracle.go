@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
+	"regexp/syntax"
 	"sync"
 	"time"
+
+	"github.com/atontalapur/signalman/internal/sigma"
 )
 
 // venvPython is the interpreter the oracle runs in, relative to this package
@@ -40,12 +42,56 @@ const oracleTimeout = 5 * time.Second
 // replaced. The case is unevaluated, not disagreed on.
 var ErrOracleTimeout = errors.New("oracle timed out")
 
+// ErrOracleBroken means the bridge itself failed: the subprocess died,
+// closed stdout, or wrote a line that is not a response. Nothing was
+// evaluated, and unlike a timeout there is no documented reason for it, so
+// the fuzz case fails rather than counting as a rejection.
+var ErrOracleBroken = errors.New("oracle bridge broken")
+
+// maxStderr is how much of Python's stderr is kept for diagnosis. One
+// subprocess lives for the whole run, so an unbounded buffer grows with
+// every warning; the traceback that explains a failure is at the end.
+const maxStderr = 64 << 10
+
+// RefusalError is the oracle declining a case for a reason it names with a
+// code. Suppression keys on the code, which the oracle assigns from an
+// exception class or its own checks, and never on the message, which can
+// quote the rule's values.
+type RefusalError struct {
+	Code string
+	Msg  string
+}
+
+func (e *RefusalError) Error() string {
+	return fmt.Sprintf("oracle refused rule [%s]: %s", e.Code, e.Msg)
+}
+
+// refusalCodes are the oracle refusals KNOWN_DIVERGENCES.md documents. Each
+// is emitted by pysigma_eval.py; a code not listed here fails the case.
+var refusalCodes = map[string]bool{
+	"nul":                    true, // SQLite cannot carry a NUL in a query
+	"base64offset-non-ascii": true, // pySigma trims by characters, not bytes
+	"unsupported-modifier":   true, // cidr, lt/lte/gt/gte, fieldref
+	"value-only":             true, // the backend has no keyword search form
+	"regex-shorthand":        true, // \s \w \d name different sets in RE2
+	"regex-brace":            true, // RE2 reads non-canonical braces literally
+	"regex-newline":          true, // Python's $ matches before a final newline
+	"unparenthesized-not":    true, // the backend's NOT a OR b defect
+	"id-not-uuid":            true, // pySigma requires a UUID id
+	"regex-python-rejects":   true, // Python's engine rejects what RE2 accepts
+	"unknown-modifier":       true, // a modifier name pySigma does not carry
+	"wide-non-ascii":         true, // pySigma's wide/utf16 accept ASCII only
+	"wildcard-in-encoding":   true, // pySigma rejects a wildcard under base64
+	"sqlite-depth":           true, // SQLite's parser depth limit
+}
+
 // Oracle wraps a long-lived pySigma subprocess speaking newline-delimited
 // JSON. Starting an interpreter per case costs tens of milliseconds, which
 // puts the plan's 1e6 executions out of reach.
 type Oracle struct {
-	mu   sync.Mutex
-	proc *oracleProc
+	mu      sync.Mutex
+	proc    *oracleProc
+	timeout time.Duration
 }
 
 // oracleProc is one subprocess and the goroutine draining its stdout. A
@@ -71,29 +117,34 @@ type Result struct {
 	Matched bool     `json:"matched"`
 	Fields  []string `json:"fields"`
 	Error   string   `json:"error"`
+	Refusal string   `json:"refusal"`
 	// Degenerate means the oracle's query carries a term that matches every
 	// row, which pySigma emits for an empty encoded variant. Signalman drops
 	// those variants on purpose; see KNOWN_DIVERGENCES.md.
 	Degenerate bool `json:"degenerate"`
 }
 
-// syncBuilder collects the subprocess's stderr. exec writes it from its own
-// goroutine while Eval may read it, so the writes need a lock.
+// syncBuilder keeps the tail of the subprocess's stderr. exec writes it
+// from its own goroutine while Eval may read it, so the writes need a lock.
 type syncBuilder struct {
 	mu sync.Mutex
-	b  strings.Builder
+	b  []byte
 }
 
 func (s *syncBuilder) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.b.Write(p)
+	s.b = append(s.b, p...)
+	if over := len(s.b) - maxStderr; over > 0 {
+		s.b = append(s.b[:0], s.b[over:]...)
+	}
+	return len(p), nil
 }
 
 func (s *syncBuilder) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.b.String()
+	return string(s.b)
 }
 
 func StartOracle() (*Oracle, error) {
@@ -101,7 +152,7 @@ func StartOracle() (*Oracle, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Oracle{proc: p}, nil
+	return &Oracle{proc: p, timeout: oracleTimeout}, nil
 }
 
 func startProc() (*oracleProc, error) {
@@ -198,20 +249,20 @@ func (o *Oracle) Eval(ruleYAML string, ev map[string]string) (bool, Result, erro
 
 	p := o.proc
 	if _, err := p.in.Write(append(b, '\n')); err != nil {
-		return false, Result{}, o.restart(err)
+		return false, Result{}, o.restart(fmt.Errorf("%w: write: %w", ErrOracleBroken, err))
 	}
 	if err := p.in.Flush(); err != nil {
-		return false, Result{}, o.restart(err)
+		return false, Result{}, o.restart(fmt.Errorf("%w: flush: %w", ErrOracleBroken, err))
 	}
 
-	timer := time.NewTimer(oracleTimeout)
+	timer := time.NewTimer(o.timeout)
 	defer timer.Stop()
 
 	var line []byte
 	select {
 	case l, ok := <-p.lines:
 		if !ok {
-			return false, Result{}, o.restart(errors.New("oracle closed stdout"))
+			return false, Result{}, o.restart(fmt.Errorf("%w: closed stdout", ErrOracleBroken))
 		}
 		line = l
 	case <-timer.C:
@@ -221,12 +272,15 @@ func (o *Oracle) Eval(ruleYAML string, ev map[string]string) (bool, Result, erro
 		// the first timeout onward every verdict would be compared against
 		// the previous case's. restart wraps the cause, so the caller can
 		// still recognize this with errors.Is.
-		return false, Result{}, o.restart(fmt.Errorf("%w after %s", ErrOracleTimeout, oracleTimeout))
+		return false, Result{}, o.restart(fmt.Errorf("%w after %s", ErrOracleTimeout, o.timeout))
 	}
 
 	var res Result
 	if err := json.Unmarshal(line, &res); err != nil {
-		return false, Result{}, o.restart(err)
+		return false, Result{}, o.restart(fmt.Errorf("%w: bad response: %w", ErrOracleBroken, err))
+	}
+	if res.Refusal != "" {
+		return false, res, &RefusalError{Code: res.Refusal, Msg: res.Error}
 	}
 	if res.Error != "" {
 		return false, res, fmt.Errorf("oracle rejected rule: %s", res.Error)
@@ -244,7 +298,9 @@ func (o *Oracle) restart(cause error) error {
 
 	p, err := startProc()
 	if err != nil {
-		return fmt.Errorf("oracle died (%v) and would not restart: %w", cause, err)
+		// Both wrapped: the caller still needs to see a timeout as a
+		// timeout, and a failed restart is a broken bridge either way.
+		return fmt.Errorf("%w: oracle failed (%w) and would not restart: %w", ErrOracleBroken, cause, err)
 	}
 	o.proc = p
 
@@ -265,55 +321,35 @@ func (o *Oracle) Close() error {
 // decisions and the oracle's. Every branch here has a section in
 // KNOWN_DIVERGENCES.md; a suppression without one is how a differential
 // fuzzer quietly stops finding things.
+//
+// Each branch keys on a code or an error type. Error messages quote rule
+// values, and rule values are whatever the fuzzer generated, so a message
+// match is one a value can trigger.
 func known(errG, errP error) bool {
+	if errors.Is(errP, ErrOracleBroken) {
+		return false // nothing was evaluated, and nobody documented why
+	}
 	if errors.Is(errP, ErrOracleTimeout) {
 		return true // unevaluated, not disagreed on
 	}
-	if errG != nil {
-		msg := errG.Error()
-		switch {
-		case strings.Contains(msg, "no taxonomy entry"),
-			strings.Contains(msg, "does not resolve"):
+	var lerr *sigma.LoadError
+	if errors.As(errG, &lerr) {
+		switch lerr.Code {
+		case sigma.CodeNoTaxonomy:
 			return true // the oracle has no taxonomy layer at all
-		case strings.Contains(msg, "aggregation is not supported"):
+		case sigma.CodeAggregation:
 			return true // deliberate scope cut; pySigma converts these
-		case strings.Contains(msg, "[missing-id]"):
+		case sigma.CodeMissingID:
 			return true // verdicts are keyed on the id; pySigma allows none
-		case strings.Contains(msg, "error parsing regexp"):
+		}
+		var synErr *syntax.Error
+		if errors.As(errG, &synErr) {
 			return true // RE2 rejects what Python's engine accepts
 		}
 	}
-	if errP != nil {
-		msg := errP.Error()
-		switch {
-		case strings.Contains(msg, "unsupported-modifier:"):
-			return true // the backend answers these wrongly, so it refuses
-		case strings.Contains(msg, "unsupported-feature:"):
-			return true // a Sigma form the backend has no query for
-		case strings.Contains(msg, "unsupported-value:"):
-			return true // a value SQLite cannot carry in a query
-		case strings.Contains(msg, "unsupported-query:"):
-			return true // the backend generated a query it got wrong
-		case strings.Contains(msg, "Expression tree is too large"):
-			return true // SQLite's parser depth, not a Sigma question
-		case strings.Contains(msg, "SigmaIdentifierError"):
-			return true // pySigma requires a UUID id; Signalman requires an id
-		case strings.Contains(msg, "Full Text Search"),
-			strings.Contains(msg, "keywords"):
-			return true // the backend has no value-only expression form
-		case strings.Contains(msg, "only allowed for ascii strings"),
-			strings.Contains(msg, "only allowed for valid Unicode strings"):
-			// pySigma's wide and utf16 modifiers encode to UTF-16 and then
-			// decode the result as UTF-8, so they accept ASCII and little
-			// else. Signalman encodes the text and compares bytes.
-			return true
-		case strings.Contains(msg, "strings with wildcards is not allowed"):
-			return true // Signalman encodes the wildcard as a literal byte
-		case strings.Contains(msg, "SigmaRegularExpressionError"):
-			return true // Python's engine rejects what RE2 accepts
-		case strings.Contains(msg, "Unknown modifier"):
-			return true // a modifier name pySigma does not carry
-		}
+	var refusal *RefusalError
+	if errors.As(errP, &refusal) {
+		return refusalCodes[refusal.Code]
 	}
 	return false
 }

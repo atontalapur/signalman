@@ -3,9 +3,12 @@ package fuzz
 import (
 	"errors"
 	"fmt"
+	"regexp/syntax"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/atontalapur/signalman/internal/sigma"
 )
 
 // known() is a pure function and the closed set of suppressions it
@@ -13,6 +16,11 @@ import (
 // exercise it directly so every branch is pinned without needing the pySigma
 // venv, which TestKnownAcceptanceDivergences in differential_test.go only
 // reaches for a handful of them.
+//
+// Every suppression keys on a code or an error type, never on message text.
+// The fuzzer puts arbitrary strings into rule values, and error messages
+// quote rule values back, so text matching lets a value suppress an
+// unrelated failure. The negative cases below are exactly that.
 
 func TestKnownTimeoutIsAlwaysSuppressed(t *testing.T) {
 	wrapped := fmt.Errorf("%w after 5s", ErrOracleTimeout)
@@ -24,71 +32,105 @@ func TestKnownTimeoutIsAlwaysSuppressed(t *testing.T) {
 	}
 }
 
+func loadErr(code, reason string) error {
+	return &sigma.LoadError{Path: "fuzz.yml", Code: code, Reason: reason, Line: 1}
+}
+
 func TestKnownSignalmanLoadDivergences(t *testing.T) {
 	cases := []struct {
 		name string
-		errG string
+		errG error
 		want bool
 	}{
-		{"no taxonomy entry", "no taxonomy entry for windows/process_creation", true},
-		{"does not resolve", "rule loaded but logsource windows/process_creation does not resolve", true},
-		{"aggregation not supported", "aggregation is not supported", true},
-		{"missing id code", "fuzz.yml:1 [missing-id] rule : title required", true},
-		{"regexp parse error", "error parsing regexp: missing closing ]", true},
-		{"undocumented message", "some other loader complaint entirely", false},
+		{"no taxonomy", loadErr(sigma.CodeNoTaxonomy, "no taxonomy entry"), true},
+		{"aggregation", loadErr(sigma.CodeAggregation, "aggregation is not supported"), true},
+		{"missing id", loadErr(sigma.CodeMissingID, "rule has no id"), true},
+		{"regexp syntax", &sigma.LoadError{Code: sigma.CodeDetection, Err: &syntax.Error{Code: syntax.ErrMissingBracket}}, true},
+		// A loaded rule whose logsource then fails to resolve means the
+		// loader and Resolve disagree: a Signalman bug, not an oracle gap.
+		{"does not resolve", errors.New("rule loaded but logsource windows/process_creation does not resolve"), false},
+		// The message quotes the value; the code is what decides.
+		{"text without the code", loadErr(sigma.CodeDetection, "value 'aggregation is not supported [missing-id] error parsing regexp'"), false},
+		{"plain error with the text", errors.New("no taxonomy entry"), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := known(errors.New(c.errG), nil); got != c.want {
-				t.Fatalf("known(%q, nil) = %v, want %v", c.errG, got, c.want)
+			if got := known(c.errG, nil); got != c.want {
+				t.Fatalf("known(%v, nil) = %v, want %v", c.errG, got, c.want)
 			}
 		})
+	}
+}
+
+// A regex RE2 rejects has to be recognizable through the real loader, not
+// only through a hand-built LoadError.
+func TestKnownRecognizesRealRegexRejection(t *testing.T) {
+	rule := strings.Replace(seedRule, `Image|endswith: '\rundll32.exe'`, `Image|re: '(?<!a)b'`, 1)
+	_, errG := EvalOnce([]byte(rule), taxonomyDir, map[string]string{"Image": "b"})
+	if errG == nil {
+		t.Fatal("expected RE2 to reject a lookbehind")
+	}
+	if !known(errG, nil) {
+		t.Fatalf("an RE2 syntax rejection must be recognized by type: %v", errG)
 	}
 }
 
 func TestKnownOracleRefusalDivergences(t *testing.T) {
-	cases := []struct {
-		name string
-		errP string
-	}{
-		{"unsupported modifier", "unsupported-modifier: cidr"},
-		{"unsupported feature", "unsupported-feature: value-only expression"},
-		{"unsupported value", "unsupported-value: NUL"},
-		{"unsupported query", "unsupported-query: NOT outside parentheses"},
-		{"expression tree too large", "sqlite3.OperationalError: Expression tree is too large (maximum depth 1000)"},
-		{"sigma identifier error", "SigmaIdentifierError: not a UUID"},
-		{"full text search", "Full Text Search is not supported"},
-		{"keywords", "conversion produced bare keywords"},
-		{"ascii only", "wide modifier is only allowed for ascii strings"},
-		{"unicode only", "utf16 modifier is only allowed for valid Unicode strings"},
-		{"wildcards not allowed", "strings with wildcards is not allowed here"},
-		{"sigma regex error", "SigmaRegularExpressionError: bad pattern"},
-		{"unknown modifier", "Unknown modifier expandvar"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if !known(nil, errors.New(c.errP)) {
-				t.Fatalf("known(nil, %q) = false, want true", c.errP)
+	for code := range refusalCodes {
+		t.Run(code, func(t *testing.T) {
+			if !known(nil, &RefusalError{Code: code}) {
+				t.Fatalf("documented refusal %q must be suppressed", code)
 			}
 		})
 	}
+	if known(nil, &RefusalError{Code: "something-new"}) {
+		t.Fatal("an undocumented refusal code must surface")
+	}
 }
 
-// The sqlite backend's generic refusal is deliberately NOT suppressed. It
-// names an exception class rather than a limitation, so it would swallow any
-// future backend gap, including one nobody has looked at. Each real
-// limitation earns its own branch and its own section in
-// KNOWN_DIVERGENCES.md.
-func TestKnownDoesNotSuppressGenericBackendRefusal(t *testing.T) {
-	err := errors.New("SigmaFeatureNotSupportedByBackendError: something new")
-	if known(nil, err) {
-		t.Fatal("a generic backend refusal must surface, not be suppressed as documented")
+// An oracle error with no refusal code is something nobody documented, even
+// when its text carries every phrase the old text matching suppressed on.
+func TestKnownDoesNotSuppressUncodedOracleErrors(t *testing.T) {
+	for _, msg := range []string{
+		"SigmaFeatureNotSupportedByBackendError: something new",
+		"KeyError: 'keywords'",
+		"ValueError: Unknown modifier in value 'unsupported-value: x'",
+		"OperationalError: near \"Full Text Search\": syntax error",
+	} {
+		if known(nil, fmt.Errorf("oracle rejected rule: %s", msg)) {
+			t.Fatalf("uncoded oracle error %q must surface", msg)
+		}
+	}
+}
+
+func TestKnownDoesNotSuppressBrokenOracle(t *testing.T) {
+	broken := fmt.Errorf("%w: oracle closed stdout", ErrOracleBroken)
+	if known(nil, broken) || known(errors.New("x"), broken) {
+		t.Fatal("a broken oracle bridge must never be suppressed")
 	}
 }
 
 func TestKnownReturnsFalseWithNoErrors(t *testing.T) {
 	if known(nil, nil) {
 		t.Fatal("known(nil, nil) must be false: there is nothing to suppress")
+	}
+}
+
+// Python's stderr is kept for diagnosis, but only its tail: one subprocess
+// lives for the whole run, and a per-request warning would otherwise grow
+// without bound.
+func TestSyncBuilderKeepsTail(t *testing.T) {
+	var s syncBuilder
+	for i := 0; i < 3; i++ {
+		_, _ = s.Write([]byte(strings.Repeat("x", maxStderr)))
+	}
+	_, _ = s.Write([]byte("END"))
+	got := s.String()
+	if len(got) > maxStderr {
+		t.Fatalf("kept %d bytes, want at most %d", len(got), maxStderr)
+	}
+	if !strings.HasSuffix(got, "END") {
+		t.Fatal("the most recent output must be kept: a traceback is at the end")
 	}
 }
 
@@ -181,8 +223,8 @@ func TestOracleEvalRestartsAfterProcessDeath(t *testing.T) {
 	}
 	_, _ = o.proc.cmd.Process.Wait() // reap so the pipe closes promptly
 
-	if _, _, err := o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`}); err == nil {
-		t.Fatal("Eval after killing the subprocess should report the failure, not silently hang")
+	if _, _, err := o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`}); !errors.Is(err, ErrOracleBroken) {
+		t.Fatalf("Eval after killing the subprocess = %v, want ErrOracleBroken", err)
 	}
 
 	// The restart should have left a working subprocess in place.
@@ -215,6 +257,7 @@ func TestOracleEvalRestartsOnTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = o.Close() })
+	o.timeout = 500 * time.Millisecond
 
 	rule := `title: evil regex
 id: 00000000-0000-4000-8000-0000000000ff
@@ -235,8 +278,11 @@ detection:
 	if !errors.Is(err, ErrOracleTimeout) {
 		t.Fatalf("Eval on a catastrophically backtracking pattern = %v, want ErrOracleTimeout", err)
 	}
-	if elapsed < oracleTimeout {
-		t.Fatalf("Eval returned after %s, before oracleTimeout (%s) elapsed", elapsed, oracleTimeout)
+	if elapsed < o.timeout {
+		t.Fatalf("Eval returned after %s, before the timeout (%s) elapsed", elapsed, o.timeout)
+	}
+	if errors.Is(err, ErrOracleBroken) {
+		t.Fatal("a timeout is an unevaluated case, not a broken bridge")
 	}
 
 	// The subprocess must have been replaced: a normal request afterward

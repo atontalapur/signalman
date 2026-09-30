@@ -346,6 +346,12 @@ func FuzzAgainstPySigma(f *testing.F) {
 		got, errG := EvalOnce([]byte(ruleYAML), taxonomyDir, ev)
 		want, res, errP := o.Eval(ruleYAML, ev)
 
+		// Broken before timeout: a restart that fails after a timeout wraps
+		// both, and a bridge that will not come back is not an unevaluated
+		// case, it is a run that has stopped checking anything.
+		if errors.Is(errP, ErrOracleBroken) {
+			t.Fatalf("oracle bridge broken: %v\nrule:\n%s", errP, ruleYAML)
+		}
 		if errors.Is(errP, ErrOracleTimeout) {
 			recordOutcome(&statTimeout)
 			t.Skip()
@@ -361,11 +367,16 @@ func FuzzAgainstPySigma(f *testing.F) {
 			recordOutcome(&statRejected)
 			return
 		}
+		// The generator fills every field a rule can read, which keeps the
+		// SQL three-valued-logic gap (KNOWN_DIVERGENCES.md) out of the
+		// comparison by construction. Asserted rather than suppressed: if a
+		// rule ever reads a field the event lacks, the generator changed and
+		// every mismatch on that case would otherwise be skipped.
+		if missingField(res.Fields, ev) {
+			t.Fatalf("generated rule reads a field the event does not carry: fields=%v event=%v\nrule:\n%s",
+				res.Fields, ev, ruleYAML)
+		}
 		if got != want {
-			if missingField(res.Fields, ev) {
-				recordOutcome(&statSuppressed)
-				t.Skip() // KNOWN_DIVERGENCES.md: SQL three-valued logic
-			}
 			if res.Degenerate {
 				recordOutcome(&statSuppressed)
 				t.Skip() // KNOWN_DIVERGENCES.md: empty encoded variants

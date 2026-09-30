@@ -7,11 +7,12 @@ import (
 	"testing"
 )
 
-// vendorLiterals are the phrases known() and pysigma_eval.py match on that
-// belong to pySigma, not to this project. Suppressing on another project's
-// prose is a standing bet that the prose does not change: a version bump that
-// rewords one of these turns a documented divergence into a bare fuzz
-// failure, with nothing pointing at the reword as the cause.
+// vendorLiterals are the pySigma names and phrases pysigma_eval.py's
+// refusal_code matches on, as an exception class plus the fixed start of
+// its message. Suppressing on another project's prose is a standing bet
+// that the prose does not change: a version bump that rewords one of these
+// turns a documented divergence into a bare fuzz failure, with nothing
+// pointing at the reword as the cause.
 //
 // This test makes the bet visible at bump time instead. It is not a style
 // check: every literal here gates a suppression, and a literal that no longer
@@ -20,13 +21,14 @@ import (
 // here: they come from the C library through the sqlite3 module, not from any
 // file this walk can read.
 var vendorLiterals = []string{
-	"Full Text Search",                       // sqlite backend, value-only expressions
-	"only allowed for ascii strings",         // pySigma wide modifier
-	"only allowed for valid Unicode strings", // pySigma utf16 modifiers
-	"strings with wildcards is not allowed",  // pySigma base64 modifiers
-	"Unknown modifier",                       // pySigma modifier lookup
-	"SigmaIdentifierError",                   // pySigma rule id validation
-	"SigmaRegularExpressionError",            // pySigma regex validation
+	"Wide modifier only allowed for ascii strings",             // pySigma wide modifier
+	"modifier only allowed for valid Unicode strings",          // pySigma utf16 modifiers
+	"Base64 encoding of strings with wildcards is not allowed", // pySigma base64 modifiers
+	"Unknown modifier",                  // pySigma modifier lookup
+	"class SigmaIdentifierError",        // pySigma rule id validation
+	"class SigmaRegularExpressionError", // pySigma regex validation
+	"class SigmaModifierError",          // raised for an unknown modifier
+	"class SigmaValueError",             // raised by the wide, utf16 and base64 modifiers
 }
 
 func TestSuppressionLiteralsStillExistInVendor(t *testing.T) {

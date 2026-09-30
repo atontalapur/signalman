@@ -5,7 +5,14 @@ Reads newline-delimited JSON on stdin, one object per request:
 Writes {"ready": true} once the imports are done, then one object per
 request:
     {"matched": true, "fields": ["Field", ...], "degenerate": false}
+    {"refusal": "<code>", "error": "..."}
     {"error": "..."}
+
+A refusal carries a code from a closed set, and the Go side suppresses on
+the code alone. Matching on message text would let a rule value that
+happens to contain the text suppress an unrelated failure. An error with no
+refusal code is something the oracle did not expect, and the Go side
+reports it.
 
 pySigma converts rules, it does not evaluate events. So the rule is converted
 to a SQLite query, the event is materialized as a single-row table, and the
@@ -26,6 +33,16 @@ import sys
 import yaml
 from sigma.backends.sqlite import sqliteBackend
 from sigma.collection import SigmaCollection
+from sigma.exceptions import (
+    SigmaIdentifierError,
+    SigmaModifierError,
+    SigmaRegularExpressionError,
+    SigmaValueError,
+)
+
+# Built once. Conversion does not carry state between rules, and the oracle
+# is the slow side of every fuzz case.
+BACKEND = sqliteBackend()
 
 # Modifiers the oracle refuses rather than answers wrongly. Each one has a
 # section in KNOWN_DIVERGENCES.md saying what the backend does instead.
@@ -44,20 +61,27 @@ TABLE = "events"
 class Unanswerable(Exception):
     """The oracle cannot answer this case, and says which shape it is.
 
-    Distinct from a rule the oracle rejects: the Go side counts these as
-    unevaluated rather than as a difference in what loads.
+    code is one of the refusal codes the Go side knows. Distinct from a rule
+    the oracle rejects for a reason nobody has documented: those carry no
+    code and fail the fuzz case.
     """
 
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
-def non_ascii(node) -> bool:
-    """Report whether any string in the parsed rule is not pure ASCII."""
+
+def strings(node):
+    """Yield every string in a parsed YAML node, keys included."""
     if isinstance(node, str):
-        return not node.isascii()
-    if isinstance(node, dict):
-        return any(non_ascii(k) or non_ascii(v) for k, v in node.items())
-    if isinstance(node, list):
-        return any(non_ascii(v) for v in node)
-    return False
+        yield node
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            yield from strings(k)
+            yield from strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from strings(v)
 
 
 def ident(name: str) -> str:
@@ -80,27 +104,25 @@ def contains_nul(node) -> bool:
     the rule as the escape sequence \\0 inside a quoted scalar, so the text
     itself is NUL-free and only the value is not.
     """
-    if isinstance(node, str):
-        return "\x00" in node
-    if isinstance(node, dict):
-        return any(contains_nul(k) or contains_nul(v) for k, v in node.items())
-    if isinstance(node, list):
-        return any(contains_nul(v) for v in node)
-    return False
+    return any("\x00" in v for v in strings(node))
 
 
-def detection_keys(rule_yaml: str):
-    """Return (fields, modifiers, value_only) for the detection block.
+def detection_keys(doc):
+    """Return (fields, modifiers, value_only, keyed) for the detection block.
 
     value_only is true when any search identifier is a bare value or a list
     of bare values rather than a field mapping. Sigma calls that a keyword
     search; the sqlite backend has no form for it and fails in more than one
     way, so the oracle declines it before conversion rather than after.
 
+    keyed is a list of (field, modifiers, values), one per field key, so a
+    check about one modifier can look at that modifier's values and nothing
+    else. A check that looks at the whole rule declines cases because of a
+    value it has nothing to do with.
+
     Taken from the source rather than from pySigma's object model: the point
     of the oracle is to share as little as possible with either engine.
     """
-    doc = yaml.safe_load(rule_yaml)
     if not isinstance(doc, dict):
         raise TypeError("rule is not a mapping")
     det = doc.get("detection")
@@ -108,6 +130,7 @@ def detection_keys(rule_yaml: str):
         raise TypeError("rule has no detection block")
 
     fields, mods = set(), set()
+    keyed = []
     value_only = False
 
     def field_map(node):
@@ -119,8 +142,10 @@ def detection_keys(rule_yaml: str):
                 # let the conversion be the one to say so.
                 continue
             parts = k.split("|")
+            key_mods = {p.lower() for p in parts[1:]}
             fields.add(parts[0])
-            mods.update(p.lower() for p in parts[1:])
+            mods.update(key_mods)
+            keyed.append((parts[0], key_mods, list(strings(node[k]))))
 
     def block(node):
         nonlocal value_only
@@ -140,11 +165,11 @@ def detection_keys(rule_yaml: str):
             continue
         block(b)
     fields.discard("")
-    return sorted(fields), mods, value_only
+    return sorted(fields), mods, value_only, keyed
 
 
 def query(rule_yaml: str) -> str:
-    queries = sqliteBackend().convert(SigmaCollection.from_yaml(rule_yaml))
+    queries = BACKEND.convert(SigmaCollection.from_yaml(rule_yaml))
     if len(queries) != 1:
         raise ValueError(f"expected 1 query, got {len(queries)}")
     return queries[0].replace("<TABLE_NAME>", TABLE)
@@ -157,7 +182,36 @@ def query(rule_yaml: str) -> str:
 # rejects a chain whose variants are all empty; see docs/modifiers.md. The
 # oracle reports the shape so the Go side can recognize it instead of
 # reporting a divergence that is a documented decision.
+#
+# Checked only under base64offset, the one modifier that produces it, and
+# only outside string literals: the SQL quotes a ' in a value as '', so a
+# value like a=' would otherwise read as an empty comparison.
 DEGENERATE = ("LIKE '%' ESCAPE", "=''")
+
+# A SQL string literal, with '' as an escaped quote inside it.
+LITERAL = re.compile(r"'(?:[^']|'')*'")
+
+
+def strip_literals(sql: str) -> str:
+    """Blank the contents of every string literal in the query.
+
+    Every structural check on the query runs on this, because the literals
+    are the rule's values and the fuzzer puts arbitrary text there. The two
+    literals the degenerate check looks for are kept as they are.
+    """
+
+    def blank(m):
+        lit = m.group(0)
+        return lit if lit in ("'%'", "''") else "'_'"
+
+    return LITERAL.sub(blank, sql)
+
+
+def is_degenerate(sql: str, mods) -> bool:
+    if "base64offset" not in mods:
+        return False
+    bare = strip_literals(sql)
+    return any(d in bare for d in DEGENERATE)
 
 # The sqlite backend emits a negated multi-variant selection as
 # "NOT a LIKE x OR a LIKE y", with no parentheses. NOT binds tighter than OR
@@ -165,6 +219,28 @@ DEGENERATE = ("LIKE '%' ESCAPE", "=''")
 # It is a backend defect, not a Sigma question, and the oracle cannot answer
 # a query it has mis-generated: it says so instead.
 UNPARENTHESIZED_NOT = re.compile(r"NOT\s+(?!\()")
+
+
+def check_query(sql: str) -> None:
+    """Refuse a query where a bare NOT is followed by an OR in its own group.
+
+    "NOT a OR b" is the defect. "(a OR b) AND (NOT c)" is not: that OR is
+    in another group. Literals are blanked first so a value cannot supply
+    either keyword.
+    """
+    bare = strip_literals(sql)
+    for m in UNPARENTHESIZED_NOT.finditer(bare):
+        depth = 0
+        for i in range(m.end(), len(bare)):
+            ch = bare[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0 and bare.startswith(" OR ", i):
+                raise Unanswerable("unparenthesized-not", "NOT outside parentheses")
 
 # The character class shorthands do not name the same sets in the two
 # engines. Python's \s includes \x1c to \x1f and its \w and \d are Unicode;
@@ -181,11 +257,10 @@ REGEX_SHORTHAND = re.compile(r"\\[sSwWdDbB]")
 REGEX_BRACE = re.compile(r"[{}]")
 
 
-def evaluate(rule_yaml: str, event: dict, fields):
+def evaluate(rule_yaml: str, event: dict, fields, mods):
     sql = query(rule_yaml)
-    degenerate = any(d in sql for d in DEGENERATE)
-    if " OR " in sql and UNPARENTHESIZED_NOT.search(sql):
-        raise Unanswerable("unsupported-query: NOT outside parentheses")
+    degenerate = is_degenerate(sql, mods)
+    check_query(sql)
 
     # Columns the rule reads but the event does not carry exist and are NULL,
     # so a reference to an absent field is a comparison against NULL instead
@@ -229,36 +304,88 @@ def _regexp(pattern, value):
 def handle(req: dict) -> dict:
     rule_yaml = req["rule"]
     event = req["event"] or {}
+    doc = yaml.safe_load(rule_yaml)
     # SQLite refuses a query carrying a NUL, and the query is where the rule
     # values end up. Signalman compares bytes and has no such limit, so the
     # oracle says up front that it cannot answer rather than raising from
     # inside the driver.
-    if contains_nul(yaml.safe_load(rule_yaml)) or contains_nul(event):
-        return {"error": "unsupported-value: NUL"}
+    if contains_nul(doc) or contains_nul(event):
+        raise Unanswerable("nul", "NUL in a rule or event value")
 
-    fields, mods, value_only = detection_keys(rule_yaml)
-    if "base64offset" in mods and non_ascii(yaml.safe_load(rule_yaml)):
-        # pySigma indexes its offset trim table by the plaintext's character
-        # count; base64 works on bytes, and Signalman indexes by byte count.
-        # The two agree on ASCII and disagree on everything else.
-        return {"error": "unsupported-value: non-ASCII under base64offset"}
+    fields, mods, value_only, keyed = detection_keys(doc)
+    for _, key_mods, values in keyed:
+        if "base64offset" in key_mods and any(not v.isascii() for v in values):
+            # pySigma indexes its offset trim table by the plaintext's
+            # character count; base64 works on bytes, and Signalman indexes
+            # by byte count. The two agree on ASCII and nowhere else.
+            raise Unanswerable("base64offset-non-ascii", "non-ASCII under base64offset")
     bad = sorted(mods & UNSUPPORTED)
     if bad:
-        return {"error": f"unsupported-modifier: {bad[0]}"}
+        raise Unanswerable("unsupported-modifier", f"modifier {bad[0]}")
     if value_only:
-        return {"error": "unsupported-feature: value-only expression"}
-    if "re" in mods and REGEX_SHORTHAND.search(rule_yaml):
-        return {"error": "unsupported-value: regex class shorthand"}
-    if "re" in mods and REGEX_BRACE.search(rule_yaml):
-        return {"error": "unsupported-value: regex repetition brace"}
-    if "re" in mods and any("\n" in v for v in event.values() if v):
-        # Python's $ also matches just before a trailing newline and RE2's
-        # does not, so "$^" matches "\n" here and not in Go. The anchors and
-        # the newline class are where the two engines genuinely differ, and
-        # the oracle cannot arbitrate its own dialect.
-        return {"error": "unsupported-value: newline under a regex"}
-    matched, degenerate = evaluate(rule_yaml, event, fields)
+        raise Unanswerable("value-only", "value-only expression")
+    for field, key_mods, values in keyed:
+        if "re" not in key_mods:
+            continue
+        if any(REGEX_SHORTHAND.search(v) for v in values):
+            raise Unanswerable("regex-shorthand", "regex class shorthand")
+        if any(REGEX_BRACE.search(v) for v in values):
+            raise Unanswerable("regex-brace", "regex repetition brace")
+        if "\n" in (event.get(field) or ""):
+            # Python's $ also matches just before a trailing newline and
+            # RE2's does not, so "$^" matches "\n" here and not in Go. The
+            # anchors and the newline class are where the two engines
+            # genuinely differ, and the oracle cannot arbitrate its own
+            # dialect.
+            raise Unanswerable("regex-newline", "newline under a regex")
+    try:
+        matched, degenerate = evaluate(rule_yaml, event, fields, mods)
+    except Exception as exc:
+        code = refusal_code(exc)
+        if code is None:
+            raise
+        raise Unanswerable(code, f"{type(exc).__name__}: {exc}") from exc
     return {"matched": matched, "fields": fields, "degenerate": degenerate}
+
+
+# pySigma and SQLite refusals that KNOWN_DIVERGENCES.md documents, keyed on
+# the exception class and the fixed start of its message. The message start
+# is vendor text that comes before any interpolated rule value, so a value
+# cannot forge it. test_suppression_literals_still_exist_in_vendor in the Go
+# tests fails if a pySigma upgrade rewords one.
+WIDE = re.compile(r"^(Wide|UTF-16\w*) modifier only allowed for (ascii|valid Unicode) strings")
+
+
+def refusal_code(exc: Exception):
+    msg = str(exc.args[0]) if exc.args else ""
+    if isinstance(exc, SigmaIdentifierError):
+        return "id-not-uuid"
+    if isinstance(exc, SigmaRegularExpressionError):
+        return "regex-python-rejects"
+    if isinstance(exc, SigmaModifierError) and msg.startswith("Unknown modifier"):
+        return "unknown-modifier"
+    if isinstance(exc, SigmaValueError) and WIDE.match(msg):
+        return "wide-non-ascii"
+    if isinstance(exc, SigmaValueError) and msg.startswith(
+        "Base64 encoding of strings with wildcards is not allowed"
+    ):
+        return "wildcard-in-encoding"
+    if isinstance(exc, sqlite3.OperationalError) and msg.startswith(
+        "Expression tree is too large"
+    ):
+        return "sqlite-depth"
+    return None
+
+
+def respond(req: dict) -> dict:
+    """Answer one request. Never raises: the oracle answers every request,
+    and the Go side decides whether an error is a documented divergence."""
+    try:
+        return handle(req)
+    except Unanswerable as exc:
+        return {"refusal": exc.code, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 def main() -> None:
@@ -273,14 +400,7 @@ def main() -> None:
         line = line.strip()
         if not line:
             continue
-        try:
-            out = handle(json.loads(line))
-        except Unanswerable as exc:
-            out = {"error": str(exc)}
-        # Blind on purpose: the oracle answers every request, and the Go
-        # side decides whether a refusal is a documented divergence.
-        except Exception as exc:  # noqa: BLE001
-            out = {"error": f"{type(exc).__name__}: {exc}"}
+        out = respond(json.loads(line))
         sys.stdout.write(json.dumps(out) + "\n")
         sys.stdout.flush()
 
