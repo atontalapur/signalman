@@ -22,7 +22,11 @@ tidy-check:
 build:
 	go build $(GO_PKGS)
 
+## The differential fuzzer skips every case without its oracle, and a fully
+## skipped package prints "ok" like any other. Say so, or a green check reads
+## as proof of something it never ran.
 test:
+	@[ -x test/fuzz/.venv/bin/python ] || echo "note: test/fuzz oracle venv absent, the pySigma differential tests will SKIP (see README)"
 	go test -race -count=1 $(GO_PKGS)
 
 lint:
@@ -61,9 +65,12 @@ check-python:
 ## laptop long before the time budget runs out.
 FUZZSTATS := $(CURDIR)/.fuzzstats
 FUZZWORKERS ?= 4
+## A run that compares nothing passes every other check. Nightly holds a
+## floor; interactive runs default to 0 so a 30s smoke run is not a failure.
+FUZZMINCOMPARED ?= 0
 fuzz-differential:
 	@rm -rf $(FUZZSTATS) && mkdir -p $(FUZZSTATS)
 	SIGNALMAN_FUZZ_STATS=$(FUZZSTATS) go test ./test/fuzz/ \
 	  -run '^$$' -fuzz '^FuzzAgainstPySigma$$' -parallel $(FUZZWORKERS) \
 	  -fuzztime $(FUZZTIME)
-	@python3 scripts/fuzz_stats.py $(FUZZSTATS)
+	@python3 scripts/fuzz_stats.py $(FUZZSTATS) --min-compared $(FUZZMINCOMPARED)

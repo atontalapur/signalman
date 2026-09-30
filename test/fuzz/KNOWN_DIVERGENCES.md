@@ -51,6 +51,13 @@ Signalman requires an `id`; pySigma does not. Verdicts are keyed on the rule
 id, so a rule without one cannot be reported on or compared across engines.
 Recorded in `docs/corpus-acceptance.md` as `missing-id`.
 
+### A rule whose id is not a UUID
+
+The mirror of the case above, and a separate suppression
+(`SigmaIdentifierError`). pySigma requires the id to parse as a UUID and
+rejects `id: not-a-uuid`; Signalman requires only that an id exist, because
+what it needs from the id is a stable key for verdicts, not a format.
+
 ### Aggregation and correlation
 
 A `|` in the condition is rejected at load with the rule id, the line number,
@@ -131,8 +138,8 @@ ones pySigma uses. That is true of the table and not of the indexing.
 
 ### A modifier pySigma does not carry
 
-`utf16le` is a Sigma modifier name pySigma does not know; it spells the same
-transform `wide`. The fuzzer generates the name both engines share, and the
+Suppressed on `Unknown modifier`. `utf16le` is a Sigma modifier name pySigma
+does not know; it spells the same transform `wide`. The fuzzer generates the name both engines share, and the
 suppression covers any other name that turns out to be missing.
 
 ### `wide` and `utf16` on anything but ASCII

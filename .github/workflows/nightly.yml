@@ -38,7 +38,7 @@ jobs:
       # Run again through the differential target, which reports how many
       # cases reached both engines. Executions are not comparisons.
       - if: steps.probe.outputs.has_go == 'true'
-        run: make fuzz-differential FUZZTIME=10m
+        run: make fuzz-differential FUZZTIME=10m FUZZMINCOMPARED=100000
       - if: always()
         uses: actions/upload-artifact@v7
         with:

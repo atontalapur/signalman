@@ -161,7 +161,10 @@ detection:
 		t.Fatal(err)
 	}
 	if got == want {
-		t.Skip("oracle no longer diverges on an absent field under negation")
+		t.Fatalf("the oracle no longer diverges on an absent field under negation "+
+			"(both say %v). SQL three-valued logic is documented in "+
+			"KNOWN_DIVERGENCES.md as the reason the fuzzer suppresses this case; "+
+			"if the gap is gone, that suppression should go too.", got)
 	}
 	if !missingField(res.Fields, ev) {
 		t.Fatal("expected the absent-field suppression to cover this case")
@@ -182,11 +185,18 @@ func TestKnownAcceptanceDivergences(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = o.Close() })
 
+	// signalmanRejects records which side is expected to refuse the rule. A
+	// divergence disappearing is not automatically good news: if Signalman
+	// stops rejecting a rule with no id, that is the verdict-keying invariant
+	// breaking, and a test that skipped there would hide exactly the
+	// regression it exists to catch. The oracle's side may legitimately move
+	// under a version bump, so that direction skips instead.
 	cases := []struct {
-		name string
-		rule string
+		name             string
+		signalmanRejects bool
+		rule             string
 	}{
-		{"no id", `title: t
+		{"no id", true, `title: t
 logsource:
   product: windows
   category: process_creation
@@ -195,7 +205,7 @@ detection:
     Image: x
   condition: selection
 `},
-		{"non-uuid id", `title: t
+		{"non-uuid id", false, `title: t
 id: not-a-uuid
 logsource:
   product: windows
@@ -205,7 +215,7 @@ detection:
     Image: x
   condition: selection
 `},
-		{"unmapped logsource", `title: t
+		{"unmapped logsource", true, `title: t
 id: 00000000-0000-4000-8000-00000000000b
 logsource:
   product: linux
@@ -215,7 +225,7 @@ detection:
     Image: x
   condition: selection
 `},
-		{"keywords", `title: t
+		{"keywords", false, `title: t
 id: 00000000-0000-4000-8000-00000000000c
 logsource:
   product: windows
@@ -225,7 +235,7 @@ detection:
     - whoami
   condition: keywords
 `},
-		{"scalar search identifier", `title: t
+		{"scalar search identifier", false, `title: t
 id: 00000000-0000-4000-8000-00000000000d
 logsource:
   product: windows
@@ -234,7 +244,7 @@ detection:
   selection: whoami
   condition: selection
 `},
-		{"cidr", `title: t
+		{"cidr", false, `title: t
 id: 00000000-0000-4000-8000-00000000000e
 logsource:
   product: windows
@@ -244,7 +254,7 @@ detection:
     DestinationIp|cidr: 10.0.0.0/8
   condition: selection
 `},
-		{"numeric comparison", `title: t
+		{"numeric comparison", false, `title: t
 id: 00000000-0000-4000-8000-00000000000f
 logsource:
   product: windows
@@ -260,8 +270,17 @@ detection:
 		t.Run(c.name, func(t *testing.T) {
 			_, errG := EvalOnce([]byte(c.rule), taxonomyDir, map[string]string{"Image": "x"})
 			_, _, errP := o.Eval(c.rule, map[string]string{"Image": "x"})
+
+			// Signalman's side is an invariant this project owns, so a change
+			// there fails rather than skips.
+			if (errG != nil) != c.signalmanRejects {
+				t.Fatalf("Signalman's side of this divergence moved: rejects=%v, want %v (err %v).\n"+
+					"That is a change to what this engine loads, not to the oracle.",
+					errG != nil, c.signalmanRejects, errG)
+			}
 			if (errG == nil) == (errP == nil) {
-				t.Skipf("no longer a divergence: signalman=%v oracle=%v", errG, errP)
+				t.Skipf("the oracle's side changed, this is no longer a divergence: "+
+					"signalman=%v oracle=%v. Update KNOWN_DIVERGENCES.md.", errG, errP)
 			}
 			if !known(errG, errP) {
 				t.Fatalf("undocumented acceptance divergence: signalman=%v oracle=%v", errG, errP)
@@ -299,6 +318,7 @@ func FuzzAgainstPySigma(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, fieldSel, modSel, condSel uint8, ruleVal, ruleVal2, eventVal string) {
 		if ruleVal == "" || ruleVal2 == "" {
+			recordOutcome(&statSkipped)
 			t.Skip() // an empty rule value is a load error on both sides
 		}
 		if !utf8.ValidString(ruleVal) || !utf8.ValidString(ruleVal2) || !utf8.ValidString(eventVal) {
@@ -315,7 +335,8 @@ func FuzzAgainstPySigma(f *testing.F) {
 
 		ruleYAML, ev, err := buildRule(fieldSel, modSel, condSel, ruleVal, ruleVal2, eventVal)
 		if err != nil {
-			t.Skip()
+			recordOutcome(&statSkipped)
+			t.Skip() // a value yaml.Marshal will not render is not a case
 		}
 		if !bridgeable(ruleYAML, ev) {
 			recordOutcome(&statSkipped)
