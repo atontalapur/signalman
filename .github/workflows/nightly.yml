@@ -38,11 +38,12 @@ jobs:
       # The differential target runs only here, where its counters are
       # summed. Executions are not comparisons: the floor fails a run that
       # compared too little, and the caps fail one where a suppression
-      # started matching more than its usual share (about 0.23).
+      # started matching more than its usual share (about 0.30 since the
+      # generator produces null values; see KNOWN_DIVERGENCES.md).
       - if: steps.probe.outputs.has_go == 'true'
         run: >-
           make fuzz-differential FUZZTIME=10m FUZZMINCOMPARED=100000
-          FUZZMAXSUPPRESSED=0.35 FUZZMAXTIMEOUT=0.01
+          FUZZMAXSUPPRESSED=0.40 FUZZMAXTIMEOUT=0.01
       - if: always()
         uses: actions/upload-artifact@v7
         with:

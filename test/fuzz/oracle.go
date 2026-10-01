@@ -106,8 +106,8 @@ type oracleProc struct {
 }
 
 type oracleReq struct {
-	Rule  string            `json:"rule"`
-	Event map[string]string `json:"event"`
+	Rule  string `json:"rule"`
+	Event Fields `json:"event"`
 }
 
 // Result is what the oracle reports besides the verdict. Fields is every
@@ -236,7 +236,7 @@ func (p *oracleProc) kill() {
 // An error from the oracle is a rejection of the rule, not a broken bridge:
 // a dead or hung subprocess is reported as its own error so it cannot be
 // mistaken for a rule the oracle declined.
-func (o *Oracle) Eval(ruleYAML string, ev map[string]string) (bool, Result, error) {
+func (o *Oracle) Eval(ruleYAML string, ev Fields) (bool, Result, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 

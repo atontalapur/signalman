@@ -9,25 +9,25 @@ import (
 )
 
 func TestBridgeable(t *testing.T) {
-	valid := map[string]string{"Image": `C:\Windows\rundll32.exe`}
+	valid := Fields{"Image": `C:\Windows\rundll32.exe`}
 	if !bridgeable(seedRule, valid) {
 		t.Fatal("a valid-UTF8 rule and event must be bridgeable")
 	}
 	if bridgeable(string([]byte{0xff, 0xfe}), valid) {
 		t.Fatal("invalid UTF-8 in the rule YAML must not be bridgeable: JSON cannot carry it losslessly")
 	}
-	invalidKey := map[string]string{string([]byte{0xff}): "x"}
+	invalidKey := Fields{string([]byte{0xff}): "x"}
 	if bridgeable(seedRule, invalidKey) {
 		t.Fatal("invalid UTF-8 in an event field name must not be bridgeable")
 	}
-	invalidValue := map[string]string{"Image": string([]byte{0xff})}
+	invalidValue := Fields{"Image": string([]byte{0xff})}
 	if bridgeable(seedRule, invalidValue) {
 		t.Fatal("invalid UTF-8 in an event field value must not be bridgeable")
 	}
 }
 
 func TestMissingField(t *testing.T) {
-	ev := map[string]string{"Image": "a.exe", "User": "alice"}
+	ev := Fields{"Image": "a.exe", "User": "alice"}
 	if missingField([]string{"Image", "User"}, ev) {
 		t.Fatal("missingField must be false when every read field is present")
 	}
@@ -40,7 +40,7 @@ func TestMissingField(t *testing.T) {
 }
 
 func TestEvalOnceRejectsUnresolvableTaxonomyDir(t *testing.T) {
-	if _, err := EvalOnce([]byte(seedRule), "does/not/exist", map[string]string{"Image": "a.exe"}); err == nil {
+	if _, err := EvalOnce([]byte(seedRule), "does/not/exist", Fields{"Image": "a.exe"}); err == nil {
 		t.Fatal("EvalOnce with a taxonomy directory that cannot load must return an error, not a false verdict")
 	}
 }
@@ -55,7 +55,7 @@ detection:
     Image: x
   condition: selection
 `
-	_, err := EvalOnce([]byte(rule), taxonomyDir, map[string]string{"Image": "x"})
+	_, err := EvalOnce([]byte(rule), taxonomyDir, Fields{"Image": "x"})
 	if err == nil {
 		t.Fatal("EvalOnce must reject a rule with no id")
 	}
@@ -72,7 +72,7 @@ func TestBuildEvent(t *testing.T) {
 		Fields: map[string]string{"Image": "NewProcessName"},
 		Match:  map[string]event.Value{"channel": event.String("Microsoft-Windows-Sysmon/Operational")},
 	}
-	raw := map[string]string{
+	raw := Fields{
 		"Image":       `C:\Windows\cmd.exe`,
 		"CommandLine": `cmd.exe /c whoami`,
 		"channel":     "attacker-controlled-value",
@@ -138,5 +138,76 @@ func TestMissingOracleIsFatalInCI(t *testing.T) {
 		if got := oracleStatus(c.available, c.ci); got != c.want {
 			t.Errorf("oracleStatus(%v, %q) = %v, want %v", c.available, c.ci, got, c.want)
 		}
+	}
+}
+
+func TestBuildEventKeepsValueTypes(t *testing.T) {
+	entry := &sigma.TaxonomyEntry{Fields: map[string]string{}, Match: map[string]event.Value{}}
+	ev := buildEvent(entry, Fields{"s": "x", "i": int64(443), "n": nil})
+	if v := ev.Fields["s"]; v.Kind != event.KindString || v.S != "x" {
+		t.Fatalf("string field = %+v", v)
+	}
+	if v := ev.Fields["i"]; v.Kind != event.KindInt || v.I != 443 {
+		t.Fatalf("int field = %+v", v)
+	}
+	if v, ok := ev.Fields["n"]; !ok || v.Kind != event.KindNull {
+		t.Fatalf("null field = %+v, present=%v; want a present null", v, ok)
+	}
+}
+
+// A null field read under a negation lands in the same SQL three-valued
+// logic gap as an absent one, and only then.
+func TestNullUnderNegation(t *testing.T) {
+	ev := Fields{"Image": nil, "User": "alice"}
+	if !nullUnderNegation([]string{"Image"}, ev, "not selection") {
+		t.Fatal("a negated rule reading a null field is the documented gap")
+	}
+	if nullUnderNegation([]string{"Image"}, ev, "selection") {
+		t.Fatal("without a negation there is no gap to suppress")
+	}
+	if nullUnderNegation([]string{"User"}, ev, "not selection") {
+		t.Fatal("a rule that reads no null field is not in the gap")
+	}
+}
+
+// Typed values reach both engines and the two agree on the plain cases.
+func TestOracleAgreesOnTypedValues(t *testing.T) {
+	requireOracle(t)
+	o, err := StartOracle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = o.Close() })
+
+	cases := []struct {
+		name  string
+		key   string
+		value string
+		image any
+		want  bool
+	}{
+		{"int equals its digits", "Image", `"443"`, int64(443), true},
+		{"int differs", "Image", `"443"`, int64(80), false},
+		{"int is compared by its digits", "Image", `"0443"`, int64(443), false},
+		{"int contains", "Image|contains", `"44"`, int64(443), true},
+		{"null never matches", "Image", `"x"`, nil, false},
+		{"null never contains", "Image|contains", `"x"`, nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rule := strings.Replace(seedRule, `Image|endswith: '\rundll32.exe'`, c.key+": "+c.value, 1)
+			ev := Fields{"Image": c.image}
+			got, err := EvalOnce([]byte(rule), taxonomyDir, ev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, _, err := o.Eval(rule, ev)
+			if err != nil {
+				t.Fatalf("oracle: %v", err)
+			}
+			if got != want || got != c.want {
+				t.Fatalf("signalman=%v oracle=%v, want %v", got, want, c.want)
+			}
+		})
 	}
 }

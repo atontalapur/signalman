@@ -120,6 +120,11 @@ class RegexChecks(unittest.TestCase):
         out = pe.respond({"rule": r, "event": {"Image": "abc", "User": "a\nb"}})
         self.assertNotIn("error", out)
 
+    def test_int_in_the_regex_field_is_answered(self):
+        out = ask("Image|re", "'^4'", {"Image": 443})
+        self.assertNotIn("error", out)
+        self.assertTrue(out["matched"])
+
     def test_newline_in_the_regex_field_is_refused(self):
         out = ask("Image|re", "'^a'", {"Image": "a\nb"})
         self.assertEqual(out.get("refusal"), "regex-newline")
@@ -172,6 +177,27 @@ class RefusalCodes(unittest.TestCase):
         out = ask("Image|nosuchmodifier", "'Base64 encoding of strings with wildcards is not allowed'", {"Image": "x"})
         self.assertEqual(out.get("refusal"), "unknown-modifier")
         self.assertIsNone(pe.refusal_code(ValueError("Unknown modifier x")))
+
+
+class TypedColumns(unittest.TestCase):
+    """Every column has TEXT affinity, so an integer event value is stored as
+    its digits and compared the way Sigma compares, as a string. INTEGER
+    affinity would make '0443' equal 443, which is SQLite's coercion, not
+    Sigma's. A null value is SQL NULL."""
+
+    def test_int_equals_its_digits(self):
+        self.assertTrue(ask("Image", '"443"', {"Image": 443})["matched"])
+        self.assertFalse(ask("Image", '"443"', {"Image": 80})["matched"])
+
+    def test_int_is_not_coerced(self):
+        self.assertFalse(ask("Image", '"0443"', {"Image": 443})["matched"])
+
+    def test_int_contains(self):
+        self.assertTrue(ask("Image|contains", '"44"', {"Image": 443})["matched"])
+
+    def test_null_matches_nothing(self):
+        self.assertFalse(ask("Image", '"x"', {"Image": None})["matched"])
+        self.assertFalse(ask("Image|contains", '"x"', {"Image": None})["matched"])
 
 
 class OrphanWatch(unittest.TestCase):

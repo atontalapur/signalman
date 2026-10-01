@@ -33,7 +33,7 @@ expansion, and comparison engine, which is the whole point. It also inherits
 SQL's semantics where they differ from Sigma's, which is what most of this
 file is about.
 
-Two deliberate adjustments to make the comparison meaningful:
+Three deliberate adjustments to make the comparison meaningful:
 
 - **`COLLATE NOCASE` on every column.** Sigma string comparison is case
   insensitive by default. SQLite's `LIKE` already ignores ASCII case but its
@@ -44,6 +44,11 @@ Two deliberate adjustments to make the comparison meaningful:
   question about Signalman's Unicode folding, not noise.
 - **A `regexp` function registered from Python's `re`.** SQLite ships no
   REGEXP implementation, so `|re` would otherwise fail to run at all.
+- **`TEXT` affinity on every column.** The fuzzer sends integer and null
+  event values as well as strings. Sigma compares a rule value against an
+  event value as a string, so an integer is stored as its digits: `"443"`
+  matches 443 and `"0443"` does not. `INTEGER` affinity would make SQLite
+  coerce `"0443"` to 443 and agree with a comparison Sigma does not make.
 
 ## Signalman loads a rule the oracle will not
 
@@ -232,6 +237,16 @@ Not suppressed: excluded by construction. The generator populates every
 field a rule can read, and the fuzz target fails the case if the oracle
 reports a field the event does not carry, since that means the generator
 changed. `TestOracleReportsAbsentFieldGap` pins that the gap still exists.
+
+### A null field under a negation
+
+The same gap with a present field whose value is null. The generator does
+produce nulls, so this one is suppressed: only when the condition contains
+`not` and the oracle reports that the rule reads a field whose value is
+null (`nullUnderNegation`). A null under a plain selection is not
+suppressed, and both engines answer no match there. Every null case under
+`not` lands here, which is why the suppressed share is about 0.30 with
+typed values against about 0.22 without them.
 
 ### An empty encoded variant
 

@@ -80,7 +80,7 @@ func TestEvalOnceMatchesAndMisses(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := EvalOnce([]byte(seedRule), taxonomyDir, map[string]string{"Image": c.image})
+			got, err := EvalOnce([]byte(seedRule), taxonomyDir, Fields{"Image": c.image})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,7 +107,7 @@ detection:
     Image|endswith: '\cmd.exe'
   condition: selection
 `
-	got, err := EvalOnce([]byte(rule), taxonomyDir, map[string]string{"Image": `C:\Windows\cmd.exe`})
+	got, err := EvalOnce([]byte(rule), taxonomyDir, Fields{"Image": `C:\Windows\cmd.exe`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ detection:
 // a false Signalman verdict against an oracle that has no logsource concept
 // at all.
 func TestEvalOnceAdmitsEventToItsLogsource(t *testing.T) {
-	got, err := EvalOnce([]byte(seedRule), taxonomyDir, map[string]string{
+	got, err := EvalOnce([]byte(seedRule), taxonomyDir, Fields{
 		"Image":   `C:\Windows\rundll32.exe`,
 		"channel": "wrong-channel",
 	})
@@ -142,7 +142,7 @@ func TestOracleAgreesOnSeed(t *testing.T) {
 	t.Cleanup(func() { _ = o.Close() })
 
 	for _, image := range []string{`C:\Windows\rundll32.exe`, `C:\Windows\notepad.exe`} {
-		ev := map[string]string{"Image": image}
+		ev := Fields{"Image": image}
 		want, res, err := o.Eval(seedRule, ev)
 		if err != nil {
 			t.Fatalf("oracle: %v", err)
@@ -183,7 +183,7 @@ detection:
     User: 'bob'
   condition: selection and not filter
 `
-	ev := map[string]string{"Image": "a.exe"}
+	ev := Fields{"Image": "a.exe"}
 	want, res, err := o.Eval(rule, ev)
 	if err != nil {
 		t.Fatal(err)
@@ -298,8 +298,8 @@ detection:
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, errG := EvalOnce([]byte(c.rule), taxonomyDir, map[string]string{"Image": "x"})
-			_, _, errP := o.Eval(c.rule, map[string]string{"Image": "x"})
+			_, errG := EvalOnce([]byte(c.rule), taxonomyDir, Fields{"Image": "x"})
+			_, _, errP := o.Eval(c.rule, Fields{"Image": "x"})
 
 			// Signalman's side is an invariant this project owns, so a change
 			// there fails rather than skips.
@@ -344,6 +344,11 @@ func FuzzAgainstPySigma(f *testing.F) {
 	f.Add(uint8(1), uint8(7), uint8(0), `-enc`, `x`, `proc /enc y`)
 	f.Add(uint8(1), uint8(4), uint8(1), `^rundll`, `x`, `rundll32`)
 	f.Add(uint8(3), uint8(10), uint8(5), `alice`, `CORP`, `CORP\alice`)
+	// Typed event values: fieldSel past the field count picks an int, past
+	// twice the count a null. See eventKinds in generate.go.
+	f.Add(uint8(len(fuzzFields)), uint8(0), uint8(0), `443`, `x`, `443`)
+	f.Add(uint8(len(fuzzFields)), uint8(1), uint8(1), `44`, `x`, `4431`)
+	f.Add(uint8(2*len(fuzzFields)), uint8(0), uint8(1), `x`, `y`, `ignored`)
 
 	f.Fuzz(func(t *testing.T, fieldSel, modSel, condSel uint8, ruleVal, ruleVal2, eventVal string) {
 		if ruleVal == "" || ruleVal2 == "" {
@@ -406,6 +411,10 @@ func FuzzAgainstPySigma(f *testing.F) {
 				res.Fields, ev, ruleYAML)
 		}
 		if got != want {
+			if nullUnderNegation(res.Fields, ev, condShapes[int(condSel)%len(condShapes)]) {
+				recordOutcome(&statSuppressed)
+				t.Skip() // KNOWN_DIVERGENCES.md: SQL three-valued logic
+			}
 			if res.Degenerate {
 				recordOutcome(&statSuppressed)
 				t.Skip() // KNOWN_DIVERGENCES.md: empty encoded variants

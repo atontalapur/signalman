@@ -277,7 +277,12 @@ def evaluate(rule_yaml: str, event: dict, fields, mods):
         # contains and case sensitive through a plain equals. NOCASE folds
         # ASCII only; a non-ASCII case difference stays a divergence and is
         # recorded in KNOWN_DIVERGENCES.md.
-        quoted = ", ".join(f"{ident(c)} COLLATE NOCASE" for c in cols)
+        #
+        # TEXT affinity because Sigma compares values as strings. An integer
+        # event value is stored as its digits, so "443" matches 443 and
+        # "0443" does not; with INTEGER affinity SQLite would coerce "0443"
+        # to 443 and answer a question Sigma does not ask.
+        quoted = ", ".join(f"{ident(c)} TEXT COLLATE NOCASE" for c in cols)
         conn.execute(f"CREATE TABLE {TABLE} ({quoted})")
         insert_cols = ", ".join(ident(c) for c in cols)
         placeholders = ", ".join("?" for _ in cols)
@@ -332,7 +337,8 @@ def handle(req: dict) -> dict:
             raise Unanswerable("regex-shorthand", "regex class shorthand")
         if any(REGEX_BRACE.search(v) for v in values):
             raise Unanswerable("regex-brace", "regex repetition brace")
-        if "\n" in (event.get(field) or ""):
+        v = event.get(field)
+        if isinstance(v, str) and "\n" in v:
             # Python's $ also matches just before a trailing newline and
             # RE2's does not, so "$^" matches "\n" here and not in Go. The
             # anchors and the newline class are where the two engines

@@ -69,7 +69,7 @@ func TestKnownSignalmanLoadDivergences(t *testing.T) {
 // only through a hand-built LoadError.
 func TestKnownRecognizesRealRegexRejection(t *testing.T) {
 	rule := strings.Replace(seedRule, `Image|endswith: '\rundll32.exe'`, `Image|re: '(?<!a)b'`, 1)
-	_, errG := EvalOnce([]byte(rule), taxonomyDir, map[string]string{"Image": "b"})
+	_, errG := EvalOnce([]byte(rule), taxonomyDir, Fields{"Image": "b"})
 	if errG == nil {
 		t.Fatal("expected RE2 to reject a lookbehind")
 	}
@@ -224,12 +224,12 @@ func TestOracleEvalRestartsAfterProcessDeath(t *testing.T) {
 	}
 	_, _ = o.proc.cmd.Process.Wait() // reap so the pipe closes promptly
 
-	if _, _, err := o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`}); !errors.Is(err, ErrOracleBroken) {
+	if _, _, err := o.Eval(seedRule, Fields{"Image": `C:\Windows\rundll32.exe`}); !errors.Is(err, ErrOracleBroken) {
 		t.Fatalf("Eval after killing the subprocess = %v, want ErrOracleBroken", err)
 	}
 
 	// The restart should have left a working subprocess in place.
-	want, res, err := o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`})
+	want, res, err := o.Eval(seedRule, Fields{"Image": `C:\Windows\rundll32.exe`})
 	if err != nil {
 		t.Fatalf("Eval after restart: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestOracleEvalRestartsOnMalformedResponse(t *testing.T) {
 	o.proc = fake
 	real.kill()
 
-	_, _, err = o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`})
+	_, _, err = o.Eval(seedRule, Fields{"Image": `C:\Windows\rundll32.exe`})
 	if !errors.Is(err, ErrOracleBroken) {
 		t.Fatalf("Eval on a malformed line = %v, want ErrOracleBroken", err)
 	}
@@ -272,7 +272,7 @@ func TestOracleEvalRestartsOnMalformedResponse(t *testing.T) {
 		t.Fatal("a malformed line must not read as an oracle refusal")
 	}
 
-	want, _, err := o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`})
+	want, _, err := o.Eval(seedRule, Fields{"Image": `C:\Windows\rundll32.exe`})
 	if err != nil || !want {
 		t.Fatalf("Eval after restart = %v, %v, want a normal match", want, err)
 	}
@@ -313,7 +313,7 @@ detection:
     Image|re: '(a+)+$'
   condition: selection
 `
-	ev := map[string]string{"Image": strings.Repeat("a", 40) + "!"}
+	ev := Fields{"Image": strings.Repeat("a", 40) + "!"}
 
 	start := time.Now()
 	_, _, err = o.Eval(rule, ev)
@@ -332,7 +332,7 @@ detection:
 	// The subprocess must have been replaced: a normal request afterward
 	// should get a normal answer, not the backtracking case's eventual (and
 	// by now irrelevant) response.
-	want, res, err := o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`})
+	want, res, err := o.Eval(seedRule, Fields{"Image": `C:\Windows\rundll32.exe`})
 	if err != nil {
 		t.Fatalf("Eval after a timeout restart: %v", err)
 	}

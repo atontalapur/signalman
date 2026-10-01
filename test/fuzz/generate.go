@@ -2,6 +2,7 @@ package fuzz
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -63,8 +64,9 @@ const fuzzRuleID = "00000000-0000-4000-8000-00000000000a"
 // buildRule renders a rule from the mutator's choices. It returns the YAML
 // and the event, both keyed by the field names the rule writes, which is
 // what the oracle understands. EvalOnce renames them for Signalman.
-func buildRule(fieldSel, modSel, condSel uint8, ruleVal, ruleVal2, eventVal string) (string, map[string]string, error) {
+func buildRule(fieldSel, modSel, condSel uint8, ruleVal, ruleVal2, eventVal string) (string, Fields, error) {
 	field := fuzzFields[int(fieldSel)%len(fuzzFields)]
+	kind := eventKinds[int(fieldSel)/len(fuzzFields)%len(eventKinds)]
 	mods := modChains[int(modSel)%len(modChains)]
 	cond := condShapes[int(condSel)%len(condShapes)]
 
@@ -111,16 +113,38 @@ func buildRule(fieldSel, modSel, condSel uint8, ruleVal, ruleVal2, eventVal stri
 	}
 
 	// The event carries every mapped field. The chosen one gets the
-	// mutator's value; the rest get fixed values so the rule shape, not the
-	// field set, is what varies.
-	ev := map[string]string{
+	// mutator's value in the chosen kind; the rest get fixed strings so the
+	// rule shape, not the field set, is what varies.
+	ev := Fields{
 		"Image":       `C:\Windows\System32\rundll32.exe`,
 		"CommandLine": `rundll32.exe -sta foo.dll,Entry`,
 		"ParentImage": `C:\Windows\explorer.exe`,
 		"User":        `CORP\alice`,
-		field:         eventVal,
+		field:         eventValue(kind, eventVal),
 	}
 	return string(b), ev, nil
+}
+
+// eventKinds are the value types the chosen field can carry. Rule values
+// stay strings: what varies is how a string rule compares against a typed
+// event value, which is where an engine's coercion rules show.
+var eventKinds = []string{"string", "int", "null"}
+
+// eventValue renders the mutator's value in a kind. An int that does not
+// parse stays a string rather than becoming a made-up number, so the int
+// kind is only exercised by digit strings the mutator actually produced.
+func eventValue(kind, s string) any {
+	switch kind {
+	case "int":
+		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return i
+		}
+		return s
+	case "null":
+		return nil
+	default:
+		return s
+	}
 }
 
 // quoted renders a value as a double-quoted YAML scalar. Left to itself,

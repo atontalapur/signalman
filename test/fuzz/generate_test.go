@@ -110,3 +110,43 @@ func TestBuildRuleKeyIncludesModifierChain(t *testing.T) {
 		t.Fatalf("a non-empty modifier chain must be appended to the field key, got:\n%s", withMod)
 	}
 }
+
+// The high bits of fieldSel pick the chosen field's event type: string,
+// integer when the fuzzed value parses as one, or null. The other fields
+// stay strings, so only the chosen one varies.
+func TestBuildRuleEventKinds(t *testing.T) {
+	n := uint8(len(fuzzFields))
+	cases := []struct {
+		name     string
+		fieldSel uint8
+		eventVal string
+		want     any
+	}{
+		{"string", 0, "443", "443"},
+		{"int", n, "443", int64(443)},
+		{"int falls back to string", n, "abc", "abc"},
+		{"negative int", n, "-7", int64(-7)},
+		{"null", 2 * n, "anything", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, ev, err := buildRule(c.fieldSel, 0, 0, "x", "y", c.eventVal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			field := fuzzFields[int(c.fieldSel)%len(fuzzFields)]
+			got, ok := ev[field]
+			if !ok {
+				t.Fatalf("event lost field %s", field)
+			}
+			if got != c.want {
+				t.Fatalf("ev[%s] = %#v, want %#v", field, got, c.want)
+			}
+			for _, f := range fuzzFields {
+				if _, isStr := ev[f].(string); f != field && !isStr {
+					t.Fatalf("unchosen field %s = %#v, want a string", f, ev[f])
+				}
+			}
+		})
+	}
+}

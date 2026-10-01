@@ -3643,11 +3643,11 @@ against a value with a newline, and any query the backend generates with
 
 Three of the Task 14 review amendments were not built as written:
 
-- Events are strings only. The generated fields are the four string fields
-  both process_creation bindings map, so ints, bools and nulls are not
-  exercised, and the bool column-type decision never came up. Typed values
-  stay covered by unit tests in `internal/sigma/match`; extending the
-  generator to them is open.
+- Events carry strings, integers and nulls, chosen per case for the field
+  the rule reads. Bools are not generated, so the bool column-type decision
+  never came up; they stay covered by unit tests in `internal/sigma/match`.
+  Columns have TEXT affinity rather than INTEGER for ints: Sigma compares
+  as strings, and INTEGER affinity would let SQLite coerce `"0443"` to 443.
 - Generated strings are not restricted to ASCII. A non-ASCII case
   difference is left as a real divergence with no suppression, so the
   fuzzer can still find a Unicode folding question instead of being kept
