@@ -13,13 +13,49 @@ import (
 	"unicode/utf8"
 )
 
-// oracleAvailable reports whether the pySigma venv exists. Every test here
-// skips without it, so make check stays green on a machine with no Python
-// environment built. Which means a green test run proves nothing on its own:
-// the gate is the comparison count recorded in docs/results.md.
+// oracleAvailable reports whether the pySigma venv exists.
 func oracleAvailable() bool {
 	_, err := os.Stat(venvPython)
 	return err == nil
+}
+
+type oracleState int
+
+const (
+	oracleRun oracleState = iota
+	oracleSkip
+	oracleFatal
+)
+
+// oracleStatus decides what a test needing the oracle does. Without the venv
+// it skips, so make check stays green on a machine with no Python
+// environment built, which means a green local run proves nothing on its
+// own: the gate is the comparison count recorded in docs/results.md. In CI
+// the venv is built by the workflow, so its absence is a broken job, not a
+// choice, and the test fails.
+func oracleStatus(available bool, ci string) oracleState {
+	switch {
+	case available:
+		return oracleRun
+	case ci == "true":
+		return oracleFatal
+	default:
+		return oracleSkip
+	}
+}
+
+const venvHint = "pySigma venv not built: python3 -m venv test/fuzz/.venv && " +
+	"test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt"
+
+// requireOracle skips or fails the test when the oracle venv is missing.
+func requireOracle(tb testing.TB) {
+	tb.Helper()
+	switch oracleStatus(oracleAvailable(), os.Getenv("CI")) {
+	case oracleFatal:
+		tb.Fatal(venvHint + " (CI=true, so this is a failure, not a skip)")
+	case oracleSkip:
+		tb.Skip(venvHint)
+	}
 }
 
 const seedRule = `title: seed
@@ -98,9 +134,7 @@ func TestEvalOnceAdmitsEventToItsLogsource(t *testing.T) {
 }
 
 func TestOracleAgreesOnSeed(t *testing.T) {
-	if !oracleAvailable() {
-		t.Skip("pySigma venv not built: python3 -m venv test/fuzz/.venv && test/fuzz/.venv/bin/pip install -r test/fuzz/requirements.txt")
-	}
+	requireOracle(t)
 	o, err := StartOracle()
 	if err != nil {
 		t.Fatal(err)
@@ -130,9 +164,7 @@ func TestOracleAgreesOnSeed(t *testing.T) {
 // three-valued-logic gap can be told apart from a real disagreement. Without
 // that, every negated condition over an absent field is a false failure.
 func TestOracleReportsAbsentFieldGap(t *testing.T) {
-	if !oracleAvailable() {
-		t.Skip("pySigma venv not built")
-	}
+	requireOracle(t)
 	o, err := StartOracle()
 	if err != nil {
 		t.Fatal(err)
@@ -176,9 +208,7 @@ detection:
 // has a section in KNOWN_DIVERGENCES.md. They are pinned here rather than
 // left to the fuzzer because a closed set wants a test, not a search.
 func TestKnownAcceptanceDivergences(t *testing.T) {
-	if !oracleAvailable() {
-		t.Skip("pySigma venv not built")
-	}
+	requireOracle(t)
 	o, err := StartOracle()
 	if err != nil {
 		t.Fatal(err)
@@ -293,12 +323,11 @@ detection:
 // condition shape into a valid rule skeleton, then requires the two engines
 // to agree. See generate.go for why the rule is built rather than mutated.
 func FuzzAgainstPySigma(f *testing.F) {
-	if !oracleAvailable() {
-		f.Skip("pySigma venv not built, see test/fuzz/requirements.txt")
-	}
+	requireOracle(f)
 	o, err := StartOracle()
 	if err != nil {
-		f.Skipf("oracle unavailable: %v", err)
+		// The venv exists, so this is a broken install, not a missing one.
+		f.Fatalf("oracle would not start: %v", err)
 	}
 	f.Cleanup(func() { _ = o.Close() })
 	f.Cleanup(func() {

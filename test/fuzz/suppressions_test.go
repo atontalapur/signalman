@@ -32,9 +32,7 @@ var vendorLiterals = []string{
 }
 
 func TestSuppressionLiteralsStillExistInVendor(t *testing.T) {
-	if !oracleAvailable() {
-		t.Skip("pySigma venv not built")
-	}
+	requireOracle(t)
 
 	roots, err := filepath.Glob(filepath.Join(".venv", "lib", "python*", "site-packages", "sigma"))
 	if err != nil || len(roots) == 0 {

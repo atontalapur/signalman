@@ -209,9 +209,7 @@ func TestOracleProcDrainForwardsLinesAndClosesOnEOF(t *testing.T) {
 // crash. This is the restart-on-failure path the fuzzer depends on to
 // survive a single bad subprocess over a long run.
 func TestOracleEvalRestartsAfterProcessDeath(t *testing.T) {
-	if !oracleAvailable() {
-		t.Skip("pySigma venv not built: python3 -m venv test/fuzz/.venv && test/fuzz/.venv/bin/pip install -r test/fuzz/requirements.txt")
-	}
+	requireOracle(t)
 	o, err := StartOracle()
 	if err != nil {
 		t.Fatal(err)
@@ -249,9 +247,7 @@ func TestOracleEvalRestartsAfterProcessDeath(t *testing.T) {
 // Python's backtracking engine accepts it and, against a string that almost
 // but does not quite match, takes far longer than oracleTimeout.
 func TestOracleEvalRestartsOnTimeout(t *testing.T) {
-	if !oracleAvailable() {
-		t.Skip("pySigma venv not built")
-	}
+	requireOracle(t)
 	o, err := StartOracle()
 	if err != nil {
 		t.Fatal(err)

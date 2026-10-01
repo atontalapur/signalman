@@ -118,3 +118,25 @@ detection:
 		t.Fatal("declaredLogSource must report an error for YAML it cannot parse")
 	}
 }
+
+// Without its venv the oracle tests skip, which is right on a laptop and
+// wrong in CI: a CI job whose venv step broke would go green having run
+// none of them.
+func TestMissingOracleIsFatalInCI(t *testing.T) {
+	cases := []struct {
+		available bool
+		ci        string
+		want      oracleState
+	}{
+		{true, "", oracleRun},
+		{true, "true", oracleRun},
+		{false, "", oracleSkip},
+		{false, "false", oracleSkip},
+		{false, "true", oracleFatal},
+	}
+	for _, c := range cases {
+		if got := oracleStatus(c.available, c.ci); got != c.want {
+			t.Errorf("oracleStatus(%v, %q) = %v, want %v", c.available, c.ci, got, c.want)
+		}
+	}
+}
