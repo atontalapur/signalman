@@ -1,0 +1,7 @@
+# Changes to CI, release, and the scripts that hold the Jira token request
+# the owner's review. Third-party actions are pinned to commit SHAs; a tag
+# can be moved to different code, and release.yml can write packages.
+/.github/ @atontalapur
+/scripts/ @atontalapur
+/Makefile @atontalapur
+/.goreleaser.yaml @atontalapur

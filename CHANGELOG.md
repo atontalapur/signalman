@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.6.1] - 2026-10-01
+
+### Changed
+
+- Third-party GitHub Actions are pinned to commit SHAs, with the release
+  version in a comment: `amannn/action-semantic-pull-request` v6.1.1,
+  `docker/setup-qemu-action` v4.4.0, `docker/setup-buildx-action` v4.4.1,
+  `docker/login-action` v4.6.0, `goreleaser/goreleaser-action` v7.2.3. A
+  tag can be moved to different code; a SHA cannot, and the release job
+  can write packages. Dependabot keeps the pins current.
+
+### Added
+
+- `.github/CODEOWNERS`: changes to CI, release config, the Makefile, and
+  `scripts/` (which call Jira with a token) request the owner's review.
+
 ## [0.5.0] - 2026-09-21
 
 ### Added
