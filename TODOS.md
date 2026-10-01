@@ -54,6 +54,8 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P2
 **Depends on:** None
 
+## Completed
+
 ### Stop an oracle subprocess that outlives its fuzz worker
 **What:** If a fuzz worker is SIGKILLed while its pySigma subprocess is stuck in a backtracking regex, the subprocess keeps running until the regex finishes. When Python is idle, stdin EOF ends it, so only the stuck case leaks.
 **Why:** From the SIG-21 adversarial review. It costs CPU on a long local run, not correctness: the worker is gone and nothing reads the answer.
@@ -61,8 +63,7 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Effort:** S
 **Priority:** P4
 **Depends on:** nothing
-
-## Completed
+**Completed:** v0.6.0 (2026-10-01). The oracle starts a watcher process that polls its parent and kills the oracle once the parent is gone; `OrphanWatch` in `test/fuzz/test_pysigma_eval.py` reproduces the stuck-regex case.
 
 ### Connect GitHub to Jira so merged PRs transition stories
 **What:** Install the GitHub for Jira app on the SIG site, connect `atontalapur/signalman`, add one automation rule (pull request merged, transition to Done), and document it in `README.md` under "Working on it".

@@ -174,5 +174,55 @@ class RefusalCodes(unittest.TestCase):
         self.assertIsNone(pe.refusal_code(ValueError("Unknown modifier x")))
 
 
+class OrphanWatch(unittest.TestCase):
+    """An oracle stuck in a backtracking regex cannot read stdin EOF, so it
+    would outlive a killed fuzz worker until the regex finished. The
+    watcher process must kill it once its parent is gone."""
+
+    PARENT = r"""
+import json, subprocess, sys, time
+p = subprocess.Popen([sys.executable, "pysigma_eval.py"], stdin=subprocess.PIPE,
+                     stdout=subprocess.PIPE, text=True)
+p.stdout.readline()
+rule = ("title: t\nid: 00000000-0000-4000-8000-000000000000\nlogsource:\n"
+        "  product: windows\n  category: process_creation\ndetection:\n"
+        "  s:\n    Image|re: '(a+)+$'\n  condition: s\n")
+p.stdin.write(json.dumps({"rule": rule, "event": {"Image": "a" * 40 + "!"}}) + "\n")
+p.stdin.flush()
+print(p.pid, flush=True)
+time.sleep(600)
+"""
+
+    def test_oracle_dies_with_its_parent(self):
+        import os
+        import signal
+        import subprocess
+        import sys
+        import time
+
+        parent = subprocess.Popen([sys.executable, "-c", self.PARENT], stdout=subprocess.PIPE, text=True)
+        oracle = int(parent.stdout.readline())
+
+        def alive(pid):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            return True
+
+        try:
+            time.sleep(0.5)  # let the oracle enter the regex
+            self.assertTrue(alive(oracle))
+            parent.kill()
+            parent.wait()
+            deadline = time.monotonic() + 5
+            while alive(oracle) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertFalse(alive(oracle), "oracle outlived its parent")
+        finally:
+            if alive(oracle):
+                os.kill(oracle, signal.SIGKILL)
+
+
 if __name__ == "__main__":
     unittest.main()

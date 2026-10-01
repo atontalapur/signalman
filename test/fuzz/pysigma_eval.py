@@ -26,6 +26,7 @@ KNOWN_DIVERGENCES.md.
 """
 
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -388,7 +389,48 @@ def respond(req: dict) -> dict:
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
+# Runs as its own process: a thread could not run while re holds the GIL in
+# a backtracking match, which is exactly when it is needed.
+WATCHER = """
+import os, signal, sys, time
+parent, oracle = int(sys.argv[1]), int(sys.argv[2])
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+while alive(oracle):
+    if not alive(parent):
+        os.kill(oracle, signal.SIGKILL)
+        break
+    time.sleep(1)
+"""
+
+
+def watch_parent() -> None:
+    """Kill this process if the process that started it goes away.
+
+    An idle oracle exits on stdin EOF when its fuzz worker dies, but one
+    stuck in a backtracking regex never reads stdin again and would run
+    until the regex finished. The watcher holds no copy of the oracle's
+    pipes, so it cannot keep them open after the oracle exits.
+    """
+    import subprocess
+
+    subprocess.Popen(
+        [sys.executable, "-c", WATCHER, str(os.getppid()), str(os.getpid())],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def main() -> None:
+    watch_parent()
     # Announce readiness once the imports are done. pySigma takes seconds to
     # load, and the Go side's per-request deadline is meant to bound a
     # backtracking regex, not interpreter warm-up: without this line the
