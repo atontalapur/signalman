@@ -32,7 +32,11 @@ Copied from the spec. Do not trade any of these for a shortcut.
 - `make check` before every commit. It is what CI runs: gofmt, vet, tidy,
   build, race tests, staticcheck, govulncheck.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`.
-- `make fuzz FUZZTIME=30s` runs every fuzz target; nightly CI runs 10m each.
+- `make fuzz FUZZTIME=30s` runs every fuzz target except the pySigma
+  differential one; nightly CI runs 10m each.
+- `make fuzz-differential FUZZTIME=30m` runs the differential fuzzer and
+  sums its comparison counts. It needs `test/fuzz/.venv` (see README);
+  without it every `test/fuzz` case skips and still reports ok.
 - `make check-backlog` after editing `docs/backlog.yml`.
 - Go 1.27. Module path `github.com/atontalapur/signalman`.
 

@@ -117,6 +117,8 @@ trailing characters of each encoding carry bits of the neighbouring
 plaintext, which is unknown, so they are trimmed. The start offsets are
 `0, 2, 3` and the end trims are indexed by `(len(value)+i) % 3`. These are
 pySigma's numbers, deliberately, because pySigma is the differential oracle.
+The length is in bytes. pySigma counts characters, so the two agree on ASCII
+and trim a multi-byte plaintext differently.
 
 A plaintext of one to three bytes determines no complete base64 character at
 a shifted alignment, so some of the three encodings come back empty. That is
@@ -201,8 +203,9 @@ the kind, and a detection entry with no values at all is an error.
 
 ## Deliberate divergences from pySigma
 
-Each of these needs a row in `test/fuzz/KNOWN_DIVERGENCES.md` when the
-differential fuzzer lands.
+Where the differential fuzzer can reach one of these, its suppression has a
+section in `test/fuzz/KNOWN_DIVERGENCES.md`, alongside the divergences the
+fuzzer found on its own.
 
 | Divergence | Why |
 |---|---|
@@ -212,6 +215,7 @@ differential fuzzer lands.
 | Int and bool event values compare by their decimal and `true`/`false` text | pySigma types its columns. The differential fuzzer covers the gap. |
 | A bare keyword is `contains` over every field value, not a whole-value match | The spec reads whole-value. Every real corpus rule means substring, and a whole-value keyword matches almost nothing. |
 | A null keyword is rejected | It would compile to a matcher that fires on every event with any field. |
+| `base64offset` trims by byte length, not character count | base64 encodes bytes. pySigma's character count trims a non-ASCII plaintext wrongly. |
 
 ## Where this is enforced
 
