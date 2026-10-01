@@ -106,21 +106,15 @@ func buildEvent(entry *sigma.TaxonomyEntry, raw map[string]string) *event.Event 
 // matcher rather than the declaration, and the fuzzer needs the declaration
 // to find the field mapping the oracle's event has to be expressed in.
 func declaredLogSource(ruleYAML []byte) (sigma.LogSource, error) {
+	// yaml.v3 matches untagged fields by their lowercased name, which is
+	// what the logsource keys are.
 	var doc struct {
-		LogSource struct {
-			Category string `yaml:"category"`
-			Product  string `yaml:"product"`
-			Service  string `yaml:"service"`
-		} `yaml:"logsource"`
+		LogSource sigma.LogSource `yaml:"logsource"`
 	}
 	if err := yaml.Unmarshal(ruleYAML, &doc); err != nil {
 		return sigma.LogSource{}, err
 	}
-	return sigma.LogSource{
-		Category: doc.LogSource.Category,
-		Product:  doc.LogSource.Product,
-		Service:  doc.LogSource.Service,
-	}, nil
+	return doc.LogSource, nil
 }
 
 // bridgeable reports whether the case can reach the oracle at all. The
