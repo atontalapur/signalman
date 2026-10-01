@@ -38,8 +38,8 @@ jobs:
       # The differential target runs only here, where its counters are
       # summed. Executions are not comparisons: the floor fails a run that
       # compared too little, and the caps fail one where a suppression
-      # started matching more than its usual share (about 0.30 since the
-      # generator produces null values; see KNOWN_DIVERGENCES.md).
+      # started matching more than its usual share (0.23 over 20 minutes,
+      # up to 0.30 on short runs; see KNOWN_DIVERGENCES.md).
       - if: steps.probe.outputs.has_go == 'true'
         run: >-
           make fuzz-differential FUZZTIME=10m FUZZMINCOMPARED=100000

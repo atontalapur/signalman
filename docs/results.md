@@ -44,6 +44,27 @@ Every suppression has a section in `test/fuzz/KNOWN_DIVERGENCES.md`. The
 oracle has 14 refusal codes and Signalman's side has 4 rejection kinds; each
 is matched on a code or an error type, never on message text.
 
+### Typed-value run
+
+Run of 2026-10-01 on commit `d2a20e4`, after the fuzzer started sending
+integer and null event values. Same machine and versions, nightly's caps
+(`FUZZMAXSUPPRESSED=0.40`).
+
+| Counter | Value |
+|---|---|
+| Wall time | 20m2s |
+| Executions | 2,898,084 |
+| Verdict comparisons | 1,043,565 |
+| Rejected by both engines | 142,712 |
+| Suppressed (documented divergence) | 359,916 |
+| Reached both engines | 1,546,193 |
+| Suppressed share | 0.233 |
+| Oracle timeouts | 2 |
+| Skipped before either engine | 1,352,765 |
+| Verdict mismatches | 0 |
+
+The first single run past a million verdict comparisons.
+
 ### Suppressions that matched too much
 
 The pre-merge review of this fuzzer found that three oracle checks and the
@@ -80,7 +101,7 @@ The 30 minute run was killed by the host at 29m29s for memory (each worker
 holds a Python interpreter with pySigma loaded); its counters are what the
 workers had flushed by then.
 
-Across all four runs: 11,277,649 executions and 4,318,796 verdict
+Across all five runs: 14,175,733 executions and 5,362,361 verdict
 comparisons that agreed.
 
 ### Defects found in the oracle
@@ -143,5 +164,5 @@ From the spec. These are goals, not results.
 
 Built a Sigma detection engine in Go that loads, or rejects with a coded
 reason, every rule in the 3,760-rule SigmaHQ corpus, and verified it
-against pySigma with a differential fuzzer: 4.3M agreeing verdict
+against pySigma with a differential fuzzer: 5.4M agreeing verdict
 comparisons, zero mismatches, and two bugs found in pySigma.

@@ -14,11 +14,16 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   runs it and reports how many cases both engines actually evaluated, since
   executions are not comparisons. The Plan A gate run: 1,798,175
   executions, 673,225 verdict comparisons, no mismatches.
+- The fuzzer also sends integer and null event values, so it checks how
+  each engine compares a string rule value against them. A 20 minute run
+  with them: 2,898,084 executions, 1,043,565 comparisons, no mismatches. The oracle stores
+  every value as text, matching Sigma's string comparison, so `"0443"`
+  does not match 443.
 - Pass or fail thresholds on a fuzz run: a floor on verdict comparisons and
   caps on the share of cases suppressed or timed out
   (`FUZZMINCOMPARED`, `FUZZMAXSUPPRESSED`, `FUZZMAXTIMEOUT`). Nightly sets
-  all three, so a run that checked little, or one where a suppression grew,
-  fails instead of reporting green.
+  all three (100000, 0.40, 0.01), so a run that checked little, or one
+  where a suppression grew, fails instead of reporting green.
 - `test/fuzz/KNOWN_DIVERGENCES.md`: every case the fuzzer suppresses, why,
   and which code implements it. The fuzzer found two bugs in pySigma along
   the way: an unparenthesized `NOT` over modifier variants in the SQLite
@@ -39,6 +44,8 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   engines rejecting the rule.
 - Fuzz counters are written atomically per process, so a worker killed
   mid-write no longer loses everything it counted.
+- An oracle stuck in a backtracking regex no longer outlives a killed fuzz
+  worker: a watcher process kills it once its parent is gone.
 
 ### Changed
 

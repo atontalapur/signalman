@@ -245,8 +245,9 @@ produce nulls, so this one is suppressed: only when the condition contains
 `not` and the oracle reports that the rule reads a field whose value is
 null (`nullUnderNegation`). A null under a plain selection is not
 suppressed, and both engines answer no match there. Every null case under
-`not` lands here, which is why the suppressed share is about 0.30 with
-typed values against about 0.22 without them.
+`not` lands here. The suppressed share with typed values was 0.233 over a
+20 minute run and 0.30 over a 90 second one, where the early seeds weigh
+more; nightly caps it at 0.40.
 
 ### An empty encoded variant
 
