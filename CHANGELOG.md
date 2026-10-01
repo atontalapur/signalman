@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.7.1] - 2026-10-01
+
+### Changed
+
+- The first-party GitHub Actions are pinned to commit SHAs too:
+  `actions/checkout` v7.0.1, `actions/setup-go` v7.0.0,
+  `actions/setup-python` v7.0.0, `actions/upload-artifact` v7.0.1. Every
+  action in the CI, nightly and release workflows now runs a fixed commit,
+  and Dependabot keeps the pins current.
+
 ## [0.7.0] - 2026-10-01
 
 ### Added
