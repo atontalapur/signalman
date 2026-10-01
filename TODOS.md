@@ -63,7 +63,7 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Effort:** S
 **Priority:** P4
 **Depends on:** nothing
-**Completed:** v0.6.0 (2026-10-01). The oracle starts a watcher process that polls its parent and kills the oracle once the parent is gone; `OrphanWatch` in `test/fuzz/test_pysigma_eval.py` reproduces the stuck-regex case.
+**Completed:** v0.7.0 (2026-10-01). The oracle starts a watcher process that polls its parent and kills the oracle once the parent is gone; `OrphanWatch` in `test/fuzz/test_pysigma_eval.py` reproduces the stuck-regex case.
 
 ### Connect GitHub to Jira so merged PRs transition stories
 **What:** Install the GitHub for Jira app on the SIG site, connect `atontalapur/signalman`, add one automation rule (pull request merged, transition to Done), and document it in `README.md` under "Working on it".
