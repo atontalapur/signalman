@@ -3,6 +3,52 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.6.0] - 2026-10-01
+
+### Added
+
+- A differential fuzzer that checks Signalman's verdicts against pySigma.
+  Rules are generated from fuzz input (values, a modifier chain, a field, a
+  condition shape), converted to SQLite by `pySigma-backend-sqlite`, and run
+  against the same event; any disagreement fails. `make fuzz-differential`
+  runs it and reports how many cases both engines actually evaluated, since
+  executions are not comparisons. The Plan A gate run: 1,798,175
+  executions, 673,225 verdict comparisons, no mismatches.
+- Pass or fail thresholds on a fuzz run: a floor on verdict comparisons and
+  caps on the share of cases suppressed or timed out
+  (`FUZZMINCOMPARED`, `FUZZMAXSUPPRESSED`, `FUZZMAXTIMEOUT`). Nightly sets
+  all three, so a run that checked little, or one where a suppression grew,
+  fails instead of reporting green.
+- `test/fuzz/KNOWN_DIVERGENCES.md`: every case the fuzzer suppresses, why,
+  and which code implements it. The fuzzer found two bugs in pySigma along
+  the way: an unparenthesized `NOT` over modifier variants in the SQLite
+  backend, and a `base64offset` trim indexed by characters instead of bytes.
+- `docs/results.md`: measured numbers in one place, with the command and
+  commit behind each, kept apart from targets that have not been measured.
+- `LoadError` keeps the underlying cause of a detection error, so a caller
+  can recognize an RE2 syntax rejection by type.
+
+### Fixed
+
+- The fuzzer's suppressions key on a code or an error type, never on
+  message text. Earlier checks matched text inside generated rule values,
+  so a value containing `='` or `NOT ... OR` could turn a real mismatch into
+  a skip.
+- A hung or crashed oracle is replaced and the case fails, instead of a late
+  answer being read as the next case's verdict or a crash counting as both
+  engines rejecting the rule.
+- Fuzz counters are written atomically per process, so a worker killed
+  mid-write no longer loses everything it counted.
+
+### Changed
+
+- CI builds the pySigma oracle, so its tests run on every PR; with
+  `CI=true` a missing oracle fails instead of skipping. The oracle's
+  dependencies are hash-locked and installed with `--require-hashes`, and
+  nightly and CI use Python 3.14.
+- `make fuzz` leaves the differential target to `make fuzz-differential`,
+  which is the one that checks its counts.
+
 ## [0.5.0] - 2026-09-21
 
 ### Added
