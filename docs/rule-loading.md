@@ -53,6 +53,13 @@ The set is closed. A new code needs a paragraph in
 `docs/corpus-acceptance.md` saying whether the rejection is intended, so
 adding one is a documentation change as well as a code change.
 
+A `detection` or `modifier` rejection keeps its cause in `LoadError.Err`, and
+`LoadError` unwraps to it. A caller that needs finer detail than the code,
+such as telling an RE2 syntax error from other detection errors, uses
+`errors.As` with a `*syntax.Error` target on the cause. `Reason` quotes the rule's
+values, so matching on its text is matching on author input; the
+differential fuzzer in `test/fuzz` relies on this.
+
 ## Why aggregation is rejected rather than ignored
 
 A correlation or aggregation rule needs state across events. Everything else
