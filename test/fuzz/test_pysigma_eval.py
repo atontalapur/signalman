@@ -159,6 +159,13 @@ class RefusalCodes(unittest.TestCase):
         )
         self.assertEqual(pe.respond({"rule": r, "event": {"Image": "x"}}).get("refusal"), "id-not-uuid")
 
+    def test_sqlite_depth(self):
+        # 1100 ORed selections parse past SQLite's expression depth of 1000.
+        sels = "".join(f"  s{i}:\n    Image: v{i}\n" for i in range(1100))
+        r = rule("Image", "x").split("detection:")[0] + "detection:\n" + sels + "  condition: 1 of s*\n"
+        self.assertEqual(pe.respond({"rule": r, "event": {"Image": "x"}}).get("refusal"), "sqlite-depth")
+        self.assertIsNone(pe.refusal_code(pe.sqlite3.OperationalError("no such column: x")))
+
     def test_value_cannot_forge_a_code(self):
         # The vendor phrase inside a value, on a rule that fails for an
         # unrelated reason, must not pick up that phrase's code.

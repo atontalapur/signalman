@@ -1,8 +1,11 @@
 package fuzz
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
+	"os/exec"
 	"regexp/syntax"
 	"strings"
 	"testing"
@@ -234,6 +237,51 @@ func TestOracleEvalRestartsAfterProcessDeath(t *testing.T) {
 		t.Fatalf("Eval after restart = %v, %+v, want a normal match on the seed rule", want, res)
 	}
 }
+
+// A line that is not a response means the pipe is out of step with the
+// requests. Eval has to replace the subprocess and report a broken bridge,
+// never a rule rejection, and the replacement has to answer normally.
+func TestOracleEvalRestartsOnMalformedResponse(t *testing.T) {
+	requireOracle(t)
+	o, err := StartOracle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = o.Close() })
+
+	// Swap in a fake subprocess whose next line is garbage. Its stdin
+	// discards the request; kill() on it is a no-op apart from the close.
+	real := o.proc
+	fake := &oracleProc{
+		cmd:    exec.Command("true"),
+		stdin:  nopWriteCloser{},
+		in:     bufio.NewWriter(io.Discard),
+		lines:  make(chan []byte, 1),
+		stderr: &syncBuilder{},
+	}
+	fake.lines <- []byte("not json")
+	o.proc = fake
+	real.kill()
+
+	_, _, err = o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`})
+	if !errors.Is(err, ErrOracleBroken) {
+		t.Fatalf("Eval on a malformed line = %v, want ErrOracleBroken", err)
+	}
+	var refusal *RefusalError
+	if errors.As(err, &refusal) {
+		t.Fatal("a malformed line must not read as an oracle refusal")
+	}
+
+	want, _, err := o.Eval(seedRule, map[string]string{"Image": `C:\Windows\rundll32.exe`})
+	if err != nil || !want {
+		t.Fatalf("Eval after restart = %v, %v, want a normal match", want, err)
+	}
+}
+
+type nopWriteCloser struct{}
+
+func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (nopWriteCloser) Close() error                { return nil }
 
 // TestOracleEvalRestartsOnTimeout pins the behavior of Eval's timeout
 // branch: on a timeout the hung subprocess is killed and
