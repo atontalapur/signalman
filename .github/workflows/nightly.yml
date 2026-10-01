@@ -25,12 +25,25 @@ jobs:
       - if: steps.probe.outputs.has_go == 'true'
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
-      # The differential fuzzer shells out to pySigma as its oracle.
+          python-version: "3.14"
+      # The differential fuzzer shells out to pySigma as its oracle, and
+      # looks for it at test/fuzz/.venv. Installing pySigma anywhere else
+      # makes every case in test/fuzz skip without failing.
       - if: steps.probe.outputs.has_go == 'true'
-        run: pip install pysigma==1.5.0
+        run: |
+          python3 -m venv test/fuzz/.venv
+          test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt
       - if: steps.probe.outputs.has_go == 'true'
         run: make fuzz FUZZTIME=10m
+      # The differential target runs only here, where its counters are
+      # summed. Executions are not comparisons: the floor fails a run that
+      # compared too little, and the caps fail one where a suppression
+      # started matching more than its usual share (0.23 over 20 minutes,
+      # up to 0.30 on short runs; see KNOWN_DIVERGENCES.md).
+      - if: steps.probe.outputs.has_go == 'true'
+        run: >-
+          make fuzz-differential FUZZTIME=10m FUZZMINCOMPARED=100000
+          FUZZMAXSUPPRESSED=0.40 FUZZMAXTIMEOUT=0.01
       - if: always()
         uses: actions/upload-artifact@v7
         with:

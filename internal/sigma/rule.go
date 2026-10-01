@@ -52,11 +52,16 @@ type LoadError struct {
 	Code   string
 	Reason string
 	Line   int
+	// Err is the underlying cause when there is one, so a caller can
+	// classify by type instead of by Reason, which quotes the rule.
+	Err error
 }
 
 func (e *LoadError) Error() string {
 	return fmt.Sprintf("%s:%d [%s] rule %s: %s", e.Path, e.Line, e.Code, e.RuleID, e.Reason)
 }
+
+func (e *LoadError) Unwrap() error { return e.Err }
 
 type ruleFile struct {
 	Title     string `yaml:"title"`
@@ -110,7 +115,9 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 			// acceptance report.
 			code = CodeModifier
 		}
-		return nil, fail(code, err.Error(), 1)
+		lerr := fail(code, err.Error(), 1)
+		lerr.Err = err
+		return nil, lerr
 	}
 
 	// A list of conditions is an OR over the parsed arms. Each arm is

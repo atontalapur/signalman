@@ -46,7 +46,24 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P3
 **Depends on:** Plan A Task 14
 
+### Decide whether a wildcard inside an encoded value is a load error
+**What:** `CommandLine|base64|contains: '*foo*'` encodes the asterisks as literal bytes here and matches the base64 of `*foo*`. pySigma rejects the rule outright ("Base64 encoding of strings with wildcards is not allowed").
+**Why:** Found by the SIG-21 differential fuzzer. An author who writes that almost certainly means a wildcard, and gets a rule that silently matches something else. Signalman already prefers a loud load error for a chain that cannot mean what it says: a chain whose variants are all empty is rejected for exactly this reason.
+**Context:** Two options. Reject at load with a new `modifier` rejection reason, which matches pySigma and costs a line in `docs/modifiers.md`, `docs/corpus-acceptance.md`, and a recount of the corpus (no corpus rule does this today). Or keep the literal reading and document it in `docs/modifiers.md` as a divergence. Either way the suppression in `test/fuzz/oracle.go` and its section in `test/fuzz/KNOWN_DIVERGENCES.md` come out. Not decided inside SIG-21: it changes frontend semantics, which is its own story.
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
 ## Completed
+
+### Stop an oracle subprocess that outlives its fuzz worker
+**What:** If a fuzz worker is SIGKILLed while its pySigma subprocess is stuck in a backtracking regex, the subprocess keeps running until the regex finishes. When Python is idle, stdin EOF ends it, so only the stuck case leaks.
+**Why:** From the SIG-21 adversarial review. It costs CPU on a long local run, not correctness: the worker is gone and nothing reads the answer.
+**Context:** The obvious fixes do not work. A Python watchdog thread cannot run while `re` holds the GIL. Linux `Pdeathsig` fires when the OS thread that started the child exits, and the Go runtime can retire that thread, which would kill a healthy oracle mid-run and fail the case as `ErrOracleBroken`. A working option is a small supervisor: start the oracle under a wrapper that polls its parent pid from a separate process and kills the group.
+**Effort:** S
+**Priority:** P4
+**Depends on:** nothing
+**Completed:** v0.7.0 (2026-10-01). The oracle starts a watcher process that polls its parent and kills the oracle once the parent is gone; `OrphanWatch` in `test/fuzz/test_pysigma_eval.py` reproduces the stuck-regex case.
 
 ### Connect GitHub to Jira so merged PRs transition stories
 **What:** Install the GitHub for Jira app on the SIG site, connect `atontalapur/signalman`, add one automation rule (pull request merged, transition to Done), and document it in `README.md` under "Working on it".

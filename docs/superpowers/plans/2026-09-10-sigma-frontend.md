@@ -3613,7 +3613,55 @@ git commit -m "feat(cmd): add corpus acceptance report and document the results"
 
 **Oracle design note.** pySigma is a rule conversion library, not an event evaluator. The bridge converts the rule to a SQLite `WHERE` clause with `pySigma-backend-sqlite`, materializes the event as a single-row table, and runs the query. This is the approach Zircolite uses and it is a genuinely independent implementation path: a different parser, a different modifier expansion, and a different comparison engine. It also has known semantic gaps against Sigma proper, mainly around null handling and case folding in SQLite. Keep a list of them in `test/fuzz/KNOWN_DIVERGENCES.md` with a one-line justification each, and treat any divergence not on that list as a Signalman bug until proven otherwise. The list is a deliverable, not a workaround.
 
-- [ ] **Step 1: Set up the Python side**
+**As built (SIG-21).** Four things came out differently, each for a reason
+worth keeping:
+
+- `EvalOnce` lives in `test/fuzz`, not `internal/sigma`. `internal/sigma`
+  cannot import `internal/engine/v1`, and the fuzzer has to test the
+  evaluator that ships rather than a second walker written for it. It loads
+  through `sigma.LoadRuleBytes`, which SIG-19 added, so no temp file.
+- The rule is generated, not mutated. A free-text fuzz over rule YAML reached
+  684,594 executions with zero verdict comparisons: every mutation broke the
+  YAML or the rule, and both engines rejected it. The target now drives
+  values, a modifier chain, a field, and a condition shape into a valid
+  skeleton. The rule-level acceptance divergences it can no longer reach are
+  pinned by `TestKnownAcceptanceDivergences`.
+- Outcomes are counted and flushed to disk per worker
+  (`make fuzz-differential`, `scripts/fuzz_stats.py`). Fuzzing runs in worker
+  processes, so the only number the coordinator reports is executions, and
+  that number said nothing about whether anything was compared.
+- The oracle call has a five second deadline and the subprocess is replaced
+  on timeout. Python's regex engine backtracks and cannot be interrupted, so
+  one generated pattern used to stall a worker for the rest of the run.
+
+The oracle also declines more than the plan anticipated: `cidr`, the numeric
+comparisons, `fieldref`, value-only expressions, a NUL in a value, a regex
+against a value with a newline, and any query the backend generates with
+`NOT` outside parentheses, which is a defect in
+`pySigma-backend-sqlite`. Every one has a section in
+`test/fuzz/KNOWN_DIVERGENCES.md`.
+
+Three of the Task 14 review amendments were not built as written:
+
+- Events carry strings, integers and nulls, chosen per case for the field
+  the rule reads. Bools are not generated, so the bool column-type decision
+  never came up; they stay covered by unit tests in `internal/sigma/match`.
+  Columns have TEXT affinity rather than INTEGER for ints: Sigma compares
+  as strings, and INTEGER affinity would let SQLite coerce `"0443"` to 443.
+- Generated strings are not restricted to ASCII. A non-ASCII case
+  difference is left as a real divergence with no suppression, so the
+  fuzzer can still find a Unicode folding question instead of being kept
+  away from one.
+- There is no `SIGNALMAN_PYTHON`. The oracle runs from
+  `test/fuzz/.venv`, which CI builds from the hash-locked
+  `requirements.txt`. With `CI=true` a missing venv fails the test rather
+  than skipping it, and a venv whose oracle will not start fails the fuzz
+  target.
+
+After the pre-merge review, every suppression keys on a code or an error
+type rather than message text; `KNOWN_DIVERGENCES.md` says how.
+
+- [x] **Step 1: Set up the Python side**
 
 ```bash
 python3 -m venv test/fuzz/.venv
@@ -3621,7 +3669,7 @@ test/fuzz/.venv/bin/pip install pysigma pysigma-backend-sqlite
 printf 'pysigma\npysigma-backend-sqlite\n' > test/fuzz/requirements.txt
 ```
 
-- [ ] **Step 2: Write the oracle subprocess**
+- [x] **Step 2: Write the oracle subprocess**
 
 Create `test/fuzz/pysigma_eval.py`:
 
@@ -3687,7 +3735,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Write the Go side of the bridge**
+- [x] **Step 3: Write the Go side of the bridge**
 
 Create `test/fuzz/oracle.go`:
 
@@ -3780,7 +3828,7 @@ func (o *Oracle) Close() error {
 }
 ```
 
-- [ ] **Step 4: Add EvalOnce to the sigma package**
+- [x] **Step 4: Add EvalOnce to the sigma package**
 
 Append to `internal/sigma/rule.go`:
 
@@ -3813,7 +3861,7 @@ func EvalOnce(ruleYAML []byte, tax *Taxonomy, ev *event.Event) (bool, error) {
 
 Add `"github.com/atontalapur/signalman/internal/event"` to that file's imports.
 
-- [ ] **Step 5: Write the differential fuzzer**
+- [x] **Step 5: Write the differential fuzzer**
 
 Create `test/fuzz/differential_test.go`:
 
@@ -3900,25 +3948,25 @@ func known(errG, errP error) bool {
 }
 ```
 
-- [ ] **Step 6: Create the known divergences document**
+- [x] **Step 6: Create the known divergences document**
 
 Create `test/fuzz/KNOWN_DIVERGENCES.md` with one section per suppression in `known()`. Start with the two above: the oracle has no taxonomy layer, so unmapped logsources are a Signalman-only rejection; and aggregation rules convert cleanly in pySigma but are a deliberate scope cut here. Add a row every time a suppression is added, never a suppression without a row.
 
-- [ ] **Step 7: Run the fuzzer**
+- [x] **Step 7: Run the fuzzer**
 
 ```bash
 go test ./test/fuzz/ -run FuzzAgainstPySigma -fuzz FuzzAgainstPySigma -fuzztime 300s
 ```
 Expected: no failures. Every failure is either a Signalman bug or a new entry in `KNOWN_DIVERGENCES.md` with a written justification. Do not add a suppression without first convincing yourself which side is wrong.
 
-- [ ] **Step 8: Run the long fuzz and record the count**
+- [x] **Step 8: Run the long fuzz and record the count**
 
 ```bash
 go test ./test/fuzz/ -run FuzzAgainstPySigma -fuzz FuzzAgainstPySigma -fuzztime 30m
 ```
 Record the execution count in `docs/corpus-acceptance.md`. Plan A's gate wants 1e6 executions clean; spec gate G0 later wants 1e8, which runs in CI over time rather than in one sitting.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 gofmt -l . && go vet ./...

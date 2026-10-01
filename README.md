@@ -9,7 +9,7 @@ old engine is retired.
 
 ## Status
 
-Plan A is in progress. The module exists on Go 1.27 with three packages:
+Plan A is done. The module exists on Go 1.27 with three packages:
 `internal/event` (the event value model), `internal/sigma/match` (the
 wildcard matcher, every supported Sigma modifier, and `match.Build`, which
 turns a modifier chain into one matcher), and `internal/sigma` (the condition
@@ -23,9 +23,16 @@ holds the logsource bindings. `cmd/corpusaccept` reports how much of
 the real SigmaHQ corpus loads: 1478 of 3760 live rules against a
 three-logsource taxonomy, with three rules using Sigma features this engine
 cannot express and the rest rejected as unmapped logsources. The numbers and
-the per-code commentary are in `docs/corpus-acceptance.md`. What remains in
-Plan A is the pySigma differential fuzzer, which proves the accepted rules
-evaluate correctly rather than merely load.
+the per-code commentary are in `docs/corpus-acceptance.md`.
+
+Loading is not matching, so `test/fuzz` compares the frontend against
+pySigma: rules are converted to SQLite queries by
+`pySigma-backend-sqlite` and run against the event as a single-row table,
+which is an independent parser, modifier expansion, and comparison engine.
+The fuzzer drives values, a modifier chain, a field, and a condition shape
+into a valid rule skeleton and requires the two to agree, and every
+suppression has a section in `test/fuzz/KNOWN_DIVERGENCES.md`. The run
+counts are in `docs/results.md`.
 
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
@@ -35,7 +42,7 @@ the first Go code.
 
 | Plan | What it delivers | State |
 |---|---|---|
-| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | in progress: frontend loads 1478 of 3760 corpus rules with coded rejections; pySigma differential fuzzer left |
+| A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | in progress: v1 evaluator and verdict digest done; gate property green |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
@@ -90,7 +97,7 @@ internal/backend/ch/    AST to ClickHouse SQL
 internal/pipe/          stages, bounded queues, drop ledger
 internal/obs/           metrics, canary
 internal/verdict/       verdict digest, one rolling hash per partition
-test/fuzz/              differential and parser fuzzers
+test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
 test/replay/            corpus replay, digest comparison
 deploy/                 Dockerfile; docker compose for Redpanda and ClickHouse
 docs/spec/              the spec (signalman-v1.html)
@@ -99,6 +106,7 @@ docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 evaluator and how verdict streams are compared
+docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
 docs/superpowers/plans/ roadmap and per-plan task lists
@@ -115,8 +123,15 @@ that needs them.
 - `make check` before every commit: gofmt, vet, `go mod tidy` diff, build,
   race tests, staticcheck, govulncheck. CI runs the same target.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`.
-- `make fuzz FUZZTIME=30s` runs every fuzz target. Nightly CI runs them for
-  10 minutes each and uploads any crashers.
+- `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
+  one. Nightly CI runs them for 10 minutes each and uploads any crashers.
+- `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer
+  and prints how many cases actually reached both engines; executions are not
+  comparisons. `FUZZMINCOMPARED`, `FUZZMAXSUPPRESSED` and `FUZZMAXTIMEOUT`
+  turn the counts into a pass or fail; nightly sets all three. It needs the oracle's virtualenv, which is gitignored:
+  `python3 -m venv test/fuzz/.venv && test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt`.
+  Without it every case in `test/fuzz` skips, so a green `make check` on a
+  machine with no venv says nothing about the fuzzer.
 - `make check-backlog` after editing `docs/backlog.yml`.
 - Debt too small for a story lives in `TODOS.md`.
 - Jira project SIG. One story per branch, `feat/SIG-<n>-<slug>`. PR titles are

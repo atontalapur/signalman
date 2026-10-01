@@ -1,0 +1,10 @@
+# The oracle's direct dependencies, pinned: a conversion difference between
+# pySigma versions would look like a Signalman change. requirements.txt is
+# the full hash-locked set compiled from this file, so a transitive release
+# cannot change the oracle either. Regenerate with:
+#   uv pip compile requirements.in --generate-hashes --universal \
+#     --python-version 3.14 --no-header -o requirements.txt
+pysigma==1.5.1
+pysigma-backend-sqlite==1.2.4
+# A direct import in pysigma_eval.py, not only a pySigma dependency.
+PyYAML==6.0.3
