@@ -138,5 +138,34 @@ class Base64OffsetNonAscii(unittest.TestCase):
         self.assertEqual(out.get("refusal"), "base64offset-non-ascii")
 
 
+class RefusalCodes(unittest.TestCase):
+    """pySigma's exceptions get a code from their class and the fixed start
+    of their message. Each case triggers the real exception."""
+
+    def test_codes(self):
+        cases = [
+            ("unknown-modifier", "Image|nosuchmodifier", "x"),
+            ("wide-non-ascii", "Image|wide|base64", "'é'"),
+            ("wildcard-in-encoding", "Image|base64", "'a*'"),
+            ("regex-python-rejects", "Image|re", "'(?<!a+)b'"),
+        ]
+        for code, key, value in cases:
+            with self.subTest(code=code):
+                self.assertEqual(ask(key, value, {"Image": "x"}).get("refusal"), code)
+
+    def test_id_not_uuid(self):
+        r = rule("Image", "x").replace(
+            "id: 00000000-0000-4000-8000-000000000000", "id: not-a-uuid"
+        )
+        self.assertEqual(pe.respond({"rule": r, "event": {"Image": "x"}}).get("refusal"), "id-not-uuid")
+
+    def test_value_cannot_forge_a_code(self):
+        # The vendor phrase inside a value, on a rule that fails for an
+        # unrelated reason, must not pick up that phrase's code.
+        out = ask("Image|nosuchmodifier", "'Base64 encoding of strings with wildcards is not allowed'", {"Image": "x"})
+        self.assertEqual(out.get("refusal"), "unknown-modifier")
+        self.assertIsNone(pe.refusal_code(ValueError("Unknown modifier x")))
+
+
 if __name__ == "__main__":
     unittest.main()
