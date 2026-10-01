@@ -32,7 +32,7 @@ which is an independent parser, modifier expansion, and comparison engine.
 The fuzzer drives values, a modifier chain, a field, and a condition shape
 into a valid rule skeleton and requires the two to agree, and every
 suppression has a section in `test/fuzz/KNOWN_DIVERGENCES.md`. The run
-counts are in `docs/corpus-acceptance.md`.
+counts are in `docs/results.md`.
 
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),

@@ -16,7 +16,7 @@ import (
 // oracleAvailable reports whether the pySigma venv exists. Every test here
 // skips without it, so make check stays green on a machine with no Python
 // environment built. Which means a green test run proves nothing on its own:
-// the gate is the comparison count recorded in docs/corpus-acceptance.md.
+// the gate is the comparison count recorded in docs/results.md.
 func oracleAvailable() bool {
 	_, err := os.Stat(venvPython)
 	return err == nil

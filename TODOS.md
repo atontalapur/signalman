@@ -54,6 +54,14 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P2
 **Depends on:** None
 
+### Stop an oracle subprocess that outlives its fuzz worker
+**What:** If a fuzz worker is SIGKILLed while its pySigma subprocess is stuck in a backtracking regex, the subprocess keeps running until the regex finishes. When Python is idle, stdin EOF ends it, so only the stuck case leaks.
+**Why:** From the SIG-21 adversarial review. It costs CPU on a long local run, not correctness: the worker is gone and nothing reads the answer.
+**Context:** The obvious fixes do not work. A Python watchdog thread cannot run while `re` holds the GIL. Linux `Pdeathsig` fires when the OS thread that started the child exits, and the Go runtime can retire that thread, which would kill a healthy oracle mid-run and fail the case as `ErrOracleBroken`. A working option is a small supervisor: start the oracle under a wrapper that polls its parent pid from a separate process and kills the group.
+**Effort:** S
+**Priority:** P4
+**Depends on:** nothing
+
 ## Completed
 
 ### Connect GitHub to Jira so merged PRs transition stories

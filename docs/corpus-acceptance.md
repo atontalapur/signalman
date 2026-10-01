@@ -131,6 +131,9 @@ neither engine evaluated says nothing about either. The target counts what
 each case actually did and `scripts/fuzz_stats.py` sums the per-worker
 counters, so the number below is comparisons.
 
+Later runs, including the Plan A gate run after the suppression fixes,
+are in `docs/results.md`.
+
 ### Run of 2026-09-21
 
 | | 20 min, 2 workers | 30 min, 4 workers |
