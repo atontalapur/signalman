@@ -60,6 +60,7 @@ func requireOracle(tb testing.TB) {
 
 const seedRule = `title: seed
 id: 00000000-0000-4000-8000-000000000000
+level: low
 logsource:
   product: windows
   category: process_creation
@@ -98,6 +99,7 @@ func TestEvalOnceMatchesAndMisses(t *testing.T) {
 func TestEvalOnceRenamesThroughTaxonomy(t *testing.T) {
 	rule := `title: renamed
 id: 00000000-0000-4000-8000-000000000001
+level: low
 logsource:
   product: windows
   service: security
@@ -173,6 +175,7 @@ func TestOracleReportsAbsentFieldGap(t *testing.T) {
 
 	rule := `title: negated
 id: 00000000-0000-4000-8000-000000000002
+level: low
 logsource:
   product: windows
   category: process_creation
@@ -235,8 +238,8 @@ detection:
     Image: x
   condition: selection
 `},
-		{"non-uuid id", false, `title: t
-id: not-a-uuid
+		{"no level", true, `title: t
+id: 00000000-0000-4000-8000-00000000000a
 logsource:
   product: windows
   category: process_creation
@@ -247,6 +250,7 @@ detection:
 `},
 		{"unmapped logsource", true, `title: t
 id: 00000000-0000-4000-8000-00000000000b
+level: low
 logsource:
   product: linux
   category: process_creation
@@ -257,6 +261,7 @@ detection:
 `},
 		{"keywords", false, `title: t
 id: 00000000-0000-4000-8000-00000000000c
+level: low
 logsource:
   product: windows
   category: process_creation
@@ -267,6 +272,7 @@ detection:
 `},
 		{"scalar search identifier", false, `title: t
 id: 00000000-0000-4000-8000-00000000000d
+level: low
 logsource:
   product: windows
   category: process_creation
@@ -276,6 +282,7 @@ detection:
 `},
 		{"cidr", false, `title: t
 id: 00000000-0000-4000-8000-00000000000e
+level: low
 logsource:
   product: windows
   category: network_connection
@@ -286,6 +293,7 @@ detection:
 `},
 		{"numeric comparison", false, `title: t
 id: 00000000-0000-4000-8000-00000000000f
+level: low
 logsource:
   product: windows
   category: network_connection

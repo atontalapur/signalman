@@ -48,6 +48,7 @@ of Plan G need the pipeline first.
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
 and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
+`docs/authoring.md` is the rule author's guide that sits on top of them.
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
 
@@ -63,12 +64,15 @@ signalman explain rules/proc_dump.yml ev.json    # condition tree, results, obse
 signalman lint    rules/                         # every LoadError, structured (--json too)
 signalman bench   rules/ [--corpus dir]          # p50/p99/max per rule, flags p99 over 50us
 signalman noise   rules/proc_dump.yml --corpus dir   # matches per 100k, ten samples, budget:
+signalman gates   --set rules rules/proc_dump.yml    # the five PR gates as a markdown report
 ```
 
 Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
 are 0 for pass, 1 for a failed check, 2 when the command could not run.
 A corpus is a directory of `.ndjson` or `.jsonl` files, one JSON event per
-line, with field names as they appear after the taxonomy. A rule may
+line, with field names as they appear after the taxonomy. An event with a
+key given twice in one object is rejected, and an empty object `{}` adds no
+fields. A fixture file is one YAML document. A rule may
 declare `budget:` in matches per 100k events; noise exits 1 above it.
 
 Plan C's code has landed. `cmd/signalmand` consumes `events.raw`, assigns Seq
@@ -83,7 +87,28 @@ topics, record formats, drop reasons, delivery, and the audit. The gate is
 not passed: the audit is green over generated load in test mode, but the
 one-hour soak against Redpanda has not been run.
 
-Plan D has started with the alert store. `deploy/clickhouse/001_alerts.sql`
+`internal/backend/ch` is the second execution target. It compiles a loaded
+rule into a ClickHouse WHERE clause over an events table, and `RetroHunt`
+runs it over a time window through `database/sql`. Every node type and
+modifier the frontend accepts compiles, and every rule the corpus loads
+compiles. Where ClickHouse disagrees with Go (case folding, regex dot and
+Unicode tables, NULL, number and address parsing, invalid UTF-8), the event
+is stored with the value v1 would compute, so the SQL only compares.
+`docs/backend-ch.md` lists each leak. The retro-hunt-equals-replay test is
+written but has not yet run against a server.
+
+A pull request that touches `rules/` runs `.github/workflows/rules.yml`:
+`signalman gates` checks each changed rule for parse, fixtures, noise
+budget, latency budget, and prefilter, and the report lands in one PR
+comment and the job summary. A failed gate fails the job; a rule the
+v2 prefilter cannot key on (the `Always` set) is a warning. A PR that also
+changes `cmd/`, `internal/`, the taxonomy, or the corpus fails without
+running the gates, since the gates would run its own code. The noise gate
+runs when the repository variable `SIGNALMAN_NOISE_CORPUS` names a corpus
+and is skipped otherwise. `docs/authoring.md` covers the supported Sigma
+subset, rejection codes, fixtures, explain, budgets, and the gates.
+
+The alert store is the other half of Plan D. `deploy/clickhouse/001_alerts.sql`
 is the spec's `alerts` table (ReplacingMergeTree ordered by
 `(partition, seq, rule_id)`, 90 day TTL), created by the compose ClickHouse
 on first start. `cmd/signalman-sink` consumes the `alerts` topic and inserts
@@ -98,11 +123,11 @@ ClickHouse is an integration test that has not been run yet.
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
-| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: alert schema and idempotent sink built, ClickHouse integration test not run; SQL compiler and retro-hunt not started |
+| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler, retro-hunt, alert schema and idempotent sink built; ClickHouse integration tests not run, gate not passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, and `budget:` done; rule PR CI gates and `docs/authoring.md` not started |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow has not run on a real rule PR yet and no noise corpus is configured |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
@@ -137,7 +162,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ## Repository
 
 ```
-cmd/signalman/          CLI: test, explain, lint, bench, noise
+cmd/signalman/          CLI: test, explain, lint, bench, noise, gates
 cmd/signalmand/         the pipeline daemon
 cmd/signalman-sink/     alerts topic to the ClickHouse alerts table
 cmd/differ/             shadow-mode verdict comparison
@@ -150,7 +175,7 @@ internal/fixture/       <rule>.test.yml loader and runner, through v1
 internal/explain/       explain walker and renderer, held equal to v1 by test
 internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
 internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
-internal/backend/ch/    AST to ClickHouse SQL
+internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
 internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit
 internal/pipe/chsink/   ClickHouse alert sink: batch insert, commit after insert, retry with backoff
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
@@ -167,13 +192,16 @@ docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
+docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
+docs/authoring.md       writing rules: supported subset, rejections, fixtures, budgets, PR gates
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
 rules/                  twenty hand-written rules, each with a .test.yml fixture
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
 scripts/                backlog validator, Jira sync
+.github/workflows/      ci, nightly fuzz, release, rules (the rule PR gates)
 ```
 
 Directories under `cmd/`, `internal/`, and `test/` are created by the plan
@@ -187,7 +215,10 @@ that needs them.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`:
   `docker compose -f deploy/docker-compose.yml up -d --wait`. Integration tests
   carry the `integration` build tag and reach Redpanda at `localhost:19092`
-  (override with `SIGNALMAN_BROKERS`).
+  (override with `SIGNALMAN_BROKERS`). The ClickHouse retro-hunt test reads a
+  clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`, which `make integration`
+  sets to the compose server. Without it the test skips locally and fails
+  when `CI=true`.
 - Run the daemon against the compose stack:
   `go run ./cmd/signalmand -rules <dir> -taxonomy config/taxonomy`. It
   serves `/metrics` on `:9464`, reloads rules on `SIGHUP`, and by default

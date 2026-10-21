@@ -2,8 +2,10 @@ package main
 
 import (
 	"log/slog"
+	"strconv"
 	"testing"
 
+	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/sigma"
 )
 
@@ -48,6 +50,9 @@ func TestTopicSpecsCoverEveryPipelineTopic(t *testing.T) {
 	for _, s := range specs {
 		if s.Partitions != 8 || s.Replication != 1 {
 			t.Fatalf("spec %+v", s)
+		}
+		if s.Configs["max.message.bytes"] != strconv.Itoa(broker.MaxMessageBytes) {
+			t.Fatalf("%s: max.message.bytes %q; topics and producer share one limit", s.Name, s.Configs["max.message.bytes"])
 		}
 	}
 }

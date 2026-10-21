@@ -3,6 +3,186 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.12.0] - 2026-10-21
+
+### Added
+
+- `signalman gates`, the rule pull request gates: parse, fixtures, noise
+  budget, latency budget, and prefilter for each changed rule, written as
+  one markdown report. A failed gate exits 1; a rule in the v2 `Always` set
+  is a warning. `--changed` reads a git diff file list, where a changed
+  fixture stands for its rule, and `--set` catches an id another rule in the
+  set already uses.
+- `.github/workflows/rules.yml` runs the gates on PRs that touch `rules/`.
+  The PR's code runs with a read-only token; a separate job with no
+  checkout posts the report as one PR comment and edits it on later pushes.
+  Fork PRs get the job summary only.
+- `docs/authoring.md`: the supported Sigma subset, rejection codes,
+  fixtures, explain, budgets, the prefilter, and the gates.
+- Load codes `invalid-id` and `level`.
+
+### Changed
+
+- The loader rejects a rule whose id is not a canonical UUID
+  (`invalid-id`) or whose `level` is missing or not one of the five Sigma
+  levels (`level`). The alerts table stores both as typed columns. SigmaHQ
+  corpus acceptance is unchanged. A non-UUID id is no longer a pySigma
+  divergence; a missing level is a new one.
+- `signalman gates` prints the full report on stdout; `--comment FILE`
+  writes a copy cut to fit one PR comment.
+- The rules workflow fails without running the gates when a rules PR also
+  changes `cmd/`, `internal/`, `config/taxonomy/`, `go.mod`, `go.sum`, the
+  noise corpus, or the workflow, since the gates would run the PR's own code.
+
+### Fixed
+
+- Past about 450 rules the gates report overran GitHub's comment limit,
+  because only the details were cut and the table was not, so the comment
+  POST failed. The comment copy now drops table rows too, keeping failures
+  and warnings first, says how many it left out, and the job summary gets
+  the full report it points to.
+
+## [0.11.0] - 2026-10-21
+
+### Added
+
+- `internal/backend/ch`, the ClickHouse SQL backend. `CompileRule` turns a
+  loaded rule into a WHERE clause over an events table, and `RetroHunt` runs
+  it over a time window through `database/sql`. Every node type and
+  modifier the frontend accepts compiles, as does every rule the corpus
+  loads.
+- `ch.Encode` stores each field as v1 would compare it (folded, regex-safe,
+  fold key, ints, addresses), so the SQL only compares and never relies on
+  ClickHouse's own case folding, regex, or parsing. Each dialect leak is in
+  `docs/backend-ch.md`.
+- A retro-hunt-equals-replay integration test against ClickHouse.
+
+### Changed
+
+- The CI integration job and `make integration` set
+  `SIGNALMAN_CLICKHOUSE_DSN` to the compose server. Under `CI=true` the
+  retro-hunt test fails instead of skipping when the DSN is unset.
+
+### Fixed
+
+- The events table partitioned and expired rows on the source's
+  `event_time`, so old or skewed events were deleted on arrival and a wide
+  batch could exceed the 100 partitions per insert limit. It now uses
+  `ingest_time`.
+- The query size check covered only the WHERE clause. `HuntQuery` now
+  checks the full statement.
+
+## [0.10.0] - 2026-10-21
+
+### Added
+
+- `cmd/signalmand`, the pipeline daemon. It consumes `events.raw`, assigns
+  Seq from the record offset, normalizes through the taxonomy, evaluates
+  with v1, and writes `events.norm`, `verdicts.v1`, `alerts`, and `drops`.
+  It serves `/metrics` and reloads rules on `SIGHUP`.
+- `internal/broker`: the broker interface, an in-memory implementation for
+  unit tests, and a franz-go implementation for Redpanda.
+  `deploy/docker-compose.yml` runs pinned Redpanda and ClickHouse and
+  creates the topics.
+- The normalizer and drop ledger: every decode failure becomes a drop with
+  a closed reason code and the raw bytes, a normalizer panic included.
+- Bounded stages and a sink that commits a batch's offsets only after its
+  outputs are durable. Delivery is at-least-once; a stuck sink is lag,
+  never loss.
+- Rule set reloads through a slot read once per batch, so no batch
+  straddles two RuleSetV values.
+- The invariant 1 audit, which checks every committed `events.raw` offset
+  against `verdicts.v1` and `drops`, and `docs/pipeline.md`.
+
+### Changed
+
+- Every pipeline topic has `max.message.bytes` of 1 MiB, the same as the
+  producer's batch limit.
+- Drop entries carry `raw_bytes`, and `truncated` for a record that was cut.
+
+### Fixed
+
+- Outputs could exceed the broker's size limit and were retried forever,
+  wedging every partition. Records over 128 KiB are dropped as
+  `record-too-large`, and an event whose outputs would not fit is dropped as
+  `output-too-large`.
+- A produce error that cannot succeed on retry (message too large, unknown
+  topic or partition) now stops the pipeline with the batch uncommitted.
+  Startup refuses a missing output topic or a `verdicts.v1` with fewer
+  partitions than `events.raw`.
+- The audit counted offsets removed by retention as missing verdicts when
+  a partition had no committed offset. It now starts at the log start.
+- A batch in flight during a rebalance could commit for a partition this
+  member had lost and move the group offset backwards. Those commits are
+  dropped.
+
+## [0.9.0] - 2026-10-21
+
+### Added
+
+- `internal/engine/v2`, the compiled evaluator. It interns every leaf
+  predicate, logsource tests included, into one table, and each rule
+  becomes a tree over that table's bitset.
+- A literal prefilter: each rule's required literals feed an Aho-Corasick
+  automaton (`internal/engine/v2/aho`), and a rule none of whose literals
+  occur is settled false without a walk. Nothing under a `not` is used.
+- Presence gating: a rule whose required fields are absent is settled false
+  without a walk and still emits its verdict.
+- `EvaluateInto` makes 0 allocations per event on the fixtures and the
+  SigmaHQ corpus. On the corpus stream it runs at 17,633 ns/event against
+  v1's 938,733 (`docs/results.md`).
+- Equivalence with v1, verdict by verdict and digest by digest, over the
+  fixtures and the corpus, plus rule independence and prefilter soundness
+  tests and `FuzzPrefilterSound`.
+
+### Changed
+
+- `ast.Pred` carries the modifier chain and values its matcher was built
+  from, and `match.Build` is now `Plan` followed by `Spec.Matcher`. RuleSetV
+  is unchanged.
+
+### Fixed
+
+- The v2 equivalence tests now cover the shipped `rules/` directory in CI,
+  and fail if any shipped rule stops loading. Before, those rules were only
+  compared when the SigmaHQ corpus was present.
+
+## [0.8.0] - 2026-10-21
+
+### Added
+
+- `signalman`, the rule author CLI. Every command takes `--taxonomy` and
+  exits 0 on pass, 1 on a failed check, 2 when it could not run.
+- `signalman test`: each rule ships a sibling `<rule>.test.yml` of match and
+  no-match cases, run through the v1 evaluator. A disagreeing case, a
+  missing fixture, or a fixture without both kinds of case fails.
+- `signalman explain <rule> <event.json>`: the condition tree with each
+  node's result, each leaf's observed value, and the logsource test. Its
+  walker is held equal to v1 by a test over every shipped rule and fixture.
+- `signalman lint`: every `LoadError` in structured form, or JSON with
+  `--json`, duplicate ids across files included.
+- `signalman bench`: p50, p99 and max per rule over a corpus or the
+  fixtures; a p99 over the threshold (50us by default) fails.
+- `signalman noise`: one rule over a corpus, with matches per 100k events
+  and the first ten matches. A rule may declare `budget:` in matches per
+  100k; noise fails above it. The budget does not enter RuleSetV.
+- `rules/`: twenty hand-written rules, 56 fixture cases, all passing.
+- The loader keeps each rule's expanded condition, selections and tags for
+  `explain`. The bound tree and RuleSetV are unchanged.
+
+### Fixed
+
+- A YAML integer above MaxInt64 no longer wraps to a negative Int, and a
+  float at or beyond 2^63 no longer converts differently per platform. Both
+  stay as text.
+- An event file or corpus line with a key given twice in one object is
+  rejected instead of keeping the last copy. An empty object `{}` adds no
+  fields; that is now documented and tested.
+- A fixture file with a second YAML document is rejected instead of
+  silently ignoring the second document's cases.
+- One rule file named both relative and absolute loads once instead of
+  reporting a false duplicate id.
+
 ## [0.7.1] - 2026-10-01
 
 ### Changed

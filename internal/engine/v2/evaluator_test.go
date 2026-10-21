@@ -78,6 +78,7 @@ func TestPredicatesAreInterned(t *testing.T) {
 		y := `
 title: t
 id: ` + id + `
+level: low
 logsource: {product: windows, category: process_creation}
 detection:
   sel:
@@ -93,7 +94,7 @@ detection:
 		return *r
 	}
 	rs := &sigma.RuleSet{
-		Rules:     []sigma.Rule{src("a", "one"), src("b", "two")},
+		Rules:     []sigma.Rule{src("00000000-0000-4000-8000-00000000b00a", "one"), src("00000000-0000-4000-8000-00000000b00b", "two")},
 		Version:   "test",
 		TaxonomyV: tax.Version,
 	}
@@ -133,7 +134,8 @@ func TestPredKeySeparatesWhatTheMatcherDependsOn(t *testing.T) {
 	}
 	y := `
 title: t
-id: k
+id: 00000000-0000-4000-8000-00000000b00c
+level: low
 logsource: {product: windows, category: process_creation}
 detection:
   a: {CommandLine|wide|base64: 'x'}

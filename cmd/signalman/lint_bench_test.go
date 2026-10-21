@@ -29,7 +29,9 @@ func TestLintPrintsEveryLoadErrorStructured(t *testing.T) {
 		"[modifier]",
 		"[yaml]",
 		"[condition]",
-		"5 rules, 0 loaded, 5 rejected",
+		"[invalid-id]",
+		"[level]",
+		"8 rules, 0 loaded, 8 rejected",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, stdout)
@@ -51,8 +53,8 @@ func TestLintJSONIsOneObjectPerError(t *testing.T) {
 		t.Fatalf("code %d", code)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("want 5 lines, got:\n%s", stdout)
+	if len(lines) != 8 {
+		t.Fatalf("want 8 lines, got:\n%s", stdout)
 	}
 	var e struct {
 		Path, RuleID, Code, Reason string

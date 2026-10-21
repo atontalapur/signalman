@@ -34,7 +34,7 @@ lint:
 	go run $(GOVULNCHECK) $(GO_PKGS)
 
 ## integration: needs Redpanda and ClickHouse up (deploy/docker-compose.yml).
-## The ClickHouse tests skip without a DSN; this one is the compose stack's.
+## The DSN defaults to the compose server's credentials.
 SIGNALMAN_CLICKHOUSE_DSN ?= clickhouse://signalman:signalman@localhost:9000/signalman
 integration:
 	SIGNALMAN_CLICKHOUSE_DSN='$(SIGNALMAN_CLICKHOUSE_DSN)' go test -race -count=1 -tags integration $(GO_PKGS)

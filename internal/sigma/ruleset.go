@@ -65,12 +65,24 @@ func FixturePath(rulePath string) string {
 func RuleFiles(roots ...string) ([]string, error) {
 	seen := map[string]bool{}
 	var paths []string
+	var absErr error
 	add := func(p string) {
 		p = filepath.Clean(p)
-		if IsFixture(p) || seen[p] {
+		if IsFixture(p) {
 			return
 		}
-		seen[p] = true
+		// Dedupe on the absolute path, so rules/a.yml and /repo/rules/a.yml
+		// are one file rather than a false duplicate id. The first spelling
+		// given is kept for display.
+		key, err := filepath.Abs(p)
+		if err != nil {
+			absErr = err
+			return
+		}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
 		paths = append(paths, p)
 	}
 	for _, root := range roots {
@@ -97,6 +109,9 @@ func RuleFiles(roots ...string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if absErr != nil {
+		return nil, absErr
 	}
 	sort.Strings(paths)
 	return paths, nil

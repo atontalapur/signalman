@@ -52,7 +52,7 @@ as a string, since `Value` has no float kind. The event time comes from the
 ### Drop reasons
 
 The only way an admitted event leaves without verdicts. Every reason is a
-decode failure; overload never drops.
+property of the record's bytes; overload never drops.
 
 | Reason | Meaning |
 |---|---|
@@ -64,6 +64,33 @@ decode failure; overload never drops.
 | `missing-source` | no `source` header |
 | `event-time` | event time absent or unparseable |
 | `panic` | the normalizer panicked on this record; the partition moves on |
+| `record-too-large` | key, value, and headers together over 128 KiB; the entry keeps a 16 KiB prefix of the raw bytes (`truncated: true`, `raw_bytes` is the full length) |
+| `output-too-large` | the record fit, but its `events.norm` or an alert record would be over the output limit (long flattened names can do this); decided in the sink before anything for the event is written |
+
+### Size limits
+
+A broker refuses a record over `max.message.bytes` on every retry, so one
+oversized output would hold its partition forever, and again after a
+restart. The limits make every output fit:
+
+| Limit | Value | Where |
+|---|---|---|
+| `max.message.bytes` on every topic | 1 MiB | `deploy/docker-compose.yml`, `signalmand -create-topics` |
+| producer batch limit | 1 MiB, the same | `broker.MaxMessageBytes`, `kgo.ProducerBatchMaxBytes` |
+| largest output record (key, value, headers) | 1 MiB minus 16 KiB for framing | `pipe.MaxOutputRecordBytes` |
+| largest admitted record | 128 KiB | `pipe.DefaultMaxRecordBytes` |
+
+JSON escapes one byte to at most six, and a drop entry carries the host id
+twice (field and key), the source, a detail cut to 1 KiB, and the raw bytes
+in base64, so the entry for a record under 128 KiB stays under seven times
+that, inside the output limit. A verdict record grows with the rule count
+(about 60 bytes a rule), so a rule set of more than roughly 16,000 rules
+stops the pipeline with an error naming the rule set.
+
+Topics that already exist keep their configuration: neither the compose
+setup nor `-create-topics` alters them. On a Redpanda volume created before
+this limit, set it by hand with
+`rpk topic alter-config <topic> --set max.message.bytes=1048576`.
 
 ## Delivery: at-least-once
 
@@ -78,8 +105,21 @@ into silent loss. A delayed detection can be reported on afterwards; a lost
 one cannot, so at-least-once with an idempotent sink was chosen.
 
 A failed produce is retried with backoff until it succeeds or the process
-stops. A failed commit is logged and not retried: the next batch's commit
+stops, unless the error is permanent (`broker.ErrPermanent`: message too
+large, unknown topic or partition, a pinned partition the topic lacks, an
+authorization failure). Retrying those cannot succeed and would hold every
+partition behind the batch, so the pipeline stops with the batch
+uncommitted and an error naming its offsets. At startup it also refuses a
+missing output topic, or a `verdicts.v1` with fewer partitions than
+`events.raw`, since verdicts are pinned to the event's partition. A failed commit is logged and not retried: the next batch's commit
 supersedes it, and the worst case is redelivery.
+
+A batch still in flight when a rebalance takes its partition away does not
+commit for that partition: the Redpanda consumer drops commits for
+partitions this member no longer owns, for a reassigned partition until a
+record is polled from it again, and any commit that would move a
+partition's offset backwards. The new owner redelivers from its own
+position.
 
 Within a partition, outputs are written in Seq order, so alerts for a
 partition are emitted in Seq order. Ordering across partitions, and so across
@@ -160,6 +200,12 @@ offset. Windows slide forward with the committed offset, at most
 `-audit-window` seqs at a time. A failing window is logged at error level,
 names the partition and seqs, and increments
 `signalman_audit_violations_total{partition}`; any increase is a P1.
+
+Each partition's audit starts at the later of the group's committed offset
+and the log start of `events.raw`, so offsets retention removed before the
+group ever committed are not reported missing. A committed offset below the
+log start is logged as a warning: those records were removed before the
+pipeline read them.
 
 It assumes `events.raw` is a plain topic with dense offsets, and that it
 starts in the same `signalmand` process before the pipeline produces. Two
