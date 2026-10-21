@@ -78,7 +78,7 @@ func TestDDLEngineOrderPartitionTTL(t *testing.T) {
 		") ENGINE = ReplacingMergeTree\n",
 		"\nORDER BY (partition, seq, rule_id)\n",
 		"\nPARTITION BY toYYYYMMDD(ingest_time)\n",
-		"\nTTL toDateTime(ingest_time) + INTERVAL 90 DAY;",
+		"\nTTL toDateTime(ingest_time) + INTERVAL 90 DAY\n",
 	} {
 		if !strings.Contains(ddl, want) {
 			t.Errorf("DDL lacks %q", want)
