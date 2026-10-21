@@ -1,0 +1,10 @@
+title: An id the alerts table cannot hold
+id: proc_dump
+level: high
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\cmd.exe'
+  condition: selection

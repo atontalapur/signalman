@@ -1,5 +1,6 @@
 title: Second claim on the same id
 id: 1f1a1f1a-0009-4000-8000-000000000009
+level: low
 logsource:
   product: windows
   category: process_creation

@@ -26,9 +26,12 @@ level: high
 budget: 50
 ```
 
-This is ordinary Sigma. The parts Signalman reads are `id`, `logsource`,
-`detection`, and the optional `budget:`. The rest (title, tags, level,
-description) is carried along for people.
+This is ordinary Sigma. The parts Signalman reads are `id`, `level`,
+`logsource`, `detection`, and the optional `budget:`. The id must be a UUID
+and the level one of `informational`, `low`, `medium`, `high`, `critical`:
+alerts are stored with both as typed columns, so the loader rejects a rule
+without them. The rest (title, tags, description) is carried along for
+people.
 
 ## The supported subset
 
@@ -76,6 +79,8 @@ rules/x.yml:1 [modifier] rule 3f0d7c2e-6a61-4c39-9f5e-4b1f5d3a9e10: selection "s
 |---|---|
 | `yaml` | Fix the YAML. A bad `budget:` lands here too. |
 | `missing-id` | Add an `id`. Verdicts are keyed on it. |
+| `invalid-id` | The `id` is not a UUID such as `3f0d7c2e-6a61-4c39-9f5e-4b1f5d3a9e10`. Generate one with `uuidgen`. |
+| `level` | Add `level:` with one of `informational`, `low`, `medium`, `high`, `critical`, in lower case. |
 | `duplicate-id` | Another rule already has this id. Generate a new UUID. |
 | `no-taxonomy` | The logsource is not mapped. Map it, or use a mapped one. |
 | `condition` | The condition is empty, malformed, or names a selection that does not exist. |
