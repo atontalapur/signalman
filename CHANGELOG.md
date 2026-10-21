@@ -3,6 +3,45 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.12.0] - 2026-10-21
+
+### Added
+
+- `signalman gates`, the rule pull request gates: parse, fixtures, noise
+  budget, latency budget, and prefilter for each changed rule, written as
+  one markdown report. A failed gate exits 1; a rule in the v2 `Always` set
+  is a warning. `--changed` reads a git diff file list, where a changed
+  fixture stands for its rule, and `--set` catches an id another rule in the
+  set already uses.
+- `.github/workflows/rules.yml` runs the gates on PRs that touch `rules/`.
+  The PR's code runs with a read-only token; a separate job with no
+  checkout posts the report as one PR comment and edits it on later pushes.
+  Fork PRs get the job summary only.
+- `docs/authoring.md`: the supported Sigma subset, rejection codes,
+  fixtures, explain, budgets, the prefilter, and the gates.
+- Load codes `invalid-id` and `level`.
+
+### Changed
+
+- The loader rejects a rule whose id is not a canonical UUID
+  (`invalid-id`) or whose `level` is missing or not one of the five Sigma
+  levels (`level`). The alerts table stores both as typed columns. SigmaHQ
+  corpus acceptance is unchanged. A non-UUID id is no longer a pySigma
+  divergence; a missing level is a new one.
+- `signalman gates` prints the full report on stdout; `--comment FILE`
+  writes a copy cut to fit one PR comment.
+- The rules workflow fails without running the gates when a rules PR also
+  changes `cmd/`, `internal/`, `config/taxonomy/`, `go.mod`, `go.sum`, the
+  noise corpus, or the workflow, since the gates would run the PR's own code.
+
+### Fixed
+
+- Past about 450 rules the gates report overran GitHub's comment limit,
+  because only the details were cut and the table was not, so the comment
+  POST failed. The comment copy now drops table rows too, keeping failures
+  and warnings first, says how many it left out, and the job summary gets
+  the full report it points to.
+
 ## [0.11.0] - 2026-10-21
 
 ### Added
