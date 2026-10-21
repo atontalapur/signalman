@@ -36,6 +36,7 @@ func init() {
 		"explain": {"show a rule's condition tree evaluated against one JSON event", cmdExplain},
 		"lint":    {"load rules and print every load error", cmdLint},
 		"bench":   {"time each rule's evaluation and flag p99 over budget", cmdBench},
+		"noise":   {"report a rule's matches per 100k corpus events against its budget", cmdNoise},
 	}
 }
 

@@ -3,6 +3,7 @@ package sigma
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -28,6 +29,10 @@ type Rule struct {
 	// to recover later.
 	Fields []string
 	Tags   []string
+	// Budget is the rule's declared noise budget in matches per 100,000
+	// events, or nil when it declares none. It is checked by signalman
+	// noise and has no effect on evaluation or on RuleSetV.
+	Budget *float64
 
 	// Condition and Selections keep the selection names that binding
 	// erases, for explain output. Condition is the expanded condition with
@@ -80,7 +85,10 @@ type ruleFile struct {
 	Level  string `yaml:"level"`
 	// Tags is decoded loosely: tags are display metadata, and a malformed
 	// tag list must not change which rules load.
-	Tags      any `yaml:"tags"`
+	Tags any `yaml:"tags"`
+	// Budget is validated by budgetValue rather than by the decoder, so a
+	// bad value gets a reason and a line instead of a decode error.
+	Budget    any `yaml:"budget"`
 	LogSource struct {
 		Category string `yaml:"category"`
 		Product  string `yaml:"product"`
@@ -112,8 +120,12 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 	if f.ID == "" {
 		return nil, fail(CodeMissingID, "rule has no id", 1)
 	}
+	budget, err := budgetValue(f.Budget)
+	if err != nil {
+		return nil, fail(CodeYAML, err.Error(), keyLine(src, "budget:"))
+	}
 
-	condLine := conditionLine(src)
+	condLine := keyLine(src, "condition:")
 	conds, err := conditionStrings(f.Detection)
 	if err != nil {
 		return nil, fail(CodeCondition, err.Error(), condLine)
@@ -190,6 +202,7 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 		Cond:       renamed,
 		Fields:     fields,
 		Tags:       tagList(f.Tags),
+		Budget:     budget,
 		Condition:  cond,
 		Selections: named,
 	}, nil
@@ -312,13 +325,39 @@ func renameNode(n ast.Node, mapping map[string]string, seen map[string]bool) ast
 	return n
 }
 
-// conditionLine finds the 1-based line of the condition key, so the error
-// points at something an author can open.
-func conditionLine(src []byte) int {
+// keyLine finds the 1-based line of the first line starting with key, so
+// the error points at something an author can open.
+func keyLine(src []byte, key string) int {
 	for i, line := range strings.Split(string(src), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "condition:") {
+		if strings.HasPrefix(strings.TrimSpace(line), key) {
 			return i + 1
 		}
 	}
 	return 1
+}
+
+// budgetValue reads the optional budget key: a finite, non-negative number
+// of matches per 100,000 events. Anything else is an author error, reported
+// rather than read as no budget, since a budget that silently never applies
+// is a noise gate that never closes.
+func budgetValue(raw any) (*float64, error) {
+	var b float64
+	switch v := raw.(type) {
+	case nil:
+		return nil, nil
+	case int:
+		b = float64(v)
+	case int64:
+		b = float64(v)
+	case uint64:
+		b = float64(v)
+	case float64:
+		b = v
+	default:
+		return nil, fmt.Errorf("budget must be a number of matches per 100k events, got %T", raw)
+	}
+	if math.IsNaN(b) || math.IsInf(b, 0) || b < 0 {
+		return nil, fmt.Errorf("budget must be a finite, non-negative number of matches per 100k events, got %v", b)
+	}
+	return &b, nil
 }

@@ -13,7 +13,10 @@ fuzzer and the corpus tools generate rules that never touch the disk.
 
 1. **Decode YAML.** A malformed file is `yaml`.
 2. **Require an id.** No id is `missing-id`. Verdicts are keyed on the rule
-   id, so a rule without one cannot be reported on.
+   id, so a rule without one cannot be reported on. An optional `budget:`
+   (matches per 100k events, read by `signalman noise`) must be a finite,
+   non-negative number; anything else is `yaml`, with the budget's line.
+   The budget is not part of RuleSetV, since it does not change a verdict.
 3. **Read the condition.** Sigma allows a single string or a list of strings;
    a list is an OR over the arms. Any other shape is `condition`, with the
    type named. Missing or empty is `condition`.

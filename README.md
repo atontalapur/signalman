@@ -40,16 +40,36 @@ and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
 
+Plan B is done. `internal/engine/v1` evaluates every rule per event and
+`internal/verdict` folds the verdicts into a per-partition digest; the
+shuffle property test holds. `cmd/signalman` is the author CLI, and
+`rules/` holds twenty hand-written rules, each with a sibling
+`<rule>.test.yml` of match and no-match cases, all passing:
+
+```
+signalman test    rules/                         # run fixtures through v1
+signalman explain rules/proc_dump.yml ev.json    # condition tree, results, observed values
+signalman lint    rules/                         # every LoadError, structured (--json too)
+signalman bench   rules/ [--corpus dir]          # p50/p99/max per rule, flags p99 over 50us
+signalman noise   rules/proc_dump.yml --corpus dir   # matches per 100k, ten samples, budget:
+```
+
+Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
+are 0 for pass, 1 for a failed check, 2 when the command could not run.
+A corpus is a directory of `.ndjson` or `.jsonl` files, one JSON event per
+line, with field names as they appear after the taxonomy. A rule may
+declare `budget:` in matches per 100k events; noise exits 1 above it.
+
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
-| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | in progress: v1 evaluator and verdict digest done; gate property green |
+| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | not started |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | not started |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, and `budget:` done; rule PR CI gates and `docs/authoring.md` not started |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
@@ -84,7 +104,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ## Repository
 
 ```
-cmd/signalman/          CLI: lint, test, explain, noise, bench
+cmd/signalman/          CLI: test, explain, lint, bench, noise
 cmd/signalmand/         the pipeline daemon
 cmd/differ/             shadow-mode verdict comparison
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
@@ -92,6 +112,8 @@ internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
 internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
 internal/engine/v1/     reference evaluator, permanent oracle (no index, no cache)
+internal/fixture/       <rule>.test.yml loader and runner, through v1
+internal/explain/       explain walker and renderer, held equal to v1 by test
 internal/engine/v2/     compiled evaluator
 internal/backend/ch/    AST to ClickHouse SQL
 internal/pipe/          stages, bounded queues, drop ledger
@@ -109,6 +131,7 @@ docs/evaluation.md      the v1 evaluator and how verdict streams are compared
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
+rules/                  twenty hand-written rules, each with a .test.yml fixture
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
 scripts/                backlog validator, Jira sync
