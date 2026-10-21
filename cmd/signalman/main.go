@@ -34,6 +34,8 @@ func init() {
 	commands = map[string]command{
 		"test":    {"run each rule's fixtures from its sibling .test.yml", cmdTest},
 		"explain": {"show a rule's condition tree evaluated against one JSON event", cmdExplain},
+		"lint":    {"load rules and print every load error", cmdLint},
+		"bench":   {"time each rule's evaluation and flag p99 over budget", cmdBench},
 	}
 }
 
