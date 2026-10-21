@@ -12,6 +12,7 @@ dist/
 
 # binaries from `go build ./cmd/<name>` at the repo root
 /corpusaccept
+/cutover
 /differ
 /signalman
 /signalman-sink
