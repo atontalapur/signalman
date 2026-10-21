@@ -241,6 +241,9 @@ func TestLoadExperiment(t *testing.T) {
 		if r.Correctness.Dropped != 0 {
 			t.Fatalf("5x sustained wrote %d drop ledger entries", r.Correctness.Dropped)
 		}
+		if r.DigestsMatchReplay == nil || !*r.DigestsMatchReplay {
+			t.Fatal("5x sustained: output digests differ from a clean replay")
+		}
 	})
 
 	t.Run("consumer-kill", func(t *testing.T) {
@@ -466,6 +469,12 @@ func TestLoadExperiment(t *testing.T) {
 		}
 		if len(during) > int(dead) && during[dead] != 0 {
 			t.Errorf("offline partition %d committed %d records", dead, during[dead])
+		}
+		// No consumer restarts, so nothing is redelivered: a withheld fetch
+		// must not cost a duplicate.
+		if ck := r.Correctness; ck.DuplicateVerdictRecords != 0 || ck.DuplicateAlerts != 0 || ck.DuplicateDrops != 0 {
+			t.Errorf("partition offline: %d duplicate verdict records, %d duplicate alerts, %d duplicate drops; want none",
+				ck.DuplicateVerdictRecords, ck.DuplicateAlerts, ck.DuplicateDrops)
 		}
 		if r.DigestsMatchReplay == nil || !*r.DigestsMatchReplay {
 			t.Fatal("partition offline: digests differ from a clean replay")
