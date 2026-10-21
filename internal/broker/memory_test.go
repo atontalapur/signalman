@@ -146,3 +146,30 @@ func TestMemoryRejectsUnknownTopicAndBadPartition(t *testing.T) {
 		t.Fatal("a positioned reader has no group to commit to")
 	}
 }
+
+func TestMemoryProduceErrorsThatCannotSucceedArePermanent(t *testing.T) {
+	m := NewMemory(map[string]int32{"t": 1}, WithMaxRecordBytes(100))
+	for name, rec := range map[string]Record{
+		"unknown topic":     {Topic: "nope"},
+		"missing partition": {Topic: "t", Partition: 4},
+		"too large":         {Topic: "t", Partition: AnyPartition, Key: []byte("k"), Value: make([]byte, 100)},
+	} {
+		err := m.Produce(context.Background(), []Record{rec})
+		if !errors.Is(err, ErrPermanent) {
+			t.Fatalf("%s: err = %v, want one wrapping ErrPermanent", name, err)
+		}
+	}
+	end, _ := m.EndOffsets(context.Background(), "t")
+	if end[0] != 0 {
+		t.Fatal("a rejected produce writes nothing")
+	}
+	produce(t, m, Record{Topic: "t", Partition: AnyPartition, Key: []byte("k"), Value: make([]byte, 99)})
+}
+
+func TestMemoryDefaultRecordLimitIsMaxMessageBytes(t *testing.T) {
+	m := NewMemory(map[string]int32{"t": 1})
+	err := m.Produce(context.Background(), []Record{{Topic: "t", Partition: AnyPartition, Value: make([]byte, MaxMessageBytes+1)}})
+	if !errors.Is(err, ErrPermanent) {
+		t.Fatalf("err = %v; a record over MaxMessageBytes is refused like a broker would", err)
+	}
+}

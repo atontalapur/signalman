@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/atontalapur/signalman/internal/broker"
@@ -54,6 +55,9 @@ func Dial(ctx context.Context, cfg Config) (*Broker, error) {
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(partitioner{keyed: kgo.StickyKeyPartitioner(nil)}),
 		kgo.ProducerLinger(5*time.Millisecond),
+		// The same limit as max.message.bytes on the topics, so a record
+		// too large for the broker fails here, fast, as MessageTooLarge.
+		kgo.ProducerBatchMaxBytes(broker.MaxMessageBytes),
 	)
 	if err != nil {
 		return nil, err
@@ -126,7 +130,38 @@ func (b *Broker) Produce(ctx context.Context, recs []broker.Record) error {
 	for i, r := range recs {
 		krs[i] = toKgo(r)
 	}
-	return b.prod.ProduceSync(ctx, krs...).FirstErr()
+	return classify(b.prod.ProduceSync(ctx, krs...).FirstErr())
+}
+
+// permanent are the produce errors franz-go hands back that a retry cannot
+// fix. franz-go has already retried what is retriable (an unknown topic a
+// few times, for metadata to catch up), so these are final.
+var permanent = []error{
+	kerr.MessageTooLarge,
+	kerr.RecordListTooLarge,
+	kerr.InvalidRecord,
+	kerr.UnknownTopicOrPartition,
+	kerr.InvalidTopicException,
+	kerr.TopicAuthorizationFailed,
+	kerr.ClusterAuthorizationFailed,
+}
+
+// classify wraps a permanent produce error in broker.ErrPermanent. A pinned
+// partition the topic does not have fails inside franz-go with a plain
+// error and no code, so it is matched on its text.
+func classify(err error) error {
+	if err == nil {
+		return nil
+	}
+	for _, p := range permanent {
+		if errors.Is(err, p) {
+			return fmt.Errorf("%w: %w", broker.ErrPermanent, err)
+		}
+	}
+	if strings.Contains(err.Error(), "invalid record partitioning choice") {
+		return fmt.Errorf("%w: %w", broker.ErrPermanent, err)
+	}
+	return err
 }
 
 // Consume joins group. Offsets are never committed automatically: the

@@ -18,10 +18,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/broker/kafka"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/pipe"
@@ -215,7 +217,8 @@ func reloadOnHUP(ctx context.Context, f flags, tax *sigma.Taxonomy, slot *pipe.S
 	}
 }
 
-// topicSpecs mirrors deploy/docker-compose.yml.
+// topicSpecs mirrors deploy/docker-compose.yml. Every topic gets
+// max.message.bytes equal to the producer's batch limit.
 func topicSpecs(partitions int32) []kafka.TopicSpec {
 	week, month := "604800000", "2592000000"
 	specs := []kafka.TopicSpec{
@@ -227,6 +230,10 @@ func topicSpecs(partitions int32) []kafka.TopicSpec {
 	}
 	for i := range specs {
 		specs[i].Partitions, specs[i].Replication = partitions, 1
+		if specs[i].Configs == nil {
+			specs[i].Configs = map[string]string{}
+		}
+		specs[i].Configs["max.message.bytes"] = strconv.Itoa(broker.MaxMessageBytes)
 	}
 	return specs
 }

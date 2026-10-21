@@ -186,6 +186,7 @@ type gated struct {
 	mu       sync.Mutex
 	hold     chan struct{} // Produce blocks while this is open
 	failNext int
+	failWith error // the error an injected failure returns; nil means a transient one
 	calls    int
 	onCommit func(map[broker.TopicPartition]int64)
 }
@@ -198,6 +199,7 @@ func (g *gated) Produce(ctx context.Context, recs []broker.Record) error {
 	if fail {
 		g.failNext--
 	}
+	failWith := g.failWith
 	g.mu.Unlock()
 	if hold != nil {
 		select {
@@ -207,6 +209,9 @@ func (g *gated) Produce(ctx context.Context, recs []broker.Record) error {
 		}
 	}
 	if fail {
+		if failWith != nil {
+			return failWith
+		}
 		return fmt.Errorf("injected produce failure")
 	}
 	return g.Broker.Produce(ctx, recs)

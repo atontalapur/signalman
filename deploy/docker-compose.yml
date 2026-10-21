@@ -30,8 +30,11 @@ services:
 
   # Creates the pipeline topics, then stays up so `up --wait` can treat it as
   # healthy. Partition counts match across host_id-keyed topics so a host's
-  # events, norms, and drops share a partition number. Retention follows the
-  # spec: verdicts 7 days, drops 30 days.
+  # events, norms, and drops share a partition number; verdicts.v1 must have
+  # at least as many partitions as events.raw (signalmand checks at startup).
+  # Retention follows the spec: verdicts 7 days, drops 30 days.
+  # max.message.bytes is 1 MiB on every topic, equal to the producer's batch
+  # limit (broker.MaxMessageBytes); change both together.
   topics:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
     depends_on:
@@ -43,10 +46,10 @@ services:
         set -e
         rpk() { command rpk -X brokers=redpanda:9092 "$$@"; }
         for t in events.raw events.norm alerts; do
-          rpk topic create "$$t" -p 8 -r 1 || rpk topic describe "$$t" >/dev/null
+          rpk topic create "$$t" -p 8 -r 1 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
         done
-        rpk topic create verdicts.v1 -p 8 -r 1 -c retention.ms=604800000 || rpk topic describe verdicts.v1 >/dev/null
-        rpk topic create drops -p 8 -r 1 -c retention.ms=2592000000 || rpk topic describe drops >/dev/null
+        rpk topic create verdicts.v1 -p 8 -r 1 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe verdicts.v1 >/dev/null
+        rpk topic create drops -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe drops >/dev/null
         touch /tmp/ready
         exec sleep infinity
     healthcheck:

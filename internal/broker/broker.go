@@ -12,8 +12,29 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// MaxMessageBytes is max.message.bytes on every pipeline topic and the
+// producer's batch limit, so the client and the broker agree on what fits.
+// deploy/docker-compose.yml and signalmand -create-topics set it per topic.
+const MaxMessageBytes = 1 << 20
+
+// ErrPermanent is wrapped by a Produce error that will fail again on retry:
+// a record over the size limit, a topic or partition that does not exist.
+// Retrying it wedges every partition behind it, so callers stop instead.
+var ErrPermanent = errors.New("permanent produce error")
+
+// RecordSize is the part of a record that counts against MaxMessageBytes:
+// key, value, and headers. Framing adds a few dozen bytes on top.
+func RecordSize(r Record) int {
+	n := len(r.Key) + len(r.Value)
+	for _, h := range r.Headers {
+		n += len(h.Key) + len(h.Value)
+	}
+	return n
+}
 
 // AnyPartition on a produced record means "partition by key", which is how
 // every keyed topic is written. Any other value pins the record to that
@@ -83,7 +104,8 @@ type Broker interface {
 	// Produce writes recs and returns once every one is durable (acked by
 	// the broker with the configured acks). On error some records may have
 	// been written; callers that retry produce duplicates, never gaps.
-	// Within one partition, records are written in slice order.
+	// Within one partition, records are written in slice order. An error
+	// wrapping ErrPermanent will not succeed on retry.
 	Produce(ctx context.Context, recs []Record) error
 	// Consume joins group on topics and resumes from the group's committed
 	// offsets, or from the start of the log when the group has none.

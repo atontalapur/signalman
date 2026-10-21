@@ -23,6 +23,7 @@ type Memory struct {
 	groups  map[string]map[TopicPartition]int64
 	notify  chan struct{}
 	maxPoll int
+	maxRec  int
 	now     func() time.Time
 }
 
@@ -31,6 +32,10 @@ type MemoryOption func(*Memory)
 
 // WithMaxPoll caps how many records one Poll returns. The default is 500.
 func WithMaxPoll(n int) MemoryOption { return func(m *Memory) { m.maxPoll = n } }
+
+// WithMaxRecordBytes caps RecordSize for a produced record, standing in for
+// max.message.bytes. The default is MaxMessageBytes.
+func WithMaxRecordBytes(n int) MemoryOption { return func(m *Memory) { m.maxRec = n } }
 
 // WithClock sets the source of record timestamps.
 func WithClock(now func() time.Time) MemoryOption { return func(m *Memory) { m.now = now } }
@@ -42,6 +47,7 @@ func NewMemory(topics map[string]int32, opts ...MemoryOption) *Memory {
 		groups:  map[string]map[TopicPartition]int64{},
 		notify:  make(chan struct{}),
 		maxPoll: 500,
+		maxRec:  MaxMessageBytes,
 		now:     time.Now,
 	}
 	for t, n := range topics {
@@ -63,7 +69,8 @@ func keyPartition(key []byte, n int) int32 {
 }
 
 // Produce appends recs. It validates the whole slice before writing any of
-// it, so a bad record fails the call without a partial write.
+// it, so a bad record fails the call without a partial write. Every
+// validation failure wraps ErrPermanent, as it would fail again.
 func (m *Memory) Produce(ctx context.Context, recs []Record) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -74,14 +81,17 @@ func (m *Memory) Produce(ctx context.Context, recs []Record) error {
 	for i, r := range recs {
 		ps, ok := m.topics[r.Topic]
 		if !ok {
-			return fmt.Errorf("produce: unknown topic %q", r.Topic)
+			return fmt.Errorf("%w: produce: unknown topic %q", ErrPermanent, r.Topic)
 		}
 		p := r.Partition
 		if p == AnyPartition {
 			p = keyPartition(r.Key, len(ps))
 		}
 		if p < 0 || int(p) >= len(ps) {
-			return fmt.Errorf("produce: topic %q has no partition %d", r.Topic, r.Partition)
+			return fmt.Errorf("%w: produce: topic %q has no partition %d", ErrPermanent, r.Topic, r.Partition)
+		}
+		if n := RecordSize(r); n > m.maxRec {
+			return fmt.Errorf("%w: produce: %s record of %d bytes is over the %d byte limit", ErrPermanent, r.Topic, n, m.maxRec)
 		}
 		parts[i] = p
 	}
