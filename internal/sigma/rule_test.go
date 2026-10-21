@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp/syntax"
@@ -379,5 +380,98 @@ detection:
 	var synErr *syntax.Error
 	if !errors.As(lerr, &synErr) {
 		t.Fatalf("LoadError does not unwrap to *syntax.Error: %v", lerr)
+	}
+}
+
+// ruleSetFrom loads in-memory rule sources as one rule set, so a test can
+// vary a single line and compare versions.
+func ruleSetFrom(t *testing.T, tax *Taxonomy, srcs ...string) *RuleSet {
+	t.Helper()
+	rs := &RuleSet{TaxonomyV: tax.Version}
+	for i, src := range srcs {
+		r, lerr := LoadRuleBytes(fmt.Sprintf("r%d.yml", i), []byte(src), tax)
+		if lerr != nil {
+			t.Fatal(lerr)
+		}
+		rs.Rules = append(rs.Rules, *r)
+	}
+	rs.Version = ruleSetVersion(rs.Rules, tax.Version)
+	return rs
+}
+
+const vssRule = `title: t
+id: 00000000-0000-4000-8000-0000000000aa
+logsource:
+  product: windows
+  category: process_creation
+%s
+detection:
+  selection:
+    Image|endswith: '\vssadmin.exe'
+    CommandLine|contains|all:
+      - 'delete'
+      - 'shadows'
+  condition: selection
+`
+
+// A rule's logsource decides which events it can match and how its fields
+// are renamed. Two sets that differ only there give different verdicts, so
+// they must not share a RuleSetV.
+func TestRuleSetVersionTracksTheLogsource(t *testing.T) {
+	tax := loadTax(t)
+	sysmon := ruleSetFrom(t, tax, fmt.Sprintf(vssRule, ""))
+	security := ruleSetFrom(t, tax, fmt.Sprintf(vssRule, "  service: security"))
+	if sysmon.Version == security.Version {
+		t.Fatal("RuleSetV must change when a rule's logsource service changes")
+	}
+	again := ruleSetFrom(t, tax, fmt.Sprintf(vssRule, "  service: security"))
+	if again.Version != security.Version {
+		t.Fatal("identical rule sets must have identical RuleSetV")
+	}
+}
+
+// The renamed field is what the evaluator reads, so a different rename
+// result is a different rule even when everything else matches.
+func TestRuleSetVersionTracksTheRenamedField(t *testing.T) {
+	tax := loadTax(t)
+	rs := ruleSetFrom(t, tax, fmt.Sprintf(vssRule, "  service: security"))
+	r := rs.Rules[0]
+	renamed, _ := rename(r.Cond, map[string]string{"NewProcessName": "SomethingElse"})
+	moved := r
+	moved.Cond = renamed
+	if ruleSetVersion([]Rule{r}, tax.Version) == ruleSetVersion([]Rule{moved}, tax.Version) {
+		t.Fatal("RuleSetV must change when a predicate reads a different field")
+	}
+}
+
+// One value containing the display separator and two separate values
+// describe identically, but only the second matches "b" alone.
+func TestRuleSetVersionDoesNotCollideOnValueLists(t *testing.T) {
+	tax := loadTax(t)
+	src := `title: t
+id: 00000000-0000-4000-8000-0000000000ab
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image:
+%s
+  condition: selection
+`
+	one := ruleSetFrom(t, tax, fmt.Sprintf(src, `      - "a', 'b"`))
+	two := ruleSetFrom(t, tax, fmt.Sprintf(src, "      - a\n      - b"))
+	if one.Version == two.Version {
+		t.Fatal("RuleSetV collided on a value list")
+	}
+}
+
+func TestRuleSetVersionIgnoresFileOrder(t *testing.T) {
+	tax := loadTax(t)
+	paths := []string{"testdata/rules/proc_dump.yml", "testdata/rules/list_condition.yml"}
+	a, _ := LoadRuleFiles(paths, tax)
+	b, _ := LoadRuleFiles([]string{paths[1], paths[0]}, tax)
+	if a.Version != b.Version {
+		t.Fatal("RuleSetV must not depend on the order files were listed in")
 	}
 }
