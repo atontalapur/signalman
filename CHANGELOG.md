@@ -3,6 +3,45 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.14.0] - 2026-10-21
+
+### Added
+
+- The rest of the spec's core metrics: `signalman_rule_eval_seconds`
+  (sampled per rule with `-rule-eval-every`, exemplars off),
+  `signalman_event_staleness_seconds`, and `signalman_canary_age_seconds`.
+  The two age gauges are computed at scrape time and kept separate from
+  consumer lag. A test parses the spec's metrics table and holds the
+  registered set, types, and labels to it.
+- A canary generator in `signalmand` that writes one synthetic event to
+  every `events.raw` partition every `-canary-interval` (30s), and
+  `rules/signalman_canary.yml`, which turns it into an alert that resets
+  the partition's canary age. Canary events are left out of staleness.
+- `deploy/prometheus` (scrape config, alert rules, promtool tests) and
+  `deploy/grafana` (provisioned dashboard), in the compose stack.
+  `SignalmanCanaryStalled` and `SignalmanCanaryAbsent` page;
+  `SignalmanCanaryStalled` fires at over 50s for 30s, so a dead consumer
+  pages within two minutes. `SignalmanRuleWentSilent` files a ticket.
+- `signalman_event_time_future_total`, counting durable events whose event
+  time is ahead of the clock.
+- An `alerts` CI job that installs promtool 3.5.0 from the official release
+  tarball, checks it against a pinned sha256, and runs `make check-alerts`.
+
+### Changed
+
+- The engine slot exports every loaded rule's `signalman_rule_matches_total`
+  series at zero and deletes the series of a rule a reload removes, so a
+  rule silenced by a taxonomy change still has a series for the silence
+  alert to compare.
+- `make check-alerts` fails when promtool is missing and `CI=true`.
+
+### Fixed
+
+- An event time in the future pinned a partition's staleness at zero until
+  the wall clock caught up with it. Staleness now advances to the earlier
+  of the event time and now.
+- The promtool alert tests never ran in CI.
+
 ## [0.13.0] - 2026-10-21
 
 ### Added
