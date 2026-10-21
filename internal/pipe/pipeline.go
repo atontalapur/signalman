@@ -425,9 +425,14 @@ func (p *Pipeline) count(b *batch) {
 // is now durable, and resets the canary age of every partition whose canary
 // alert is in it. Drops carry no trustworthy event time and are skipped,
 // and so are canary events: they arrive every 30 seconds whatever the
-// upstream is doing, and would hide an upstream that stopped.
+// upstream is doing, and would hide an upstream that stopped. An event time
+// ahead of the metrics clock counts as now and is counted in
+// signalman_event_time_future_total; the event and its verdicts are
+// untouched, since the clock is the metric's and never the engine's.
 func (p *Pipeline) stale(b *batch) {
+	now := p.m.Staleness.Now()
 	newest := map[int32]time.Time{}
+	future := map[int32]int{}
 	for _, it := range b.items {
 		if it.Drop != nil {
 			continue
@@ -441,12 +446,20 @@ func (p *Pipeline) stale(b *batch) {
 			}
 			continue
 		}
-		if it.Event.EventTime.After(newest[part]) {
-			newest[part] = it.Event.EventTime
+		t := it.Event.EventTime
+		if t.After(now) {
+			future[part]++
+			t = now
+		}
+		if t.After(newest[part]) {
+			newest[part] = t
 		}
 	}
 	for part, t := range newest {
 		p.m.Staleness.Advance(part, t)
+	}
+	for part, n := range future {
+		p.m.EventTimeFuture.WithLabelValues(strconv.Itoa(int(part))).Add(float64(n))
 	}
 }
 

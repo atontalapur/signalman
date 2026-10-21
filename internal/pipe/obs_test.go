@@ -108,3 +108,40 @@ func TestRuleEvalSamplingOffByDefault(t *testing.T) {
 		t.Fatalf("%d rule_eval series with sampling off", got)
 	}
 }
+
+// An event time ahead of the metrics clock advances staleness only to now
+// and is counted. Without the clamp one bad clock upstream would pin the
+// partition's staleness at zero until the wall clock reached that time.
+func TestFutureEventTimeIsClampedForStalenessAndCounted(t *testing.T) {
+	now := time.UnixMilli(1790000000000)
+	mem := newMemory(broker.WithMaxPoll(10))
+	r := newRigClock(t, mem, mem, func() time.Time { return now })
+	b, _ := json.Marshal(map[string]any{
+		"Channel":     "Microsoft-Windows-Sysmon/Operational",
+		"event_id":    1,
+		"Image":       `C:\Windows\System32\cmd.exe`,
+		"CommandLine": "cmd.exe /c whoami",
+		"event_time":  now.Add(24 * time.Hour).UnixMilli(),
+	})
+	if err := mem.Produce(t.Context(), []broker.Record{rawRecord("host-future", "sysmon", string(b))}); err != nil {
+		t.Fatal(err)
+	}
+	runUntilCommitted(t, newPipeline(t, r, testConfig()), mem)
+
+	norm := readAll(t, mem, TopicEventsNorm)
+	if len(norm) != 1 {
+		t.Fatalf("%d normalized events, want 1", len(norm))
+	}
+	var n NormEvent
+	if err := json.Unmarshal(norm[0].Value, &n); err != nil {
+		t.Fatal(err)
+	}
+	p := n.Partition
+	now = now.Add(3 * time.Minute)
+	if got, ok := r.m.Staleness.Age(p); !ok || got != 3*time.Minute {
+		t.Fatalf("partition %d staleness %v (tracked %v) three minutes after a future event, want 3m", p, got, ok)
+	}
+	if got := testutil.ToFloat64(r.m.EventTimeFuture.WithLabelValues(itoa(p))); got != 1 {
+		t.Fatalf("future event time counter %v, want 1", got)
+	}
+}

@@ -288,6 +288,7 @@ the registered set, types, or labels differ from it.
 | `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | counter | partition | the audit; not in the spec table |
 | `signalman_canary_injected_total` | counter | partition | the canary generator, per record written; not in the spec table |
+| `signalman_event_time_future_total` | counter | partition | sink, per durable event whose event time is ahead of the clock; not in the spec table |
 | `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
 
 `signalman_rule_eval_seconds` is sampled: on events whose Seq is a multiple
@@ -302,8 +303,12 @@ committed. Staleness is `now() - max(event_time)` over events whose batch is
 durable, per partition, computed when Prometheus scrapes, so it keeps rising
 while nothing arrives. An upstream that stops producing leaves lag at zero
 and staleness climbing; only staleness sees it. Canary events are left out
-of staleness, or the canary would keep it fresh. The wall clock is read
-only by the metric, never by anything a verdict depends on.
+of staleness, or the canary would keep it fresh. An event time ahead of
+the clock counts as now and increments `signalman_event_time_future_total`:
+taken as is, one event from a host whose clock runs a day fast would hold
+staleness at zero for that day. The event and its verdicts keep the time
+it carried. The wall clock is read only by the metric, never by anything a
+verdict depends on.
 
 ## Canary
 

@@ -36,6 +36,10 @@ type Metrics struct {
 	// staleness catches an upstream that stopped producing, which leaves
 	// lag at zero. Labels: partition.
 	Staleness *AgeGauge
+	// EventTimeFuture counts durable events whose event_time was ahead of
+	// the metrics clock. Staleness advances to now for them, not to their
+	// time. Not in the spec's table. Labels: partition.
+	EventTimeFuture *prometheus.CounterVec
 	// CanaryAge is the time since the last canary alert reached the sink
 	// on each partition. Labels: partition.
 	CanaryAge *AgeGauge
@@ -100,6 +104,10 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 		}, []string{"rule_id"}),
 		Staleness: newAgeGauge("signalman_event_staleness_seconds",
 			"Seconds between now and the newest event time processed on the partition.", now),
+		EventTimeFuture: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_event_time_future_total",
+			Help: "Durable events whose event time was ahead of the clock; staleness used now for them.",
+		}, []string{"partition"}),
 		CanaryAge: newAgeGauge("signalman_canary_age_seconds",
 			"Seconds since the last canary alert on the partition reached the sink.", now),
 		CanaryInjected: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -126,5 +134,5 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 // Collectors is every collector New registers.
 func (m *Metrics) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
-		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.CanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations, m.SinkDeadLetters}
+		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.EventTimeFuture, m.CanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations, m.SinkDeadLetters}
 }

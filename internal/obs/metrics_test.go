@@ -66,6 +66,10 @@ var extras = map[string]specMetric{
 	// cannot hold them (Plan D); any increase is an alert stored nowhere
 	// queryable.
 	"signalman_sink_dead_letters_total": {typ: "counter"},
+	// Events whose event_time was ahead of the metrics clock and was clamped
+	// to now for staleness (Plan E); a rising count is an upstream clock or
+	// a parser that is wrong, and staleness cannot see it otherwise.
+	"signalman_event_time_future_total": {typ: "counter", labels: []string{"partition"}},
 }
 
 // touch gives every vector one child, so Gather reports it.
@@ -83,6 +87,7 @@ func touch(m *Metrics) {
 	m.RuleSetVersion.WithLabelValues("rs", "tx").Set(1)
 	m.AuditViolations.WithLabelValues("0").Inc()
 	m.SinkDeadLetters.Inc()
+	m.EventTimeFuture.WithLabelValues("0").Inc()
 }
 
 func typeName(t dto.MetricType) string {
@@ -206,9 +211,20 @@ func TestStalenessClimbsBetweenScrapesAndTracksTheNewestEventTime(t *testing.T) 
 		t.Fatalf("staleness %v after 45s of silence, want 55", v)
 	}
 	// An event time in the future reads as zero, never negative.
-	m.Staleness.Advance(3, now.Add(time.Hour))
+	if !m.Staleness.Advance(3, now.Add(time.Hour)) {
+		t.Fatal("Advance did not report clamping a future event time")
+	}
 	if v, _ := gaugeValue(t, reg, "signalman_event_staleness_seconds", "3"); v != 0 {
 		t.Fatalf("staleness %v for a future event time, want 0", v)
+	}
+	// It is clamped to now, so staleness climbs again from there instead of
+	// sitting at zero until the wall clock catches up with the bad time.
+	now = now.Add(2 * time.Minute)
+	if v, _ := gaugeValue(t, reg, "signalman_event_staleness_seconds", "3"); v != 120 {
+		t.Fatalf("staleness %v two minutes after a future event time, want 120", v)
+	}
+	if m.Staleness.Advance(3, now.Add(-time.Second)) {
+		t.Fatal("Advance reported clamping a past event time")
 	}
 }
 
