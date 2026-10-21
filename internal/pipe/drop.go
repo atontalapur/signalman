@@ -35,6 +35,10 @@ const (
 	ReasonDuplicateField = "duplicate-field"
 	// ReasonMissingSource: the record has no source header.
 	ReasonMissingSource = "missing-source"
+	// ReasonUnknownSource: the source header is not one of Sources, which
+	// includes a header that is not valid UTF-8. The detail quotes a prefix
+	// of it with Go escapes, so the bytes survive the JSON entry.
+	ReasonUnknownSource = "unknown-source"
 	// ReasonEventTime: the event time field is absent or unparseable. Event
 	// time comes from the record, never the wall clock, so there is nothing
 	// to fall back on.

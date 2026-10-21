@@ -38,11 +38,7 @@ func NewIngest(m *obs.Metrics) *Ingest { return &Ingest{m: m} }
 // holds, it is now admitted, and leaves as verdicts or as a drop.
 func (in *Ingest) Admit(r broker.Record) *Item {
 	src := string(r.Header(HeaderSource))
-	label := src
-	if label == "" {
-		label = SourceUnknown
-	}
-	in.m.EventsIngested.WithLabelValues(label, strconv.Itoa(int(r.Partition))).Inc()
+	in.m.EventsIngested.WithLabelValues(sourceLabel(src), strconv.Itoa(int(r.Partition))).Inc()
 	return &Item{
 		Rec:    r,
 		HostID: string(r.Key),

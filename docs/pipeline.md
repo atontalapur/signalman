@@ -17,7 +17,7 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 
 | Topic | Key | Body |
 |---|---|---|
-| `events.raw` | host_id | the untouched source record; header `source` names the source |
+| `events.raw` | host_id | the untouched source record; header `source` names the source, one of `pipe.Sources` |
 | `events.norm` | host_id | `NormEvent`: seq, partition, host_id, source, event_time, ingest_at, typed fields, raw |
 | `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions |
 | `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table |
@@ -61,6 +61,7 @@ property of the record's bytes; overload never drops.
 | `nested-value` | a list holding a list or object, or objects nested deeper than 8 |
 | `duplicate-field` | a key appears twice, literally or after taxonomy renaming |
 | `missing-source` | no `source` header |
+| `unknown-source` | the `source` header is not `auditd`, `cloudtrail`, or `sysmon` (`pipe.Sources`), including one that is not valid UTF-8; the detail quotes its first 64 bytes |
 | `event-time` | event time absent or unparseable |
 | `panic` | the normalizer panicked on this record; the partition moves on |
 | `record-too-large` | key, value, and headers together over 128 KiB; the entry keeps a 16 KiB prefix of the raw bytes (`truncated: true`, `raw_bytes` is the full length) |
@@ -193,6 +194,11 @@ Names from the spec's core metrics table, in `internal/obs`.
 | `signalman_consumer_lag_records` | topic, partition | log end offset minus committed offset |
 | `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | partition | the audit; not in the spec table |
+
+A `source` label is never the raw header: it is the header when it is one of
+`pipe.Sources`, `unknown` when the header is missing, and `other` otherwise.
+The header is producer-controlled, and as a label a non-UTF-8 value panics
+the Prometheus client and any value adds a series.
 
 Not yet exported: `signalman_rule_eval_seconds`,
 `signalman_event_staleness_seconds`, `signalman_canary_age_seconds`. Those are

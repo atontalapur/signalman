@@ -102,6 +102,10 @@ func (n *Normalizer) Normalize(it *Item) {
 		n.drop(it, ReasonMissingSource, "no "+HeaderSource+" header")
 		return
 	}
+	if !knownSource(it.Event.Source) {
+		n.drop(it, ReasonUnknownSource, fmt.Sprintf("%s %q is not one of %s", HeaderSource, cut(it.Event.Source, 64), strings.Join(Sources, ", ")))
+		return
+	}
 	fields, d := n.decode(it.Event.Raw)
 	if d != nil {
 		n.drop(it, d.Reason, d.Detail)
@@ -118,11 +122,7 @@ func (n *Normalizer) Normalize(it *Item) {
 
 func (n *Normalizer) drop(it *Item, reason, detail string) {
 	it.Drop = &Drop{Reason: reason, Detail: detail}
-	src := it.Event.Source
-	if src == "" {
-		src = SourceUnknown
-	}
-	n.m.EventsDropped.WithLabelValues(reason, src).Inc()
+	n.m.EventsDropped.WithLabelValues(reason, sourceLabel(it.Event.Source)).Inc()
 }
 
 func eventTime(v event.Value) (time.Time, error) {
