@@ -71,6 +71,8 @@ services:
         hard: 262144
     volumes:
       - clickhouse:/var/lib/clickhouse
+      # Creates signalman.alerts on first start (empty volume only).
+      - ./clickhouse:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
       interval: 2s

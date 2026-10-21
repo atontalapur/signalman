@@ -12,6 +12,14 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P4
 **Depends on:** Plan A Task 13
 
+### Reject rules the alert table cannot store
+**What:** The rule loader accepts any `id` and any `level` (including none), but the ClickHouse `alerts` table types `rule_id` as UUID and `severity` as an Enum8 of the five Sigma levels. An alert from such a rule stops `signalman-sink` at that record (`chsink.Decode`).
+**Why:** Stopping is correct for the sink (skipping would be silent loss), but the place to catch it is load time, where the error names the file and line, not a halted sink in production.
+**Context:** Options: a load error code for a non-UUID id or a missing or unknown level, or a lint warning in `signalman lint` only. A new code is a `docs/rule-loading.md` and `docs/corpus-acceptance.md` change too. Every rule in `rules/` already has a UUID id and a valid level.
+**Effort:** S
+**Priority:** P2
+**Depends on:** SIG-31
+
 ### Revisit the event.Value layout
 **What:** `event.Value` is 64 bytes with every payload slot present. Options from the SIG-13 review: fold `I` and `B` into one slot, move `L` behind a pointer.
 **Why:** The allocation half of the original entry is settled. v2 (SIG-40) never calls `Value.Text` on its hot path: each field is folded once per event with `match.AppendFold` and `strconv.AppendInt` into a reused arena, and the common wildcard shapes compare bytes (`match.Folded`). v2 is at 0 allocs/event on the corpus (`docs/results.md`). What is left is size, which costs copies and cache, not allocations.

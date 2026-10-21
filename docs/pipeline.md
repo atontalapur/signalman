@@ -2,7 +2,8 @@
 
 How `signalmand` moves an event from `events.raw` to verdicts, alerts, or
 the drop ledger, and how it proves none went missing. Code lives in
-`internal/pipe`, `internal/broker`, and `internal/obs`.
+`internal/pipe`, `internal/broker`, and `internal/obs`; the ClickHouse alert
+sink is `internal/pipe/chsink`.
 
 ```
 events.raw -> ingest -> normalize -> match (Slot: v1) -> sink -> events.norm, verdicts.v1, alerts, drops
@@ -93,6 +94,48 @@ that are stated by the operator, never derived from the machine. At most
 input fills, the workers block, the batch queue fills, and ingest stops
 polling. Consumer lag grows; nothing is dropped. The number of records
 admitted but not yet committed is bounded by `(inflight + 2) x max-poll`.
+
+## Alert sink: alerts to ClickHouse
+
+`signalman-sink` (`internal/pipe/chsink`) consumes `alerts` as its own
+consumer group and inserts into the `alerts` table from the spec, defined in
+`deploy/clickhouse/001_alerts.sql`. It runs as a separate process from
+`signalmand` so a ClickHouse outage stops alert storage and nothing else:
+detection keeps writing to Redpanda, and the backlog waits in the topic.
+
+- **Batches.** Rows are buffered until `-batch-rows` (5000) or until
+  `-flush-interval` (1s) after the first one, then sent as one INSERT.
+  ClickHouse writes a part per insert, so few large inserts beat many small
+  ones. The buffer never holds more than `batch-rows + max-poll` rows.
+- **Commit after insert.** Offsets are committed only after the INSERT
+  returns. A crash between the two redelivers the batch. A redelivered alert
+  is an exact copy (same partition, seq, rule_id, and event_time, so the
+  same PARTITION BY day), and the ReplacingMergeTree collapses the copies
+  when parts merge. Until a merge runs the copies are visible: read with
+  `FINAL`, or `OPTIMIZE TABLE alerts FINAL`, to see the collapsed table. A
+  failed commit is logged, not retried, as in the pipeline.
+- **Outage.** A failed insert is retried with the same rows, backing off
+  from 100ms to 5s, and nothing is polled meanwhile. The outage surfaces as
+  `signalman_consumer_lag_records{topic="alerts"}` on the sink's `/metrics`
+  (`:9465`), growing until ClickHouse returns, bounded by the topic's
+  retention. Nothing is dropped. signalmand itself is not slowed: the
+  acceptance line "the sink backpressures the pipeline" holds for the
+  alerts consumer, whose lag is the backpressure, not for detection.
+- **Records the table cannot hold.** The rule loader accepts any rule id
+  and any level, but the table's `rule_id` is a UUID and `severity` is an
+  Enum8 of the five Sigma levels. A record that would fail every insert of
+  its batch stops the sink with its topic, partition, and offset, and
+  nothing in that batch is committed. Skipping it would be silent loss;
+  stopping is lag an operator can see and fix.
+
+Idempotence is tested twice. `TestReingestingABatchChangesNoRow` models the
+merge (last insert wins per sorting key, within a day partition) and checks
+over 500 random histories that inserting a batch again, whole or as a
+prefix, changes no row of `FINAL` or of the merged table.
+`TestReingestCollapsesInClickHouse` (build tag `integration`, needs
+`SIGNALMAN_CLICKHOUSE_DSN`) does the same against a real ClickHouse with
+`SELECT ... FINAL` and `OPTIMIZE TABLE ... FINAL`. It has not been run yet:
+there is no Docker on the development machine.
 
 ## Rule set reload
 
