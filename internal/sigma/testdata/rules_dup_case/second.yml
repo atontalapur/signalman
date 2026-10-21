@@ -1,0 +1,10 @@
+title: Upper-case claim on the same id
+id: 1F1A1F1A-000A-4000-8000-00000000000A
+level: low
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\powershell.exe'
+  condition: selection

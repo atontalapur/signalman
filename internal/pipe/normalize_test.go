@@ -139,6 +139,8 @@ func TestNormalizeDropReasons(t *testing.T) {
 		{"duplicate key", "sysmon", `{"event_time":1,"a":1,"a":2}`, ReasonDuplicateField},
 		{"duplicate after mapping", "sysmon", `{"event_time":1,"channel":"x","Channel":"y"}`, ReasonDuplicateField},
 		{"no source", "", `{"event_time":1}`, ReasonMissingSource},
+		{"unknown source", "winlog", `{"event_time":1}`, ReasonUnknownSource},
+		{"source not utf8", "sys\xffmon", `{"event_time":1}`, ReasonUnknownSource},
 		{"no event time", "sysmon", `{"a":1}`, ReasonEventTime},
 		{"bad event time", "sysmon", `{"event_time":"yesterday"}`, ReasonEventTime},
 	}
@@ -156,10 +158,7 @@ func TestNormalizeDropReasons(t *testing.T) {
 			if !bytes.Equal(it.Event.Raw, []byte(c.body)) {
 				t.Fatal("a drop keeps the raw bytes untouched")
 			}
-			src := c.source
-			if src == "" {
-				src = SourceUnknown
-			}
+			src := sourceLabel(c.source)
 			if got := testutil.ToFloat64(m.EventsDropped.WithLabelValues(c.reason, src)); got != 1 {
 				t.Fatalf("signalman_events_dropped_total{reason=%q,source=%q} = %v", c.reason, src, got)
 			}
