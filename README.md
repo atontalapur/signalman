@@ -57,7 +57,9 @@ signalman noise   rules/proc_dump.yml --corpus dir   # matches per 100k, ten sam
 Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
 are 0 for pass, 1 for a failed check, 2 when the command could not run.
 A corpus is a directory of `.ndjson` or `.jsonl` files, one JSON event per
-line, with field names as they appear after the taxonomy. A rule may
+line, with field names as they appear after the taxonomy. An event with a
+key given twice in one object is rejected, and an empty object `{}` adds no
+fields. A fixture file is one YAML document. A rule may
 declare `budget:` in matches per 100k events; noise exits 1 above it.
 
 | Plan | What it delivers | State |

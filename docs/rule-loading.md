@@ -79,7 +79,10 @@ count shows up in the acceptance report.
 loaded rules by id, and hashes the result. `<rule>.test.yml` fixture files
 sit beside their rules and are skipped by the walk (`sigma.IsFixture`).
 `LoadRuleFiles(paths, tax)` does the same for an explicit list of files,
-which is what the `signalman` CLI hands it. The hash covers:
+which is what the `signalman` CLI hands it. `RuleFiles` builds that list
+and dedupes on the absolute path, so one file named both relative and
+absolute loads once instead of reporting a false `duplicate-id`. The hash
+covers:
 
 - each rule's id, and
 - `ast.Canonical` of its bound tree, and
