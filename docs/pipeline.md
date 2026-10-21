@@ -152,6 +152,7 @@ the registered set, types, or labels differ from it.
 | `signalman_canary_age_seconds` | gauge | partition | seconds since the last canary alert was durable, at scrape |
 | `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | counter | partition | the audit; not in the spec table |
+| `signalman_canary_injected_total` | counter | partition | the canary generator, per record written; not in the spec table |
 
 `signalman_rule_eval_seconds` is sampled: on events whose Seq is a multiple
 of `-rule-eval-every` (default 100, 0 turns it off), a match worker times
@@ -164,8 +165,43 @@ Lag and staleness are separate. Lag is records in `events.raw` not yet
 committed. Staleness is `now() - max(event_time)` over events whose batch is
 durable, per partition, computed when Prometheus scrapes, so it keeps rising
 while nothing arrives. An upstream that stops producing leaves lag at zero
-and staleness climbing; only staleness sees it. The wall clock is read only
-by the metric, never by anything a verdict depends on.
+and staleness climbing; only staleness sees it. Canary events are left out
+of staleness, or the canary would keep it fresh. The wall clock is read
+only by the metric, never by anything a verdict depends on.
+
+## Canary
+
+`pipe.Canary` writes one synthetic event to every `events.raw` partition
+every `-canary-interval` (default 30s; 0 turns it off), pinned to the
+partition, keyed `signalman-canary`, source `sysmon`. The event matches one
+rule, `rules/signalman_canary.yml`, and nothing else in `rules/`. The rule
+loads and is evaluated like any other, so the canary takes the same path as
+a real detection: normalize, the engine slot, the sink. When a batch holding
+a canary alert is durable, the sink resets that partition's
+`signalman_canary_age_seconds`. When no alert arrives, the gauge climbs,
+because it is computed at scrape time from the last reset.
+
+The generator starts a partition's age the first time it injects there, so
+a consumer that never comes up pages too. signalmand refuses to start, or
+to reload, a rule directory without the canary rule while the canary is
+on, since that would page for a healthy pipeline.
+
+The canary event carries the generator's clock as its `event_time`. That
+is data in the event, like any event time, not a clock the engine reads, so
+verdicts stay a pure function of the event and the rule set. The generator
+only produces; it buffers nothing, and a failed injection is logged and
+left for the next tick.
+
+`deploy/prometheus/alerts/absence.yml` pages on two conditions.
+`SignalmanCanaryStalled` fires when a partition's age is over 50s for 30s.
+The spec writes it as `> 120` for `2m`, which pages three to four and a
+half minutes after a consumer dies and misses the two-minute target; the
+file has the budget (50s + one scrape + one evaluation + 30s = 110s worst
+case). `SignalmanCanaryAbsent` covers the case the age cannot: when
+signalmand itself is gone, the gauge goes with it.
+`TestCanaryStallPagesWithinTwoMinutes` runs the pipeline and the generator
+on the in-memory broker with a fake clock, kills the consumer, and evaluates
+the rule as written in the file against the gauge every scrape interval.
 
 `deploy/prometheus/` holds the scrape config and alert rules, with promtool
 unit tests in `alerts_test.yml` (`make check-alerts`).

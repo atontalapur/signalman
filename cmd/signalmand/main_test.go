@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/atontalapur/signalman/internal/sigma"
 )
@@ -28,10 +29,10 @@ func TestStrictLoadRefusesRejections(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	// This directory holds an aggregation rule and an unmapped logsource.
 	dir := "../../internal/sigma/testdata/rules"
-	if _, err := loadRules(dir, tax, true, log); err == nil {
+	if _, err := loadRules(dir, tax, true, false, log); err == nil {
 		t.Fatal("-strict must refuse a rule set with rejections")
 	}
-	rs, err := loadRules(dir, tax, false, log)
+	rs, err := loadRules(dir, tax, false, false, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,5 +50,29 @@ func TestTopicSpecsCoverEveryPipelineTopic(t *testing.T) {
 		if s.Partitions != 8 || s.Replication != 1 {
 			t.Fatalf("spec %+v", s)
 		}
+	}
+}
+
+func TestCanaryNeedsItsRule(t *testing.T) {
+	tax, err := sigma.LoadTaxonomy("../../config/taxonomy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.DiscardHandler)
+	if _, err := loadRules("../../internal/engine/v1/testdata/rules", tax, true, true, log); err == nil {
+		t.Fatal("a rule set without signalman-canary must be refused while the canary is on")
+	}
+	if _, err := loadRules("../../internal/engine/v1/testdata/rules", tax, true, false, log); err != nil {
+		t.Fatalf("canary off: %v", err)
+	}
+	if _, err := loadRules("../../rules", tax, true, true, log); err != nil {
+		t.Fatalf("shipped rules carry the canary: %v", err)
+	}
+	f, err := parseFlags([]string{"-rules", "r"})
+	if err != nil || f.canaryInterval != 30*time.Second {
+		t.Fatalf("default canary interval %v, err %v", f.canaryInterval, err)
+	}
+	if _, err := parseFlags([]string{"-rules", "r", "-canary-interval", "-1s"}); err == nil {
+		t.Fatal("negative interval accepted")
 	}
 }

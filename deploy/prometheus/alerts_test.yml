@@ -5,6 +5,7 @@
 # `make check-alerts` runs this when promtool is on PATH.
 rule_files:
   - alerts/pipeline.yml
+  - alerts/absence.yml
 
 evaluation_interval: 15s
 
@@ -29,3 +30,60 @@ tests:
             exp_annotations:
               summary: "Invariant 1 audit failed on partition 2"
               runbook: "An admitted event has no verdicts and no drop, both, or too few verdicts. Find the window in signalmand's error log; assume detections were missed on that partition until proven otherwise."
+
+  # Partition 1 is healthy: its canary age saws between 0 and 15s. Partition
+  # 0 is healthy until 2m, then its consumer dies at 2m and the age climbs
+  # 15s per scrape. Worst case in absence.yml is 110s; here the last reset
+  # is at the kill, so the age passes 50 at 2m50s (pending at 3m), and the
+  # page fires at 3m30s, 90s after the kill.
+  - interval: 15s
+    input_series:
+      - series: 'signalman_canary_age_seconds{partition="1"}'
+        values: '0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15'
+      - series: 'signalman_canary_age_seconds{partition="0"}'
+        values: '0 15 0 15 0 15 0 15 0 15+15x17'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: SignalmanCanaryStalled
+        exp_alerts: []
+      - eval_time: 3m15s
+        alertname: SignalmanCanaryStalled
+        exp_alerts: []
+      - eval_time: 3m30s
+        alertname: SignalmanCanaryStalled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              partition: "0"
+            exp_annotations:
+              summary: "No canary alert on partition 0 for 2m"
+              runbook: "Pipeline is not producing detections. Check staleness, then the taxonomy version, then broker health. Assume detections are being missed until proven otherwise."
+      - eval_time: 3m30s
+        alertname: SignalmanCanaryAbsent
+        exp_alerts: []
+
+  # The daemon dies after the 1m scrape. The 1m15s scrape fails and writes
+  # stale markers, so the gauge disappears, which the age rule cannot see.
+  # Absent from 1m15s, paging 30s later.
+  - interval: 15s
+    input_series:
+      - series: 'signalman_canary_age_seconds{partition="0"}'
+        values: '0 15 0 15 0 stale'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SignalmanCanaryAbsent
+        exp_alerts: []
+      - eval_time: 1m30s
+        alertname: SignalmanCanaryAbsent
+        exp_alerts: []
+      - eval_time: 1m45s
+        alertname: SignalmanCanaryAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "signalmand exports no canary age: the daemon is down or the canary is off"
+              runbook: "Pipeline is not producing detections, or nothing is checking. Check that signalmand is running and that -canary-interval is not 0."
+      - eval_time: 1m45s
+        alertname: SignalmanCanaryStalled
+        exp_alerts: []

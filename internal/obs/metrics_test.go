@@ -59,6 +59,9 @@ func coreMetricsTable(t *testing.T) map[string]specMetric {
 var extras = map[string]specMetric{
 	// The invariant 1 audit's output (Plan C); any increase is a P1.
 	"signalman_audit_violations_total": {typ: "counter", labels: []string{"partition"}},
+	// How many canary records the generator wrote, so a stalled canary can
+	// be told apart from a generator that stopped (Plan E, S-51).
+	"signalman_canary_injected_total": {typ: "counter", labels: []string{"partition"}},
 }
 
 // touch gives every vector one child, so Gather reports it.
@@ -72,6 +75,7 @@ func touch(m *Metrics) {
 	m.ConsumerLag.WithLabelValues("events.raw", "0").Set(1)
 	m.Staleness.Advance(0, time.Unix(0, 0))
 	m.CanaryAge.Start(0)
+	m.CanaryInjected.WithLabelValues("0").Inc()
 	m.RuleSetVersion.WithLabelValues("rs", "tx").Set(1)
 	m.AuditViolations.WithLabelValues("0").Inc()
 }

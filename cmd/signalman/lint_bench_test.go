@@ -14,7 +14,7 @@ func TestLintPassesTheShippedRules(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("code %d\n%s%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "20 rules, 20 loaded, 0 rejected") {
+	if !strings.Contains(stdout, "21 rules, 21 loaded, 0 rejected") {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
 }
@@ -74,7 +74,7 @@ func TestBenchReportsP99PerRule(t *testing.T) {
 	if !strings.Contains(stdout, "p99") || !strings.Contains(stdout, "rules/proc_dump.yml") {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "20 rules, 0 over the 1h0m0s p99 budget, 56 events") {
+	if !strings.Contains(stdout, "21 rules, 0 over the 1h0m0s p99 budget, 60 events") {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
 }

@@ -310,7 +310,7 @@ func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-cha
 			return err
 		}
 		p.count(b)
-		p.stale(b)
+		p.stale(b) // after write: an age resets only for an alert that is durable
 		p.commit(ctx, cons, b)
 	}
 }
@@ -364,12 +364,27 @@ func (p *Pipeline) count(b *batch) {
 }
 
 // stale advances event staleness to the newest event time in a batch that
-// is now durable. Drops carry no trustworthy event time and are skipped.
+// is now durable, and resets the canary age of every partition whose canary
+// alert is in it. Drops carry no trustworthy event time and are skipped,
+// and so are canary events: they arrive every 30 seconds whatever the
+// upstream is doing, and would hide an upstream that stopped.
 func (p *Pipeline) stale(b *batch) {
 	newest := map[int32]time.Time{}
 	for _, it := range b.items {
-		if it.Drop == nil && it.Event.EventTime.After(newest[it.Event.Partition]) {
-			newest[it.Event.Partition] = it.Event.EventTime
+		if it.Drop != nil {
+			continue
+		}
+		part := it.Event.Partition
+		if it.HostID == CanaryHostID {
+			for _, v := range it.Verdicts {
+				if v.Matched && v.RuleID == CanaryRuleID {
+					p.m.CanaryAge.Reset(part)
+				}
+			}
+			continue
+		}
+		if it.Event.EventTime.After(newest[part]) {
+			newest[part] = it.Event.EventTime
 		}
 	}
 	for part, t := range newest {

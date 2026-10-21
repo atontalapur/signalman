@@ -2,7 +2,9 @@
 // Redpanda, normalizes each record through the taxonomy, evaluates it with
 // the v1 engine, and writes events.norm, verdicts.v1, alerts, and drops. An
 // in-process audit checks invariant 1 against those topics as offsets are
-// committed.
+// committed, and a canary generator writes a synthetic event to every
+// events.raw partition every -canary-interval, which the signalman-canary
+// rule must turn into an alert.
 //
 // SIGHUP reloads the rule directory. The new rule set applies from the next
 // batch on; a batch in flight finishes under the rules it started with. A
@@ -54,6 +56,7 @@ type flags struct {
 	auditInterval    time.Duration
 	auditWindow      int64
 	ruleEvalEvery    int
+	canaryInterval   time.Duration
 }
 
 func parseFlags(args []string) (flags, error) {
@@ -78,8 +81,12 @@ func parseFlags(args []string) (flags, error) {
 	fs.DurationVar(&f.auditInterval, "audit-interval", 10*time.Second, "how often the invariant 1 audit runs; 0 disables it")
 	fs.Int64Var(&f.auditWindow, "audit-window", 10000, "widest seq range the audit checks at once")
 	fs.IntVar(&f.ruleEvalEvery, "rule-eval-every", 100, "time every rule on events whose seq is a multiple of this, for signalman_rule_eval_seconds; 0 disables")
+	fs.DurationVar(&f.canaryInterval, "canary-interval", 30*time.Second, "how often a canary event is written to every events.raw partition; 0 disables the canary")
 	if err := fs.Parse(args); err != nil {
 		return f, err
+	}
+	if f.canaryInterval < 0 {
+		return f, errors.New("-canary-interval must not be negative")
 	}
 	if f.rules == "" {
 		return f, errors.New("-rules is required")
@@ -106,7 +113,7 @@ func main() {
 // loadRules loads the rule set and reports every rejection. Under -strict
 // any rejection is an error, because a rule that silently fails to load is
 // a missed detection with nothing to show for it.
-func loadRules(dir string, tax *sigma.Taxonomy, strict bool, log *slog.Logger) (*sigma.RuleSet, error) {
+func loadRules(dir string, tax *sigma.Taxonomy, strict, canary bool, log *slog.Logger) (*sigma.RuleSet, error) {
 	rs, errs, err := sigma.LoadRuleSet(dir, tax)
 	if err != nil {
 		return nil, err
@@ -120,8 +127,22 @@ func loadRules(dir string, tax *sigma.Taxonomy, strict bool, log *slog.Logger) (
 	if len(rs.Rules) == 0 {
 		return nil, fmt.Errorf("no rules loaded from %s", dir)
 	}
+	if canary && !hasRule(rs, pipe.CanaryRuleID) {
+		// The canary would never match and SignalmanCanaryStalled would
+		// page for a healthy pipeline.
+		return nil, fmt.Errorf("the canary is on but %s has no signalman-canary rule (id %s); copy rules/signalman_canary.yml or set -canary-interval=0", dir, pipe.CanaryRuleID)
+	}
 	log.Info("rule set loaded", "rules", len(rs.Rules), "rejected", len(errs), "ruleset_v", rs.Version, "taxonomy_v", rs.TaxonomyV)
 	return rs, nil
+}
+
+func hasRule(rs *sigma.RuleSet, id string) bool {
+	for i := range rs.Rules {
+		if rs.Rules[i].ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func run(f flags, log *slog.Logger) error {
@@ -132,7 +153,7 @@ func run(f flags, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	rs, err := loadRules(f.rules, tax, f.strict, log)
+	rs, err := loadRules(f.rules, tax, f.strict, f.canaryInterval > 0, log)
 	if err != nil {
 		return err
 	}
@@ -188,6 +209,9 @@ func run(f flags, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	if f.canaryInterval > 0 {
+		go pipe.NewCanary(b, m, time.Now, log).Run(ctx, f.canaryInterval)
+	}
 	log.Info("signalmand started", "version", version, "commit", commit, "brokers", f.brokers, "group", f.group)
 	return p.Run(ctx)
 }
@@ -207,7 +231,7 @@ func reloadOnHUP(ctx context.Context, f flags, tax *sigma.Taxonomy, slot *pipe.S
 		case <-ctx.Done():
 			return
 		case <-hup:
-			rs, err := loadRules(f.rules, tax, f.strict, log)
+			rs, err := loadRules(f.rules, tax, f.strict, f.canaryInterval > 0, log)
 			if err != nil {
 				log.Error("reload refused; keeping the active rule set", "err", err)
 				continue

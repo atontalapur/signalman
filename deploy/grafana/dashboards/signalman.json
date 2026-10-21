@@ -41,16 +41,34 @@
         "type": "prometheus",
         "uid": "signalman-prom"
       },
-      "description": "Seconds since the last canary alert reached the sink.",
+      "description": "Seconds since the last canary alert reached the sink. SignalmanCanaryStalled pages above 50s for 30s.",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 1
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
         },
         "overrides": []
       },
@@ -79,17 +97,61 @@
     },
     {
       "type": "timeseries",
-      "title": "Event staleness",
+      "title": "Canary injected",
       "id": 3,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
       },
-      "description": "now() - max(event_time) among processed events. Rising staleness with zero lag means the upstream stopped producing.",
+      "description": "Canary records the generator wrote. Flat here with a climbing canary age means the generator stopped, not the pipeline.",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (partition) (increase(signalman_canary_injected_total[5m]))",
+          "legendFormat": "partition {{partition}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Event staleness",
+      "id": 4,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "now() - max(event_time) among processed events, canaries excluded. Rising staleness with zero lag means the upstream stopped producing.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
         "y": 1
       },
       "fieldConfig": {
@@ -124,7 +186,7 @@
     {
       "type": "timeseries",
       "title": "Consumer lag",
-      "id": 4,
+      "id": 5,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
@@ -168,7 +230,7 @@
     {
       "type": "timeseries",
       "title": "Stage queue depth",
-      "id": 5,
+      "id": 6,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
@@ -219,13 +281,13 @@
         "x": 0,
         "y": 17
       },
-      "id": 6,
+      "id": 7,
       "panels": []
     },
     {
       "type": "timeseries",
       "title": "Events ingested",
-      "id": 7,
+      "id": 8,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
@@ -269,7 +331,7 @@
     {
       "type": "timeseries",
       "title": "Events dropped",
-      "id": 8,
+      "id": 9,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
@@ -313,7 +375,7 @@
     {
       "type": "timeseries",
       "title": "Verdicts",
-      "id": 9,
+      "id": 10,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
@@ -364,13 +426,13 @@
         "x": 0,
         "y": 26
       },
-      "id": 10,
+      "id": 11,
       "panels": []
     },
     {
       "type": "timeseries",
       "title": "Top rule matches (1h)",
-      "id": 11,
+      "id": 12,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
@@ -414,7 +476,7 @@
     {
       "type": "timeseries",
       "title": "Rule eval p99, slowest 15",
-      "id": 12,
+      "id": 13,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
@@ -483,13 +545,13 @@
         "x": 0,
         "y": 35
       },
-      "id": 13,
+      "id": 14,
       "panels": []
     },
     {
       "type": "table",
       "title": "Active rule set",
-      "id": 14,
+      "id": 15,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"
@@ -527,7 +589,7 @@
     {
       "type": "timeseries",
       "title": "Audit violations (1h)",
-      "id": 15,
+      "id": 16,
       "datasource": {
         "type": "prometheus",
         "uid": "signalman-prom"

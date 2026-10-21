@@ -39,6 +39,10 @@ type Metrics struct {
 	// CanaryAge is the time since the last canary alert reached the sink
 	// on each partition. Labels: partition.
 	CanaryAge *AgeGauge
+	// CanaryInjected counts canary records the generator wrote, so a
+	// stalled canary can be told apart from a generator that stopped. Not
+	// in the spec's table. Labels: partition.
+	CanaryInjected *prometheus.CounterVec
 	// RuleSetVersion is 1 for the rule set the next batch will use.
 	// Labels: ruleset_v, taxonomy_v.
 	RuleSetVersion *prometheus.GaugeVec
@@ -94,6 +98,10 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 			"Seconds between now and the newest event time processed on the partition.", now),
 		CanaryAge: newAgeGauge("signalman_canary_age_seconds",
 			"Seconds since the last canary alert on the partition reached the sink.", now),
+		CanaryInjected: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_canary_injected_total",
+			Help: "Canary records written to events.raw, per partition.",
+		}, []string{"partition"}),
 		RuleSetVersion: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "signalman_ruleset_version_info",
 			Help: "1 for the rule set and taxonomy versions new batches are evaluated under.",
@@ -110,5 +118,5 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 // Collectors is every collector New registers.
 func (m *Metrics) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
-		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.CanaryAge, m.RuleSetVersion, m.AuditViolations}
+		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.CanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations}
 }
