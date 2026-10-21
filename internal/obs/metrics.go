@@ -11,6 +11,8 @@ type Metrics struct {
 	// EventsIngested counts records admitted at ingest.
 	// Labels: source, partition.
 	EventsIngested *prometheus.CounterVec
+	// EventsDropped counts drop ledger entries. Labels: reason, source.
+	EventsDropped *prometheus.CounterVec
 }
 
 // New registers the metrics on reg.
@@ -20,7 +22,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "signalman_events_ingested_total",
 			Help: "Records admitted at ingest, each assigned a Seq.",
 		}, []string{"source", "partition"}),
+		EventsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_events_dropped_total",
+			Help: "Admitted records written to the drop ledger instead of producing verdicts.",
+		}, []string{"reason", "source"}),
 	}
-	reg.MustRegister(m.EventsIngested)
+	reg.MustRegister(m.EventsIngested, m.EventsDropped)
 	return m
 }
