@@ -3,6 +3,41 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.17.0] - 2026-10-21
+
+### Added
+
+- `internal/loadtest` runs the pipeline in process over the in-memory
+  broker behind a tap that checks every batch's outputs: one verdict per
+  rule of one RuleSetV, alerts equal to matched verdicts, and exactly one
+  verdict record or drop per `events.raw` offset. It paces a corpus at a
+  multiple of a measured baseline and injects consumer kills, poison
+  records, rule reloads, an output outage and an offline partition.
+- The seven spec phase 05 experiments run under `SIGNALMAN_LOAD=1`, each
+  writing a JSON report. `docs/load.md` records the in-process run on the
+  1,236 SigmaHQ rules and what still needs Redpanda and ClickHouse.
+- `cmd/loadgen` replays an ndjson corpus, or events generated from a rule
+  directory, into `events.raw` on Kafka at a multiple of a baseline.
+- `pipe.Normalizer.SetFault` for failure injection in tests.
+
+### Changed
+
+- `Correctness.OK` fails on any redelivered verdict record whose bytes
+  differ from its first write. The reload experiment uses
+  `OKAcrossReloads`.
+- Sustained 5x asserts its digest equals a clean replay; partition offline
+  asserts no duplicates.
+- Reports carry `tap_blocked_sends`, counted, in place of relying on the
+  sampled tap queue depth.
+
+### Fixed
+
+- A redelivery was compared on rule set and matched rule indices only, and
+  a changed one was reported but never failed a run.
+- `Replay` resent a whole failed batch with no record of it; it now counts
+  `Resent` records (possible duplicates on Kafka) and stops on a permanent
+  produce error instead of retrying it forever.
+
 ## [0.16.0] - 2026-10-21
 
 ### Added
