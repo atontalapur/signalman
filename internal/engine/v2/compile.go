@@ -26,7 +26,13 @@ type Program struct {
 	ByField map[string][]int
 	// Trees is one per rule, in rule set order, which is rule id order.
 	Trees []Tree
+	// Always lists, by index into Trees, the rules with no derivable
+	// required literal: the prefilter admits them on every event.
+	Always []int
 
+	reqs   [][]Literal // per rule, the prefilter alternatives
+	lits   []string
+	pf     *prefilter
 	nodes  []node
 	kids   []int32
 	leaves int
@@ -90,6 +96,9 @@ func Compile(rs *sigma.RuleSet) (*Program, error) {
 			root = c.list(opAnd, []int32{ls, cond})
 		}
 		c.p.Trees = append(c.p.Trees, Tree{RuleID: r.ID, Root: root})
+	}
+	if err := c.buildPrefilter(rs); err != nil {
+		return nil, err
 	}
 	return c.p, nil
 }

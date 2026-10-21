@@ -58,12 +58,16 @@ func (e *Evaluator) Evaluate(ev *event.Event) []event.Verdict {
 func (e *Evaluator) EvaluateInto(dst []event.Verdict, ev *event.Event) []event.Verdict {
 	s := e.pool.Get().(*scratch)
 	s.reset(ev)
+	s.prefilter()
 	for i := range e.prog.Trees {
+		// A rule the prefilter rejects is one v1 would evaluate false (the
+		// property prefilter_test.go checks); it still gets its verdict.
+		matched := s.candidate(i) && s.eval(e.prog.Trees[i].Root)
 		dst = append(dst, event.Verdict{
 			Seq:       ev.Seq,
 			Partition: ev.Partition,
 			RuleID:    e.prog.Trees[i].RuleID,
-			Matched:   s.eval(e.prog.Trees[i].Root),
+			Matched:   matched,
 			Engine:    Name,
 			RuleSetV:  e.rs.Version,
 			TaxonomyV: e.rs.TaxonomyV,
@@ -77,22 +81,46 @@ func (e *Evaluator) EvaluateInto(dst []event.Verdict, ev *event.Event) []event.V
 // scratch is one event's working state. done and val are the predicate
 // bitset: bit i of done says predicate i has been evaluated for this event,
 // and bit i of val holds its result.
+//
+// cand is the prefilter's candidate bitset over rules. fold and hits are
+// reused buffers for the automaton, and litEpoch/litField remember which
+// literal was last handled for which field in which event.
 type scratch struct {
 	p    *Program
 	ev   *event.Event
 	done []uint64
 	val  []uint64
+
+	cand     []uint64
+	fold     []byte
+	hits     []int32
+	epoch    uint32
+	litEpoch []uint32
+	litField []int32
 }
 
 func newScratch(p *Program) *scratch {
 	w := (len(p.Preds) + 63) / 64
-	return &scratch{p: p, done: make([]uint64, w), val: make([]uint64, w)}
+	return &scratch{
+		p:        p,
+		done:     make([]uint64, w),
+		val:      make([]uint64, w),
+		cand:     make([]uint64, (len(p.Trees)+63)/64),
+		litEpoch: make([]uint32, len(p.lits)),
+		litField: make([]int32, len(p.lits)),
+	}
 }
 
 func (s *scratch) reset(ev *event.Event) {
 	s.ev = ev
 	clear(s.done)
 	clear(s.val)
+	if s.epoch == ^uint32(0) {
+		// Four billion events on one scratch: start the stamps over rather
+		// than let a wrapped epoch read as a hit from long ago.
+		clear(s.litEpoch)
+		s.epoch = 0
+	}
 }
 
 // pred reads predicate i from the bitset, evaluating it on first use.
