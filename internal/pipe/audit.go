@@ -105,6 +105,8 @@ type Auditor struct {
 	pos   map[broker.TopicPartition]int64
 	floor map[int32]int64
 	seen  map[int32]map[uint64]*seen
+	// exported is the partitions whose violations series exists.
+	exported map[int32]bool
 }
 
 // NewAuditor snapshots where to start. counts returns how many verdicts
@@ -127,9 +129,10 @@ func NewAuditor(ctx context.Context, b broker.Broker, cfg AuditConfig, counts fu
 	}
 	a := &Auditor{
 		b: b, cfg: cfg, counts: counts, m: m, log: log,
-		pos:   map[broker.TopicPartition]int64{},
-		floor: map[int32]int64{},
-		seen:  map[int32]map[uint64]*seen{},
+		pos:      map[broker.TopicPartition]int64{},
+		floor:    map[int32]int64{},
+		seen:     map[int32]map[uint64]*seen{},
+		exported: map[int32]bool{},
 	}
 	// Output end offsets first, then the committed offsets: anything at or
 	// above the committed offset is produced again after this point.
@@ -156,6 +159,7 @@ func NewAuditor(ctx context.Context, b broker.Broker, cfg AuditConfig, counts fu
 	for p, off := range logStart {
 		a.floor[p] = off
 	}
+	a.export(logStart)
 	for p, off := range c {
 		if off < a.floor[p] {
 			log.Warn("audit: committed offset is below the log start; records were removed before the pipeline read them",
@@ -175,6 +179,18 @@ func NewAuditor(ctx context.Context, b broker.Broker, cfg AuditConfig, counts fu
 	return a, nil
 }
 
+// export gives each partition a violations series at 0 if it has none.
+// increase() never counts a series' first sample, so a series made by the
+// first violation it counts would read that violation as no increase.
+func (a *Auditor) export(parts map[int32]int64) {
+	for p := range parts {
+		if !a.exported[p] {
+			a.m.AuditViolations.WithLabelValues(strconv.Itoa(int(p)))
+			a.exported[p] = true
+		}
+	}
+}
+
 // Close releases the output reader.
 func (a *Auditor) Close() { a.out.Close() }
 
@@ -182,10 +198,18 @@ func (a *Auditor) Close() { a.out.Close() }
 // windows it closed and, if any failed, an error wrapping ErrInvariant that
 // names the events.
 func (a *Auditor) Step(ctx context.Context) ([]WindowReport, error) {
+	// A partition added to events.raw since the last step gets its series
+	// now, long before the pipeline's consumer finds it and commits there.
+	raw, err := a.b.StartOffsets(ctx, TopicEventsRaw)
+	if err != nil {
+		return nil, err
+	}
+	a.export(raw)
 	committed, err := a.b.CommittedOffsets(ctx, a.cfg.Group, TopicEventsRaw)
 	if err != nil {
 		return nil, err
 	}
+	a.export(committed)
 	// Every output for a seq below committed was durable before the commit,
 	// so it is below these end offsets.
 	if err := a.readToEnd(ctx); err != nil {

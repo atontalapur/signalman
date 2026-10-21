@@ -64,12 +64,13 @@ type Normalizer struct {
 	m     *obs.Metrics
 	// decode is a field so a test can make it panic on a chosen record.
 	decode func(raw []byte) (map[string]event.Value, *Drop)
-	// fault, when set, sees every record before it is decoded. See SetFault.
+	// fault, when set, sees every record that reaches decode. See SetFault.
 	fault func(raw []byte)
 }
 
-// SetFault installs f, which is called with each record's bytes before it
-// is decoded, inside the normalizer's panic recovery. It exists for failure
+// SetFault installs f, which is called with the bytes of each record that
+// passed the size and source checks, before it is decoded, inside the
+// normalizer's panic recovery. It exists for failure
 // injection: the load harness's poison record experiment makes f panic on a
 // marked record, which must cost one ReasonPanic drop and nothing else. Set
 // it before the pipeline runs; nil removes it.
@@ -111,6 +112,10 @@ func (n *Normalizer) Normalize(it *Item) {
 		n.drop(it, ReasonMissingSource, "no "+HeaderSource+" header")
 		return
 	}
+	if !knownSource(it.Event.Source) {
+		n.drop(it, ReasonUnknownSource, fmt.Sprintf("%s %q is not one of %s", HeaderSource, cut(it.Event.Source, 64), strings.Join(Sources, ", ")))
+		return
+	}
 	if n.fault != nil {
 		n.fault(it.Event.Raw)
 	}
@@ -130,11 +135,7 @@ func (n *Normalizer) Normalize(it *Item) {
 
 func (n *Normalizer) drop(it *Item, reason, detail string) {
 	it.Drop = &Drop{Reason: reason, Detail: detail}
-	src := it.Event.Source
-	if src == "" {
-		src = SourceUnknown
-	}
-	n.m.EventsDropped.WithLabelValues(reason, src).Inc()
+	n.m.EventsDropped.WithLabelValues(reason, sourceLabel(it.Event.Source)).Inc()
 }
 
 func eventTime(v event.Value) (time.Time, error) {

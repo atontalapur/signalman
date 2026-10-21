@@ -82,6 +82,16 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   `-rollback-only` used to leave production at the rollback target; it now
   writes `-from` back and checks the gauge, or exits non-zero.
 - `-record` dated a gate with earlier gates undated. It now refuses.
+- G6 audit-violations, G4 v1-serves-none and shadow-failures missed a
+  counter's first count: those series were made by it, and `increase()`
+  ignores a series' first sample. signalmand now exports them at zero (per
+  partition from the auditor's start, per rule and engine and per shadow
+  when engines are stored), and the gates treat no series as unchecked.
+- differ-running passed on any differ activity in the window, so a differ
+  that stalled after an hour, or fell far behind, passed G1 to G4 and G6
+  with divergences flat. It now needs differ resolutions at every 5m step,
+  and the new differ-keeps-up needs the differ to have resolved the events
+  signalmand evaluated, within `-verdict-tolerance`.
 
 ## [0.15.0] - 2026-10-21
 
@@ -171,6 +181,13 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   the wall clock caught up with it. Staleness now advances to the earlier
   of the event time and now.
 - The promtool alert tests never ran in CI.
+- The canary never reached ClickHouse: its age reset once the alert was on
+  the alerts topic, so a dead signalman-sink or ClickHouse never paged, and
+  Prometheus did not scrape signalman-sink at all. signalman-sink now
+  exports `signalman_sink_canary_age_seconds`, reset after the insert
+  holding a partition's canary alert succeeds, paged on by
+  `SignalmanSinkCanaryStalled` and `SignalmanSinkCanaryAbsent`, and
+  Prometheus scrapes it on `:9465`. signalman-sink now needs `events.raw`.
 
 ## [0.13.1] - 2026-10-21
 
@@ -229,6 +246,11 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   `CI=true` without a DSN.
 - The merge property test is named and documented as a check of a model,
   not of ClickHouse.
+- An `event_time` from 2262-04-12 to 2299 passed the range check, was
+  stored as a time in the 1600s or 1700s by the driver's `UnixNano`
+  encoding, and had its offset committed. `event_time` is now bounded at
+  2262-04-11, and `ingest_time` to 1970 through 2105-11-09 so the TTL
+  cannot overflow DateTime. Both are dead-lettered outside that.
 
 ## [0.12.0] - 2026-10-21
 
@@ -268,6 +290,10 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   POST failed. The comment copy now drops table rows too, keeping failures
   and warnings first, says how many it left out, and the job summary gets
   the full report it points to.
+- Two rules whose ids differed only in hex case both loaded, matched the
+  same events, and wrote alerts to one `(partition, seq, rule_id)` row, so
+  one alert disappeared on merge. The loader now lowers the id, so the rule
+  set and `gates --set` reject the second as `duplicate-id`.
 
 ## [0.11.0] - 2026-10-21
 
@@ -342,6 +368,16 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 - A batch in flight during a rebalance could commit for a partition this
   member had lost and move the group offset backwards. Those commits are
   dropped.
+- A `source` header that was not valid UTF-8 panicked ingest through its
+  Prometheus label, and redelivery panicked it again. The header was also an
+  unbounded label. Labels now map to `auditd`, `cloudtrail`, `sysmon`,
+  `unknown`, or `other`, and a source outside that set is an
+  `unknown-source` drop.
+- A matched event whose alert record would be over the output limit was
+  dropped as `output-too-large` with its verdicts, so escape-heavy fields
+  could suppress a detection. The alert now leaves `fields` empty and sets
+  the new optional `fields_omitted`; `output-too-large` covers only
+  `events.norm`.
 
 ## [0.9.0] - 2026-10-21
 
@@ -409,6 +445,10 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   silently ignoring the second document's cases.
 - One rule file named both relative and absolute loads once instead of
   reporting a false duplicate id.
+- RuleSetV now covers each rule's logsource test and its renamed fields, and
+  hashes predicate values quoted. A rule with and without
+  `service: security` used to share a RuleSetV while giving different
+  verdicts. Every RuleSetV value changes.
 
 ## [0.7.1] - 2026-10-01
 

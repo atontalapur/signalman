@@ -1,0 +1,10 @@
+title: Lower-case claim on the id
+id: 1f1a1f1a-000a-4000-8000-00000000000a
+level: low
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\cmd.exe'
+  condition: selection

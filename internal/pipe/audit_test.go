@@ -350,3 +350,20 @@ func TestAuditStartsAtTheLogStartOfAnUncommittedPartition(t *testing.T) {
 		t.Fatal("nothing audited")
 	}
 }
+
+// Prometheus's increase() never counts a series' first sample. A
+// partition's violations series made only when it first counts would read 5
+// missing verdicts as an increase of 0, and G6 would pass. Every audited
+// partition exports 0 from the start, so any violation is an increase.
+func TestAuditExportsZeroViolationsForEveryPartitionAtStart(t *testing.T) {
+	mem := newMemory(broker.WithMaxPoll(8))
+	r, _, _ := auditRig(t, mem, mem)
+	if got := testutil.CollectAndCount(r.m.AuditViolations); got != testPartitions {
+		t.Fatalf("%d signalman_audit_violations_total series before any window closed, want %d", got, testPartitions)
+	}
+	for p := range testPartitions {
+		if v := testutil.ToFloat64(r.m.AuditViolations.WithLabelValues(strconv.Itoa(p))); v != 0 {
+			t.Fatalf("partition %d starts at %v", p, v)
+		}
+	}
+}

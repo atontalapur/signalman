@@ -45,11 +45,16 @@ type Matcher interface {
 // Keyword marks a bare keyword, which has no field and searches every
 // field value on the event. M is a pure function of (Keyword, Mods, Vals),
 // which is what lets a compiled engine intern equal leaves and derive
-// prefilter literals without reverse engineering a closure. None of these
-// three is part of Canonical: Desc already carries them for hashing.
+// prefilter literals without reverse engineering a closure.
+//
+// Key is a collision-free encoding of everything M was built from, so
+// Field and Key together decide what the predicate answers. M itself is
+// opaque, which is why Canonical hashes Key rather than M. Mods, Vals and
+// Keyword are not part of Canonical: Key already carries them for hashing.
 type Pred struct {
 	Field   string
 	Desc    string
+	Key     string
 	M       Matcher
 	Mods    []string
 	Vals    []event.Value
@@ -106,9 +111,12 @@ func String(n Node) string {
 	return b.String()
 }
 
-// Canonical is String with every name and description quoted, so a string
-// containing a space or a parenthesis cannot collide with the tree
-// structure. Use it for hashing, never for display.
+// Canonical is String with every name quoted, so a string containing a
+// space or a parenthesis cannot collide with the tree structure. A Pred is
+// written as its field, key, and description rather than its description
+// alone, because the description shows the field as written, before any
+// rename, and does not quote the values it lists. Use it for hashing,
+// never for display.
 func Canonical(n Node) string {
 	var b strings.Builder
 	write(&b, n, true)
@@ -146,7 +154,11 @@ func write(b *strings.Builder, n Node, quote bool) {
 		}
 		b.WriteString(")")
 	case *Pred:
-		b.WriteString("[" + str(n.Desc) + "]")
+		if quote {
+			fmt.Fprintf(b, "(pred %q %q %q)", n.Field, n.Key, n.Desc)
+		} else {
+			b.WriteString("[" + n.Desc + "]")
+		}
 	default:
 		b.WriteString("?")
 	}

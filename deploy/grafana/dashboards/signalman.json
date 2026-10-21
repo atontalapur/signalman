@@ -41,7 +41,7 @@
         "type": "prometheus",
         "uid": "signalman-prom"
       },
-      "description": "Seconds since the last canary alert reached the sink. SignalmanCanaryStalled pages above 50s for 30s.",
+      "description": "Seconds since the last canary alert per partition: at signalmand, durable on the alerts topic (SignalmanCanaryStalled); at sink, stored in ClickHouse (SignalmanSinkCanaryStalled). Both page above 50s for 30s. Only the sink line climbing means alert storage is down, not detection.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -91,7 +91,16 @@
           },
           "refId": "A",
           "expr": "signalman_canary_age_seconds",
-          "legendFormat": "partition {{partition}}"
+          "legendFormat": "signalmand partition {{partition}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "B",
+          "expr": "signalman_sink_canary_age_seconds",
+          "legendFormat": "sink partition {{partition}}"
         }
       ]
     },

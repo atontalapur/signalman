@@ -218,6 +218,33 @@ func TestGatesDuplicateIDAgainstTheRuleSetFails(t *testing.T) {
 	}
 }
 
+func TestGatesDuplicateIDInAnotherCaseFails(t *testing.T) {
+	// The same id in upper case is the same UUID, so it is still a duplicate.
+	p := copyRule(t, "aaa_upper", "")
+	src, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "47c606a8-cce7-4720-aafa-90c8e2a0f166"
+	if !strings.Contains(string(src), id) {
+		t.Fatalf("proc_dump.yml no longer has id %s", id)
+	}
+	upper := strings.Replace(string(src), id, strings.ToUpper(id), 1)
+	if err := os.WriteFile(p, []byte(upper), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := gates(t, "--set", "../../rules", p)
+	if code != exitFail {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+	if c := cell(t, row(t, out, p), gParse); !strings.HasPrefix(c, "**FAIL**") {
+		t.Errorf("parse cell %q", c)
+	}
+	if !strings.Contains(out, "[duplicate-id] rule "+id) {
+		t.Errorf("details name the lower-case id:\n%s", out)
+	}
+}
+
 func TestGatesChangedListMapsFixturesToRules(t *testing.T) {
 	list := filepath.Join(t.TempDir(), "changed")
 	// NUL separated, as git diff -z writes it, with a fixture, a duplicate,

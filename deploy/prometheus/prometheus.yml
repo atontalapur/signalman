@@ -1,8 +1,10 @@
-# Scrapes signalmand and evaluates the alert rules under alerts/.
+# Scrapes signalmand, signalman-sink, and cmd/differ and evaluates the alert
+# rules under alerts/.
 #
-# signalmand runs on the host (`go run ./cmd/signalmand ...`) and serves
-# /metrics on :9464; host.docker.internal reaches it from the container
-# (docker-compose.yml maps it to the host gateway on Linux).
+# Both run on the host (`go run ./cmd/signalmand ...`, `go run
+# ./cmd/signalman-sink ...`). signalmand serves /metrics on :9464 and
+# signalman-sink on :9465; host.docker.internal reaches them from the
+# container (docker-compose.yml maps it to the host gateway on Linux).
 #
 # The 15s scrape and evaluation intervals are part of the canary's paging
 # budget: see the comment on SignalmanCanaryStalled in alerts/absence.yml.
@@ -17,6 +19,9 @@ scrape_configs:
   - job_name: signalmand
     static_configs:
       - targets: ["host.docker.internal:9464"]
+  - job_name: signalman-sink
+    static_configs:
+      - targets: ["host.docker.internal:9465"]
   # cmd/differ serves the divergence counters the cutover gates read
   # (docs/cutover.md) on :9466. Down when no differ runs, which the gate
   # checker reports as unchecked rather than as zero divergences.
