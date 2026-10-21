@@ -1,0 +1,85 @@
+# Local Redpanda and ClickHouse for signalmand and `make integration`.
+#
+#   docker compose -f deploy/docker-compose.yml up -d --wait
+#
+# Redpanda is reachable from the host at localhost:19092, ClickHouse at
+# localhost:8123 (HTTP) and localhost:9000 (native). Images are pinned; bump
+# them deliberately.
+name: signalman
+
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+    volumes:
+      - redpanda:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Creates the pipeline topics, then stays up so `up --wait` can treat it as
+  # healthy. Partition counts match across host_id-keyed topics so a host's
+  # events, norms, and drops share a partition number; verdicts.v1 must have
+  # at least as many partitions as events.raw (signalmand checks at startup).
+  # Retention follows the spec: verdicts 7 days, drops 30 days.
+  # max.message.bytes is 1 MiB on every topic, equal to the producer's batch
+  # limit (broker.MaxMessageBytes); change both together.
+  topics:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        rpk() { command rpk -X brokers=redpanda:9092 "$$@"; }
+        for t in events.raw events.norm alerts; do
+          rpk topic create "$$t" -p 8 -r 1 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
+        done
+        rpk topic create verdicts.v1 -p 8 -r 1 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe verdicts.v1 >/dev/null
+        rpk topic create drops -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe drops >/dev/null
+        touch /tmp/ready
+        exec sleep infinity
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8.4.13
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: signalman
+      CLICKHOUSE_USER: signalman
+      CLICKHOUSE_PASSWORD: signalman
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  redpanda:
+  clickhouse:

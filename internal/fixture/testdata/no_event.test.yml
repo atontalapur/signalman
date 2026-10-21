@@ -1,0 +1,4 @@
+rule: proc_dump.yml
+cases:
+  - name:   forgot the event
+    expect: match

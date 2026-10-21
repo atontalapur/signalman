@@ -1,0 +1,26 @@
+rule: mimikatz_keywords.yml
+cases:
+  - name:   renamed mimikatz
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Users\Public\m.exe
+      CommandLine: m.exe "privilege::debug" "sekurlsa::logonpasswords" exit
+
+  - name:   keyword in another field
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\cmd.exe
+      CommandLine: cmd.exe
+      ParentImage: C:\tools\lsadump::sam.exe
+
+  - name:   unrelated process
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\notepad.exe
+      CommandLine: notepad.exe C:\notes.txt

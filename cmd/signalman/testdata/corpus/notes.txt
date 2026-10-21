@@ -1,0 +1,1 @@
+Not an event file. The corpus reader takes .ndjson and .jsonl only.

@@ -34,11 +34,56 @@ into a valid rule skeleton and requires the two to agree, and every
 suppression has a section in `test/fuzz/KNOWN_DIVERGENCES.md`. The run
 counts are in `docs/results.md`.
 
+The compiled engine has started early: `internal/engine/v2` interns every
+leaf predicate across the rule set, skips rules with a field presence
+bitset and an Aho-Corasick literal prefilter, and evaluates the rest from a
+per-event predicate bitset with no allocation. Its verdicts are compared
+with v1's one by one and by per-partition digest; over the 1,236 accepted
+`rules`-tree rules and 30.6 million generated verdicts they are identical.
+In process on an M1 Pro it is about 125 times faster than v1 on the
+benchmark event. `docs/evaluation.md` describes it and `docs/results.md`
+has the numbers. The shadow lane, differ, and rollout that make up the rest
+of Plan G need the pipeline first.
+
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
 and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
+
+Plan B is done. `internal/engine/v1` evaluates every rule per event and
+`internal/verdict` folds the verdicts into a per-partition digest; the
+shuffle property test holds. `cmd/signalman` is the author CLI, and
+`rules/` holds twenty hand-written rules, each with a sibling
+`<rule>.test.yml` of match and no-match cases, all passing:
+
+```
+signalman test    rules/                         # run fixtures through v1
+signalman explain rules/proc_dump.yml ev.json    # condition tree, results, observed values
+signalman lint    rules/                         # every LoadError, structured (--json too)
+signalman bench   rules/ [--corpus dir]          # p50/p99/max per rule, flags p99 over 50us
+signalman noise   rules/proc_dump.yml --corpus dir   # matches per 100k, ten samples, budget:
+```
+
+Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
+are 0 for pass, 1 for a failed check, 2 when the command could not run.
+A corpus is a directory of `.ndjson` or `.jsonl` files, one JSON event per
+line, with field names as they appear after the taxonomy. An event with a
+key given twice in one object is rejected, and an empty object `{}` adds no
+fields. A fixture file is one YAML document. A rule may
+declare `budget:` in matches per 100k events; noise exits 1 above it.
+
+Plan C's code has landed. `cmd/signalmand` consumes `events.raw`, assigns Seq
+from the offset, normalizes through the taxonomy, evaluates with v1, and
+writes `events.norm`, `verdicts.v1`, `alerts`, and `drops`, committing
+offsets only after a batch's outputs are durable. Stages are joined by
+bounded channels, rule set reloads land between batches, and an in-process
+audit checks invariant 1 against the output topics. `internal/broker` puts
+Redpanda (franz-go) and an in-memory broker behind one interface, so the
+delivery logic is unit tested without Docker. `docs/pipeline.md` covers
+topics, record formats, drop reasons, delivery, and the audit. The gate is
+not passed: the audit is green over generated load in test mode, but the
+one-hour soak against Redpanda has not been run.
 
 `internal/backend/ch` is the second execution target. It compiles a loaded
 rule into a ClickHouse WHERE clause over an events table, and `RetroHunt`
@@ -53,13 +98,13 @@ written but has not yet run against a server.
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
-| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | in progress: v1 evaluator and verdict digest done; gate property green |
-| C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
+| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
+| C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler and retro-hunt done, integration gate not yet run; sink not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
-| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | not started |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | not started |
+| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, and `budget:` done; rule PR CI gates and `docs/authoring.md` not started |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
@@ -94,7 +139,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ## Repository
 
 ```
-cmd/signalman/          CLI: lint, test, explain, noise, bench
+cmd/signalman/          CLI: test, explain, lint, bench, noise
 cmd/signalmand/         the pipeline daemon
 cmd/differ/             shadow-mode verdict comparison
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
@@ -102,24 +147,30 @@ internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
 internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
 internal/engine/v1/     reference evaluator, permanent oracle (no index, no cache)
-internal/engine/v2/     compiled evaluator
+internal/fixture/       <rule>.test.yml loader and runner, through v1
+internal/explain/       explain walker and renderer, held equal to v1 by test
+internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
+internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
-internal/pipe/          stages, bounded queues, drop ledger
-internal/obs/           metrics, canary
+internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit
+internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
+internal/obs/           metrics (canary is Plan E)
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
 test/replay/            corpus replay, digest comparison
-deploy/                 Dockerfile; docker compose for Redpanda and ClickHouse
+deploy/                 Dockerfile; docker compose for Redpanda, topic setup, and ClickHouse
 docs/spec/              the spec (signalman-v1.html)
 docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
-docs/evaluation.md      the v1 evaluator and how verdict streams are compared
+docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
+docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
 docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
+rules/                  twenty hand-written rules, each with a .test.yml fixture
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
 scripts/                backlog validator, Jira sync
@@ -133,9 +184,19 @@ that needs them.
 - Go 1.27, module `github.com/atontalapur/signalman`.
 - `make check` before every commit: gofmt, vet, `go mod tidy` diff, build,
   race tests, staticcheck, govulncheck. CI runs the same target.
-- `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`.
-  The retro-hunt test reads a clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`
-  and skips without it.
+- `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`:
+  `docker compose -f deploy/docker-compose.yml up -d --wait`. Integration tests
+  carry the `integration` build tag and reach Redpanda at `localhost:19092`
+  (override with `SIGNALMAN_BROKERS`).
+- Run the daemon against the compose stack:
+  `go run ./cmd/signalmand -rules <dir> -taxonomy config/taxonomy`. It
+  serves `/metrics` on `:9464`, reloads rules on `SIGHUP`, and by default
+  refuses a rule directory with any rejection (`-strict=false` loads what it
+  can). Worker pools, queue size, in-flight batches, and batch size are flags
+  with fixed defaults, not derived from the machine.
+- `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
+  run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
+  lengthens it, memory permitting.
 - `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
   one. Nightly CI runs them for 10 minutes each and uploads any crashers.
 - `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer
@@ -145,6 +206,10 @@ that needs them.
   `python3 -m venv test/fuzz/.venv && test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt`.
   Without it every case in `test/fuzz` skips, so a green `make check` on a
   machine with no venv says nothing about the fuzzer.
+- The corpus tests in `internal/engine/v2` look for the SigmaHQ clone at
+  `corpora/sigmahq` or at `SIGNALMAN_CORPUS`, and skip without it, as CI
+  does. `SIGNALMAN_EQUIV_PER_RULE` lengthens the equivalence stream and
+  `SIGNALMAN_LATENCY=1` turns on the latency report.
 - `make check-backlog` after editing `docs/backlog.yml`.
 - Debt too small for a story lives in `TODOS.md`.
 - Jira project SIG. One story per branch, `feat/SIG-<n>-<slug>`. PR titles are

@@ -1,0 +1,25 @@
+rule: schtasks_suspicious_path.yml
+cases:
+  - name:   task runs a binary from AppData
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\schtasks.exe
+      CommandLine: schtasks /create /sc minute /mo 5 /tn Updater /tr C:\Users\bob\AppData\Roaming\upd.exe
+
+  - name:   vendor updater is filtered
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\schtasks.exe
+      CommandLine: schtasks /create /tn GoogleUpdateTaskMachineUA /tr C:\Users\bob\AppData\Local\Google\Update\GoogleUpdate.exe
+
+  - name:   querying tasks
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\schtasks.exe
+      CommandLine: schtasks /query /fo LIST /v

@@ -1,0 +1,18 @@
+title: Mimikatz Command Keywords
+id: 3e97b108-c1dd-48e8-9bc5-a73c151ded4d
+status: test
+description: Mimikatz module names anywhere on a process creation event, whatever the binary was renamed to.
+author: signalman
+tags:
+  - attack.credential-access
+  - attack.t1003.001
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  keywords:
+    - 'sekurlsa::'
+    - 'lsadump::'
+    - 'privilege::debug'
+  condition: keywords
+level: critical

@@ -1,0 +1,25 @@
+rule: bcdedit_recovery_disabled.yml
+cases:
+  - name:   recovery disabled
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\bcdedit.exe
+      CommandLine: bcdedit.exe /set {default} recoveryenabled No
+
+  - name:   ignore all failures
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\bcdedit.exe
+      CommandLine: bcdedit /set {default} bootstatuspolicy ignoreallfailures
+
+  - name:   enumerating boot entries
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\bcdedit.exe
+      CommandLine: bcdedit.exe /enum all

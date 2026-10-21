@@ -1,0 +1,22 @@
+title: Outbound RDP to a Public Address
+id: 4094c23f-ba50-4909-a3fc-2d412b1a8bc3
+status: test
+description: A connection to TCP 3389 on an address outside the private and loopback ranges.
+author: signalman
+tags:
+  - attack.lateral-movement
+  - attack.t1021.001
+logsource:
+  product: windows
+  category: network_connection
+detection:
+  selection:
+    DestinationPort: 3389
+  filter_private:
+    DestinationIp|cidr:
+      - '10.0.0.0/8'
+      - '172.16.0.0/12'
+      - '192.168.0.0/16'
+      - '127.0.0.0/8'
+  condition: selection and not filter_private
+level: medium

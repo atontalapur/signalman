@@ -1,0 +1,24 @@
+title: Rundll32 Opening a URL or Running Script
+id: 793b49ce-5cb0-485d-bea0-db6b8a1a24e7
+status: test
+description: rundll32 with a javascript handler, or url.dll and ieframe.dll exports that open an arbitrary URL or file.
+author: signalman
+tags:
+  - attack.defense-evasion
+  - attack.t1218.011
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_img:
+    Image|endswith: '\rundll32.exe'
+  selection_cli:
+    - CommandLine|contains: 'javascript:'
+    - CommandLine|contains|all:
+        - 'url.dll'
+        - 'OpenURL'
+    - CommandLine|contains|all:
+        - 'ieframe.dll'
+        - 'OpenURL'
+  condition: selection_img and selection_cli
+level: medium

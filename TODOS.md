@@ -12,23 +12,13 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P4
 **Depends on:** Plan A Task 13
 
-### Revisit Value layout and Text() allocation for the v2 hot path
-**What:** `event.Value` is 64 bytes with every payload slot present, and `Value.Text()` allocates a string per call for `KindInt` and `KindBool`. Both sit on the per-field, per-rule comparison path.
-**Why:** Flagged by the SIG-13 pre-landing review. v1 is never optimized by rule, and the v2 hot path is Plan G, so the layout stays as the plan specifies until there is a benchmark to justify changing it.
-**Context:** Options noted in review: fold `I` and `B` into one slot, move `L` behind a pointer, add `AppendText(dst []byte)` using `strconv.AppendInt`, and a `BenchmarkValueText` asserting 0 allocs/op. From the SIG-15 review, on the same path: `Wildcard.MatchString` lowercases and rune-decodes the input per call, `Any`/`All` repeat that per value in a list, and `Contains`/`StartsWith`/`EndsWith` without author wildcards could use `strings.Contains`/`HasPrefix`/`HasSuffix` on a once-lowered input. Decide in Plan G with numbers.
-
-**Numbers, from SIG-22 (`BenchmarkEvaluateCorpus`, M1 Pro, corpus 2e8fd89):** 1236 accepted corpus rules against one Sysmon process creation event cost 3.55 ms, 2.30 MB, and 18,593 allocations per event, which is about 15 allocations per rule per event, single-threaded 347,854 verdicts/s. The baseline is recorded in `docs/evaluation.md`. This is the evidence the entry was waiting for; the decision is still Plan G's.
+### Revisit the event.Value layout
+**What:** `event.Value` is 64 bytes with every payload slot present. Options from the SIG-13 review: fold `I` and `B` into one slot, move `L` behind a pointer.
+**Why:** The allocation half of the original entry is settled. v2 (SIG-40) never calls `Value.Text` on its hot path: each field is folded once per event with `match.AppendFold` and `strconv.AppendInt` into a reused arena, and the common wildcard shapes compare bytes (`match.Folded`). v2 is at 0 allocs/event on the corpus (`docs/results.md`). What is left is size, which costs copies and cache, not allocations.
+**Context:** v2 copies one `Value` per program field per event into its scratch. Measure that before changing a type every package uses.
 **Effort:** M
-**Priority:** P3
-**Depends on:** Plan G
-
-### Decide event value limits at decode time
-**What:** The decoder (Plan C) needs three stated decisions: a maximum field value length, what to do with invalid UTF-8 (reject, replace, or pass through), and whether nested lists are flattened or rejected.
-**Why:** From the SIG-15 adversarial review. `Wildcard.MatchString` is O(input x longest literal run), so a 1 MiB value against a rule with a 2000-character `contains` costs seconds and nothing upstream caps it. `strings.ToLower` maps invalid bytes to U+FFFD on both sides, so `Equals("a\xff")` matches `"a\xfe"` by accident. A list nested in a list never matches and never reaches the drop ledger, which the verdict invariant forbids.
-**Context:** All three are ingest-side rules, not matcher rules; the matcher must stay a pure function of the value it is given. Write the decisions into the spec's data contract section when Plan C lands.
-**Effort:** S
-**Priority:** P2
-**Depends on:** Plan C
+**Priority:** P4
+**Depends on:** Plan F load numbers
 
 ### Rename fieldref targets through the taxonomy
 **What:** `rename` in `internal/sigma/rule.go` maps `Pred.Field` through the taxonomy but leaves the `fieldref` target, which lives in the rule value, under its Sigma name.
@@ -37,14 +27,6 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Effort:** S
 **Priority:** P2
 **Depends on:** nothing
-
-### Add integration test entrypoint when compose lands
-**What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.
-**Why:** The job is wired now so Plan C only has to add the compose file and tagged tests. The job must also export `SIGNALMAN_CLICKHOUSE_DSN`, or `internal/backend/ch`'s retro-hunt test skips and the Plan D gate reads green without running.
-**Context:** See `.github/workflows/ci.yml` `integration` job and `Makefile` `integration` target.
-**Effort:** S
-**Priority:** P2
-**Depends on:** Plan C (S-02)
 
 ### Case folding applied to base64 text widens matching
 **What:** `Equals` lowercases both sides, and encoding transforms run before that fold, so a `base64offset|contains` matcher compares lowercased base64. Two different plaintext bytes can encode to base64 characters that differ only in case (`A` and `a`), so a value can match a blob it did not encode.
@@ -63,6 +45,24 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Depends on:** None
 
 ## Completed
+
+### Decide event value limits at decode time
+**What:** The decoder (Plan C) needs three stated decisions: a maximum field value length, what to do with invalid UTF-8 (reject, replace, or pass through), and whether nested lists are flattened or rejected.
+**Why:** From the SIG-15 adversarial review. `Wildcard.MatchString` is O(input x longest literal run), so a 1 MiB value against a rule with a 2000-character `contains` costs seconds and nothing upstream caps it. `strings.ToLower` maps invalid bytes to U+FFFD on both sides, so `Equals("a\xff")` matches `"a\xfe"` by accident. A list nested in a list never matches and never reaches the drop ledger, which the verdict invariant forbids.
+**Context:** All three are ingest-side rules, not matcher rules; the matcher must stay a pure function of the value it is given. Write the decisions into the spec's data contract section when Plan C lands.
+**Effort:** S
+**Priority:** P2
+**Depends on:** Plan C
+**Completed:** SIG-27. All three are drops with their own reason code: a string over `MaxValueLen` (64 KiB default) is `value-too-long`, invalid UTF-8 anywhere in the record is `invalid-utf8` (checked before decoding, so nothing is replaced), and a list holding a list or an object is `nested-value`. Codes and rationale are in `internal/pipe/drop.go`.
+
+### Add integration test entrypoint when compose lands
+**What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.
+**Why:** The job is wired now so Plan C only has to add the compose file and tagged tests.
+**Context:** See `.github/workflows/ci.yml` `integration` job and `Makefile` `integration` target.
+**Effort:** S
+**Priority:** P2
+**Depends on:** Plan C (S-02)
+**Completed:** SIG-26. `deploy/docker-compose.yml` runs Redpanda, a topic setup service, and ClickHouse; `internal/broker/kafka` carries the first `integration`-tagged tests.
 
 ### Stop an oracle subprocess that outlives its fuzz worker
 **What:** If a fuzz worker is SIGKILLed while its pySigma subprocess is stuck in a backtracking regex, the subprocess keeps running until the regex finishes. When Python is idle, stdin EOF ends it, so only the stuck case leaks.
