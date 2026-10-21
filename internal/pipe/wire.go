@@ -160,16 +160,31 @@ type Alert struct {
 	Fields     map[string]string `json:"fields"`
 	// Raw is a string: a normalized record is valid UTF-8 by construction.
 	Raw string `json:"raw"`
+	// FieldsOmitted is set when Fields is left empty to fit the output
+	// limit. Raw is still whole, and the event's events.norm record (same
+	// partition and seq) has every field.
+	FieldsOmitted bool `json:"fields_omitted,omitempty"`
 }
 
 // AlertRecord is the alerts topic record for one match, keyed by rule_id.
+//
+// Fields repeats what Raw already holds, escaped a second time, so an
+// escape-heavy event can have an alert about twice its events.norm record.
+// When the full alert would be over MaxOutputRecordBytes, Fields is left
+// out and FieldsOmitted set: a match always raises an alert, and which
+// alert is a function of the event and the rule alone. Without Fields an
+// alert holds the host id and raw bytes once each, escaped at most six to
+// one, so under DefaultMaxRecordBytes they take at most 768 KiB, leaving
+// more than 200 KiB for the rule's ID, title, and level. A rule whose
+// metadata does not fit even then is a rule set error, which the sink
+// reports.
 func AlertRecord(r *sigma.Rule, it *Item) broker.Record {
 	ev := it.Event
 	f := make(map[string]string, len(ev.Fields))
 	for k, v := range ev.Fields {
 		f[k] = flat(v)
 	}
-	b, err := json.Marshal(Alert{
+	a := Alert{
 		Partition:  ev.Partition,
 		Seq:        ev.Seq,
 		RuleID:     r.ID,
@@ -181,11 +196,21 @@ func AlertRecord(r *sigma.Rule, it *Item) broker.Record {
 		Source:     ev.Source,
 		Fields:     f,
 		Raw:        string(ev.Raw),
-	})
+	}
+	rec := alertRecord(a)
+	if broker.RecordSize(rec) > MaxOutputRecordBytes {
+		a.Fields, a.FieldsOmitted = map[string]string{}, true
+		rec = alertRecord(a)
+	}
+	return rec
+}
+
+func alertRecord(a Alert) broker.Record {
+	b, err := json.Marshal(a)
 	if err != nil {
 		panic(err)
 	}
-	return broker.Record{Topic: TopicAlerts, Partition: broker.AnyPartition, Key: []byte(r.ID), Value: b}
+	return broker.Record{Topic: TopicAlerts, Partition: broker.AnyPartition, Key: []byte(a.RuleID), Value: b}
 }
 
 // flat renders a value for the alert table's Map(String, String): scalars
