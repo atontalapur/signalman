@@ -174,6 +174,9 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		for w := range matchCh {
 			if w.it.Drop == nil {
 				p.match(w.b.act.eng, w.it)
+				if sh := w.b.act.shadow; sh != nil {
+					p.matchShadow(sh, w.it)
+				}
 			}
 			if !send(ctx, sinkCh, w) {
 				return
@@ -251,6 +254,45 @@ func (p *Pipeline) match(eng Engine, it *Item) {
 	}
 }
 
+// matchShadow evaluates the shadow engine on an item the primary has
+// already evaluated. A shadow that panics, or returns anything but one
+// verdict per rule in rule set order stamped with this event and the
+// primary's versions, leaves no shadow verdicts for the item. The primary's
+// output is untouched, so a v2 bug cannot cost a v1 verdict or alert, and
+// the differ reports the gap as missing verdicts: a shadowed v1 record with
+// no v2 record beside it.
+func (p *Pipeline) matchShadow(eng Engine, it *Item) {
+	vs, err := evalShadow(eng, it)
+	if err != nil {
+		it.ShadowFailure = err.Error()
+		p.log.Error("shadow engine failed; its verdicts for this event are not written",
+			"engine", eng.Name(), "partition", it.Event.Partition, "seq", it.Event.Seq, "err", err)
+		return
+	}
+	it.Shadow = vs
+}
+
+func evalShadow(eng Engine, it *Item) (vs []event.Verdict, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			vs, err = nil, fmt.Errorf("panic: %v", r)
+		}
+	}()
+	vs = eng.EvaluateInto(make([]event.Verdict, 0, len(it.Verdicts)), it.Event)
+	if len(vs) != len(it.Verdicts) {
+		return nil, fmt.Errorf("%d verdicts for %d rules", len(vs), len(it.Verdicts))
+	}
+	for i := range vs {
+		got, want := vs[i], it.Verdicts[i]
+		if got.RuleID != want.RuleID || got.Seq != want.Seq || got.Partition != want.Partition ||
+			got.Engine != eng.Name() || got.RuleSetV != want.RuleSetV || got.TaxonomyV != want.TaxonomyV {
+			return nil, fmt.Errorf("verdict %d is %+v, want rule %s at partition %d seq %d under %s",
+				i, got, want.RuleID, want.Partition, want.Seq, want.RuleSetV)
+		}
+	}
+	return vs, nil
+}
+
 // sink completes batches in poll order: wait for every item, write the
 // outputs, wait until they are durable, commit.
 func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-chan *batch, sinkCh <-chan work) error {
@@ -295,7 +337,12 @@ func outputs(b *batch) []broker.Record {
 			recs = append(recs, DropRecord(it))
 			continue
 		}
-		recs = append(recs, NormRecord(it), VerdictRecord(b.act.eng, it))
+		recs = append(recs, NormRecord(it))
+		if b.act.shadow != nil {
+			recs = append(recs, ShadowedVerdictRecords(b.act.eng, b.act.shadow, it)...)
+		} else {
+			recs = append(recs, VerdictRecord(b.act.eng, it))
+		}
 		for _, v := range it.Verdicts {
 			if v.Matched {
 				r, ok := b.act.rules[v.RuleID]
@@ -330,6 +377,26 @@ func (p *Pipeline) count(b *batch) {
 	for id, n := range perRule {
 		p.m.RuleMatches.WithLabelValues(id).Add(n)
 	}
+	if b.act.shadow == nil {
+		return
+	}
+	var sm, su, failed float64
+	for _, it := range b.items {
+		if it.ShadowFailure != "" {
+			failed++
+		}
+		for _, v := range it.Shadow {
+			if v.Matched {
+				sm++
+			} else {
+				su++
+			}
+		}
+	}
+	sn := b.act.shadow.Name()
+	p.m.Verdicts.WithLabelValues(sn, "true").Add(sm)
+	p.m.Verdicts.WithLabelValues(sn, "false").Add(su)
+	p.m.ShadowFailures.WithLabelValues(sn).Add(failed)
 }
 
 // write produces a batch's outputs, retrying until they are durable or ctx

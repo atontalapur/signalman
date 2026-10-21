@@ -31,6 +31,11 @@ type Metrics struct {
 	// of the rule count. Not in the spec's table; it is the audit's output,
 	// and any increase is a P1. Labels: partition.
 	AuditViolations *prometheus.CounterVec
+	// ShadowFailures counts events on which the shadow engine panicked or
+	// broke the verdict contract, so it wrote no verdicts for them. Not in
+	// the spec's table; the differ reports each as missing verdicts, and
+	// any increase blocks the cutover. Labels: engine.
+	ShadowFailures *prometheus.CounterVec
 }
 
 // New registers the metrics on reg.
@@ -68,8 +73,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "signalman_audit_violations_total",
 			Help: "Committed events with no verdicts and no drop, with both, or with too few verdicts.",
 		}, []string{"partition"}),
+		ShadowFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_shadow_failures_total",
+			Help: "Events the shadow engine panicked on or returned a malformed verdict list for.",
+		}, []string{"engine"}),
 	}
 	reg.MustRegister(m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
-		m.Verdicts, m.RuleMatches, m.RuleSetVersion, m.AuditViolations)
+		m.Verdicts, m.RuleMatches, m.RuleSetVersion, m.AuditViolations, m.ShadowFailures)
 	return m
 }

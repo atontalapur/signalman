@@ -1,6 +1,7 @@
 package pipe
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -22,10 +23,14 @@ type Slot struct {
 	shown  *active        // the version series currently exported
 }
 
-// active is one engine plus the rule metadata alerts need.
+// active is one engine, an optional shadow engine evaluated alongside it,
+// and the rule metadata alerts need. The pair is one value, so a reload
+// swaps both at once and no event is evaluated by v1 under one RuleSetV
+// and by its shadow under another.
 type active struct {
-	eng   Engine
-	rules map[string]*sigma.Rule
+	eng    Engine
+	shadow Engine // nil: no shadow lane
+	rules  map[string]*sigma.Rule
 }
 
 // NewSlot starts with e active.
@@ -38,11 +43,34 @@ func NewSlot(e Engine, m *obs.Metrics) *Slot {
 // Load returns the engine the next batch will use.
 func (s *Slot) Load() Engine { return s.cur.Load().eng }
 
-// Store makes e the engine for every batch formed from now on. Batches
-// already formed finish under the engine they started with.
-func (s *Slot) Store(e Engine) {
+// Shadow returns the shadow engine the next batch will use, or nil.
+func (s *Slot) Shadow() Engine { return s.cur.Load().shadow }
+
+// Store makes e the engine for every batch formed from now on, with no
+// shadow. Batches already formed finish under the engine they started with.
+func (s *Slot) Store(e Engine) { s.store(e, nil) }
+
+// StoreWithShadow makes primary the engine and shadow the shadow engine for
+// every batch formed from now on. Both must carry the same RuleSetV and
+// TaxonomyV, and different names, or nothing is stored: a shadow under
+// another rule set would make every comparison version skew, and one with
+// the primary's name would write into the primary's verdict topic.
+func (s *Slot) StoreWithShadow(primary, shadow Engine) error {
+	p, sh := primary.RuleSet(), shadow.RuleSet()
+	if p.Version != sh.Version || p.TaxonomyV != sh.TaxonomyV {
+		return fmt.Errorf("shadow %s is under ruleset %s taxonomy %s, primary %s under %s taxonomy %s",
+			shadow.Name(), sh.Version, sh.TaxonomyV, primary.Name(), p.Version, p.TaxonomyV)
+	}
+	if primary.Name() == shadow.Name() {
+		return fmt.Errorf("shadow and primary are both named %q", primary.Name())
+	}
+	s.store(primary, shadow)
+	return nil
+}
+
+func (s *Slot) store(e, shadow Engine) {
 	rs := e.RuleSet()
-	a := &active{eng: e, rules: make(map[string]*sigma.Rule, len(rs.Rules))}
+	a := &active{eng: e, shadow: shadow, rules: make(map[string]*sigma.Rule, len(rs.Rules))}
 	for i := range rs.Rules {
 		a.rules[rs.Rules[i].ID] = &rs.Rules[i]
 	}

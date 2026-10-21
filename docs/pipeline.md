@@ -5,9 +5,11 @@ the drop ledger, and how it proves none went missing. Code lives in
 `internal/pipe`, `internal/broker`, and `internal/obs`.
 
 ```
-events.raw -> ingest -> normalize -> match (Slot: v1) -> sink -> events.norm, verdicts.v1, alerts, drops
-                  bounded      bounded          bounded      |
-                                                           commit offsets after the batch is durable
+events.raw -> ingest -> normalize -> match (Slot: v1 [+ v2 shadow]) -> sink -> events.norm, verdicts.v1, [verdicts.v2,] alerts, drops
+                  bounded      bounded          bounded                  |
+                                                                       commit offsets after the batch is durable
+
+verdicts.v1 + verdicts.v2 -> cmd/differ -> divergences
 ```
 
 ## Topics and records
@@ -19,7 +21,9 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 |---|---|---|
 | `events.raw` | host_id | the untouched source record; header `source` names the source |
 | `events.norm` | host_id | `NormEvent`: seq, partition, host_id, source, event_time, ingest_at, typed fields, raw |
-| `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions |
+| `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions; `shadow` names the shadow engine when there is one |
+| `verdicts.v2` | partition, pinned | `EventVerdicts` from the shadow engine, written only with `-shadow` |
+| `divergences` | partition, pinned | `differ.Divergence`: one per `(partition, seq, rule_id)` the engines disagree on (`docs/cutover.md`) |
 | `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
 
@@ -106,6 +110,18 @@ normalizer is built from it.
 The slot holds anything implementing `pipe.Engine` (`Name`, `RuleSet`,
 `EvaluateInto`), which is the seam v2 drops into.
 
+## Shadow lane
+
+With `-shadow` the slot holds v1 and v2 as one value
+(`Slot.StoreWithShadow`), both built from the same rule set, and a reload
+swaps the pair between batches. Each normalized item is evaluated by v1 and
+then v2 in the same match worker, and both verdict records go out in the
+batch's produce. v2 writes `verdicts.v2` and no alerts. A v2 panic or a
+malformed v2 verdict list leaves v1's outputs alone, writes no v2 record for
+that event, and counts in `signalman_shadow_failures_total`. Why the shadow
+reads the batch instead of consuming `events.norm`, and how `cmd/differ`
+compares the two streams, is in `docs/cutover.md`.
+
 ## Invariant 1 audit
 
 `pipe.Auditor` reads `verdicts.v1` and `drops` and checks, for every
@@ -147,6 +163,7 @@ Names from the spec's core metrics table, in `internal/obs`.
 | `signalman_consumer_lag_records` | topic, partition | log end offset minus committed offset |
 | `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | partition | the audit; not in the spec table |
+| `signalman_shadow_failures_total` | engine | sink, per event the shadow failed on; not in the spec table |
 
 Not yet exported: `signalman_rule_eval_seconds`,
 `signalman_event_staleness_seconds`, `signalman_canary_age_seconds`. Those are

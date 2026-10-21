@@ -19,7 +19,7 @@ const testPartitions = 4
 
 func newMemory(opts ...broker.MemoryOption) *broker.Memory {
 	topics := map[string]int32{}
-	for _, t := range []string{TopicEventsRaw, TopicEventsNorm, TopicVerdictsV1, TopicAlerts, TopicDrops} {
+	for _, t := range []string{TopicEventsRaw, TopicEventsNorm, TopicVerdictsV1, TopicVerdictsV2, TopicAlerts, TopicDrops} {
 		topics[t] = testPartitions
 	}
 	return broker.NewMemory(topics, opts...)

@@ -42,8 +42,17 @@ with v1's one by one and by per-partition digest; over the 1,236 accepted
 `rules`-tree rules and 30.6 million generated verdicts they are identical.
 In process on an M1 Pro it is about 125 times faster than v1 on the
 benchmark event. `docs/evaluation.md` describes it and `docs/results.md`
-has the numbers. The shadow lane, differ, and rollout that make up the rest
-of Plan G need the pipeline first.
+has the numbers.
+
+The shadow lane and differ are built. `signalmand -shadow` evaluates every
+normalized event with v2 beside v1, in the same batch, and writes
+`verdicts.v2` with no alerts. `cmd/differ` joins `verdicts.v1` and
+`verdicts.v2` on `(partition, seq, rule_id)` and classifies every
+disagreement into the spec's five classes, writing each to the
+`divergences` topic and the log. `docs/cutover.md` has the four arguments,
+the gate ladder, the retirement criteria, and the divergence log. No gate
+has been passed: shadow mode has only run over the in-memory broker in
+tests.
 
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
@@ -91,7 +100,7 @@ one-hour soak against Redpanda has not been run.
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
-| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
+| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane and differ built and tested in memory; rollout not started; no gate G0 to G6 passed |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, and `budget:` done; rule PR CI gates and `docs/authoring.md` not started |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
@@ -129,7 +138,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ```
 cmd/signalman/          CLI: test, explain, lint, bench, noise
 cmd/signalmand/         the pipeline daemon
-cmd/differ/             shadow-mode verdict comparison
+cmd/differ/             shadow-mode verdict comparison: verdicts.v1 x verdicts.v2 -> divergences
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
 internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
@@ -140,7 +149,8 @@ internal/explain/       explain walker and renderer, held equal to v1 by test
 internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
 internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL
-internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit
+internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, shadow lane, invariant 1 audit
+internal/differ/        bounded merge join of the two verdict streams, divergence classes
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
 internal/obs/           metrics (canary is Plan E)
 internal/verdict/       verdict digest, one rolling hash per partition
@@ -154,6 +164,7 @@ docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
+docs/cutover.md         the four arguments, gate ladder G0 to G6, retirement criteria, divergence log
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
@@ -181,6 +192,10 @@ that needs them.
   refuses a rule directory with any rejection (`-strict=false` loads what it
   can). Worker pools, queue size, in-flight batches, and batch size are flags
   with fixed defaults, not derived from the machine.
+- Shadow mode: add `-shadow` to `signalmand`, then run
+  `go run ./cmd/differ` against the same brokers. The differ serves
+  `/metrics` on `:9465`; `signalman_divergences_counted_total` is the number
+  the gates watch.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.

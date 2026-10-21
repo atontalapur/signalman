@@ -97,5 +97,10 @@ type Broker interface {
 	// CommittedOffsets returns the group's committed next offset per
 	// partition. A partition with no commit is absent.
 	CommittedOffsets(ctx context.Context, group, topic string) (map[int32]int64, error)
+	// CommitOffsets records next as group's committed offsets without
+	// joining the group. It is for a reader that positions itself with
+	// ReadFrom and checkpoints by hand, like the differ; the group must have
+	// no active members.
+	CommitOffsets(ctx context.Context, group string, next map[TopicPartition]int64) error
 	Close()
 }

@@ -4,6 +4,10 @@
 // in-process audit checks invariant 1 against those topics as offsets are
 // committed.
 //
+// With -shadow, every normalized event is also evaluated by v2 in the same
+// batch, and v2's verdicts go to verdicts.v2 for cmd/differ. v2 emits no
+// alerts in shadow mode.
+//
 // SIGHUP reloads the rule directory. The new rule set applies from the next
 // batch on; a batch in flight finishes under the rules it started with. A
 // taxonomy change needs a restart, because the normalizer is built from it.
@@ -23,6 +27,7 @@ import (
 	"time"
 
 	"github.com/atontalapur/signalman/internal/broker/kafka"
+	"github.com/atontalapur/signalman/internal/differ"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/pipe"
 	"github.com/atontalapur/signalman/internal/sigma"
@@ -53,6 +58,7 @@ type flags struct {
 	partitions       int
 	auditInterval    time.Duration
 	auditWindow      int64
+	shadow           bool
 }
 
 func parseFlags(args []string) (flags, error) {
@@ -76,6 +82,7 @@ func parseFlags(args []string) (flags, error) {
 	fs.IntVar(&f.partitions, "partitions", 8, "partitions per topic for -create-topics")
 	fs.DurationVar(&f.auditInterval, "audit-interval", 10*time.Second, "how often the invariant 1 audit runs; 0 disables it")
 	fs.Int64Var(&f.auditWindow, "audit-window", 10000, "widest seq range the audit checks at once")
+	fs.BoolVar(&f.shadow, "shadow", false, "also evaluate every event with v2 and write verdicts.v2 (no alerts)")
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}
@@ -162,6 +169,9 @@ func run(f flags, log *slog.Logger) error {
 	}
 
 	slot := pipe.NewSlot(pipe.V1(rs), m)
+	if err := install(slot, rs, f.shadow); err != nil {
+		return err
+	}
 	go reloadOnHUP(ctx, f, tax, slot, log)
 
 	// The audit snapshots its starting point before the pipeline produces
@@ -209,10 +219,24 @@ func reloadOnHUP(ctx context.Context, f flags, tax *sigma.Taxonomy, slot *pipe.S
 				log.Error("reload refused; keeping the active rule set", "err", err)
 				continue
 			}
-			slot.Store(pipe.V1(rs))
-			log.Info("rule set reloaded; applies from the next batch", "ruleset_v", rs.Version)
+			if err := install(slot, rs, f.shadow); err != nil {
+				log.Error("reload refused; keeping the active rule set", "err", err)
+				continue
+			}
+			log.Info("rule set reloaded; applies from the next batch", "ruleset_v", rs.Version, "shadow", f.shadow)
 		}
 	}
+}
+
+// install makes rs active from the next batch: v1 alone, or v1 with v2
+// compiled from the same rule set beside it. The pair is stored as one
+// value, so no batch sees v1 and v2 under different RuleSetV.
+func install(slot *pipe.Slot, rs *sigma.RuleSet, shadow bool) error {
+	if !shadow {
+		slot.Store(pipe.V1(rs))
+		return nil
+	}
+	return slot.StoreWithShadow(pipe.V1(rs), pipe.V2(rs))
 }
 
 // topicSpecs mirrors deploy/docker-compose.yml.
@@ -223,7 +247,9 @@ func topicSpecs(partitions int32) []kafka.TopicSpec {
 		{Name: pipe.TopicEventsNorm},
 		{Name: pipe.TopicAlerts},
 		{Name: pipe.TopicVerdictsV1, Configs: map[string]string{"retention.ms": week}},
+		{Name: pipe.TopicVerdictsV2, Configs: map[string]string{"retention.ms": week}},
 		{Name: pipe.TopicDrops, Configs: map[string]string{"retention.ms": month}},
+		{Name: differ.TopicDivergences, Configs: map[string]string{"retention.ms": month}},
 	}
 	for i := range specs {
 		specs[i].Partitions, specs[i].Replication = partitions, 1

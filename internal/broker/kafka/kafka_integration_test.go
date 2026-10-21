@@ -135,3 +135,17 @@ func TestKafkaPinnedPartitionAndReadFrom(t *testing.T) {
 		t.Fatal("a positioned reader must refuse to commit")
 	}
 }
+
+func TestKafkaCommitOffsetsOutsideTheGroup(t *testing.T) {
+	b := dial(t)
+	name := topic(t, b, 2)
+	ctx := context.Background()
+	group := "it-commit-" + name
+	if err := b.CommitOffsets(ctx, group, map[broker.TopicPartition]int64{{Topic: name, Partition: 1}: 0}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := b.CommittedOffsets(ctx, group, name)
+	if err != nil || c[1] != 0 {
+		t.Fatalf("committed %v %v", c, err)
+	}
+}

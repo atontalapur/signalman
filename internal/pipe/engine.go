@@ -2,6 +2,7 @@ package pipe
 
 import (
 	"github.com/atontalapur/signalman/internal/engine/v1"
+	"github.com/atontalapur/signalman/internal/engine/v2"
 	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/sigma"
 )
@@ -31,6 +32,14 @@ func V1(rs *sigma.RuleSet) Engine { return v1Engine{v1.New(rs)} }
 type v1Engine struct{ *v1.Evaluator }
 
 func (v1Engine) Name() string { return v1.Name }
+
+// V2 wraps the compiled evaluator as an Engine. It compiles rs, which for
+// 1,500 rules is well under the two seconds a reload may take.
+func V2(rs *sigma.RuleSet) Engine { return v2Engine{v2.New(rs)} }
+
+type v2Engine struct{ *v2.Evaluator }
+
+func (v2Engine) Name() string { return v2.Name }
 
 // VerdictTopic is where an engine's verdicts go.
 func VerdictTopic(e Engine) string { return "verdicts." + e.Name() }
