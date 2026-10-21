@@ -210,8 +210,15 @@ worth avoiding for the same reason, though the gate does not flag it.
 
 A PR that touches `rules/` runs `.github/workflows/rules.yml`. It finds the
 changed rules (a changed fixture counts as its rule), runs
-`signalman gates` on them, and posts the report as one PR comment that later
-pushes update in place.
+`signalman gates` on them, writes the full report to the job summary, and
+posts it as one PR comment that later pushes update in place.
+
+A PR comment holds 65,536 characters, so the comment copy (`--comment FILE`)
+is cut to 60,000 bytes: the per-rule details go first, then table rows, with
+failures, warnings, and files not checked kept ahead of passes. The comment
+says how many rules it left out. The job summary has the full report unless
+that is over the summary's 1 MiB limit, in which case it gets the cut copy
+too. Locally `signalman gates` prints the full report to stdout.
 
 | Gate | Fails when |
 |---|---|

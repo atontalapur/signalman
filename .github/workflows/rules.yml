@@ -1,6 +1,7 @@
 # Rule pull request gates: parse, fixtures, noise budget, latency budget,
-# and prefilter, for every rule the PR adds or changes. The report goes to
-# the job summary and to one PR comment that later pushes edit in place.
+# and prefilter, for every rule the PR adds or changes. The full report goes
+# to the job summary; a copy cut to fit one PR comment goes to a comment
+# that later pushes edit in place.
 #
 # Two jobs, so the code under review never runs with a write token. `gates`
 # builds and runs the PR's signalman with a read-only token; `comment` runs
@@ -59,12 +60,21 @@ jobs:
             args+=(--corpus "$NOISE_CORPUS")
           fi
           set +e
-          "$RUNNER_TEMP/signalman" "${args[@]}" > "$RUNNER_TEMP/report.md"
+          "$RUNNER_TEMP/signalman" "${args[@]}" --comment "$RUNNER_TEMP/comment.md" > "$RUNNER_TEMP/report.md"
           code=$?
           set -e
-          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          touch "$RUNNER_TEMP/comment.md"
+          # stdout is the full report; --comment is the same report cut to
+          # fit one PR comment. The job summary takes the full one unless it
+          # is over the summary's 1 MiB limit.
+          if [ "$(wc -c < "$RUNNER_TEMP/report.md")" -le 1000000 ]; then
+            cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+            echo "The full report is over the job summary limit. Run signalman gates locally for it." >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "report=$(base64 -w0 < "$RUNNER_TEMP/report.md")" >> "$GITHUB_OUTPUT"
+          echo "report=$(base64 -w0 < "$RUNNER_TEMP/comment.md")" >> "$GITHUB_OUTPUT"
       - name: Fail on a failed gate
         if: steps.gates.outputs.code != '0'
         env:
