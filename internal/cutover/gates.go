@@ -307,20 +307,6 @@ func (e *evaluator) zero(key, criterion, metric string) {
 	}
 }
 
-// positive checks a counter increased over the window.
-func (e *evaluator) positive(key, criterion, metric string) {
-	query := fmt.Sprintf("sum(increase(%s[%s]))", metric, e.w())
-	v, present, ok := e.q(key, criterion, query, e.c.At)
-	if !ok {
-		return
-	}
-	if present && v > 0 {
-		e.add(key, criterion, Pass, "%.0f over %s (`%s`)", v, e.w(), query)
-		return
-	}
-	e.add(key, criterion, Fail, "%g over %s (`%s`)", v, e.w(), query)
-}
-
 // coverage checks every instance exporting metric was scraped for at least
 // MinCoverage of the window ending at at. Sums, minimums and maximums over
 // a window see only the samples that exist, so without this a gate held for
@@ -442,11 +428,59 @@ func (e *evaluator) live(percent int) {
 	e.differ()
 }
 
-// differ checks the differ compared events and counted no divergence.
+// differ checks the differ compared events for the whole window, kept up
+// with the pipeline, and counted no divergence. Activity somewhere in the
+// window is not enough: a differ that stalls after an hour counts no
+// divergence for the rest of it.
 func (e *evaluator) differ() {
-	e.positive("differ-running", "the differ resolved events over the window", "signalman_differ_events_total")
+	key, crit := "differ-running", "the differ resolved events at every 5m step of the window"
+	if got, st, ok := e.everyStep(key, crit, "differ resolutions", "sum(rate(signalman_differ_events_total[5m]))"); ok {
+		e.add(key, crit, st, "%s", got)
+	}
+	e.keepsUp()
 	e.zero("divergences", "no v2 false negative, v2 false positive, or missing verdict", "signalman_divergences_counted_total")
 	e.zero("shadow-failures", "the shadow engine never failed on an event", "signalman_shadow_failures_total")
+}
+
+// keepsUp checks the differ resolved at least as many events over the
+// window as the pipeline evaluated, within VerdictTolerance: every admitted
+// event is a drop or one record per engine, and the differ resolves each
+// record pair once. A differ far behind has not compared the events it
+// will report on, so its flat divergence count says nothing about them.
+// Only a shortfall fails; a differ catching up a backlog resolves more.
+func (e *evaluator) keepsUp() {
+	key := "differ-keeps-up"
+	crit := fmt.Sprintf("the differ resolved the events signalmand evaluated (ingested less dropped) within %g", e.c.VerdictTolerance)
+	qd := fmt.Sprintf("sum(increase(signalman_differ_events_total[%s]))", e.w())
+	qi := fmt.Sprintf("sum(increase(signalman_events_ingested_total[%s]))", e.w())
+	qx := fmt.Sprintf("sum(increase(signalman_events_dropped_total[%s]))", e.w())
+	resolved, _, ok := e.q(key, crit, qd, e.c.At)
+	if !ok {
+		return
+	}
+	ingested, present, ok := e.q(key, crit, qi, e.c.At)
+	if !ok {
+		return
+	}
+	if !present {
+		e.add(key, crit, Unchecked, "signalman_events_ingested_total has no series: is signalmand scraped? (`%s`)", qi)
+		return
+	}
+	// A pipeline that dropped nothing exports no drops series.
+	dropped, _, ok := e.q(key, crit, qx, e.c.At)
+	if !ok {
+		return
+	}
+	evaluated := ingested - dropped
+	if evaluated <= 0 {
+		e.add(key, crit, Fail, "signalmand evaluated no events over %s", e.w())
+		return
+	}
+	st := Fail
+	if resolved >= (1-e.c.VerdictTolerance)*evaluated {
+		st = Pass
+	}
+	e.add(key, crit, st, "differ resolved %.0f of %.0f events evaluated over %s (%.5f)", resolved, evaluated, e.w(), resolved/evaluated)
 }
 
 // alertVolume compares each rule's alert count over the window ending at At

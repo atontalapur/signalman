@@ -52,6 +52,11 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   ignores a series' first sample. signalmand now exports them at zero (per
   partition from the auditor's start, per rule and engine and per shadow
   when engines are stored), and the gates treat no series as unchecked.
+- differ-running passed on any differ activity in the window, so a differ
+  that stalled after an hour, or fell far behind, passed G1 to G4 and G6
+  with divergences flat. It now needs differ resolutions at every 5m step,
+  and the new differ-keeps-up needs the differ to have resolved the events
+  signalmand evaluated, within `-verdict-tolerance`.
 
 ## [0.15.0] - 2026-10-21
 

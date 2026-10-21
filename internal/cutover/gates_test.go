@@ -30,7 +30,10 @@ func healthy(f *fakeSource, w string, percent float64) {
 	// Every scrape of the window landed.
 	f.instant[fmt.Sprintf("min(count_over_time(signalman_rollout_percent[%s]))", w)] = float64(d / (15 * time.Second))
 	f.instant[fmt.Sprintf("min(count_over_time(signalman_differ_events_total[%s]))", w)] = float64(d / (15 * time.Second))
+	f.instant[fmt.Sprintf(`count_over_time((sum(rate(signalman_differ_events_total[5m])) > 0)[%s:5m])`, w)] = float64(d / (5 * time.Minute))
 	f.instant[fmt.Sprintf("sum(increase(signalman_differ_events_total[%s]))", w)] = 1e6
+	f.instant[fmt.Sprintf("sum(increase(signalman_events_ingested_total[%s]))", w)] = 1.1e6
+	f.instant[fmt.Sprintf("sum(increase(signalman_events_dropped_total[%s]))", w)] = 1e5
 	f.instant[fmt.Sprintf("sum(increase(signalman_divergences_counted_total[%s]))", w)] = 0
 	f.instant[fmt.Sprintf("sum(increase(signalman_shadow_failures_total[%s]))", w)] = 0
 }
@@ -100,6 +103,49 @@ func TestAnUnscrapedDifferIsUnchecked(t *testing.T) {
 	r := eval(t, Config{Gate: "G1", Source: f})
 	if c := statusOf(t, r, "divergences"); c.Status != Unchecked || !strings.Contains(c.Evidence, "scraped") {
 		t.Fatalf("divergences %+v", c)
+	}
+}
+
+// A differ that resolved events in the first hour and then stalled has
+// counted no divergence since; activity somewhere in the window is not a
+// differ comparing the whole window.
+func TestADifferThatStallsFailsG1(t *testing.T) {
+	f := newFake()
+	healthy(f, "168h", 0)
+	f.instant[`count_over_time((sum(rate(signalman_differ_events_total[5m])) > 0)[168h:5m])`] = 12
+	f.instant["sum(increase(signalman_differ_events_total[168h]))"] = 2e4
+	r := eval(t, Config{Gate: "G1", Source: f, Attest: map[string]string{"v2-p99": "x"}})
+	if c := statusOf(t, r, "differ-running"); c.Status != Fail || r.Passed() {
+		t.Fatalf("differ-running %+v", c)
+	}
+	if c := statusOf(t, r, "differ-keeps-up"); c.Status != Fail {
+		t.Fatalf("differ-keeps-up %+v", c)
+	}
+}
+
+// A differ resolving at every step but far behind the pipeline has not
+// compared the window's events yet.
+func TestADifferFarBehindFailsG1(t *testing.T) {
+	f := newFake()
+	healthy(f, "168h", 0)
+	f.instant["sum(increase(signalman_differ_events_total[168h]))"] = 0.9e6
+	r := eval(t, Config{Gate: "G1", Source: f, Attest: map[string]string{"v2-p99": "x"}})
+	if c := statusOf(t, r, "differ-keeps-up"); c.Status != Fail || r.Passed() {
+		t.Fatalf("differ-keeps-up %+v", c)
+	}
+	if statusOf(t, r, "differ-running").Status != Pass {
+		t.Fatal("a differ resolving at every step is running")
+	}
+	// No drops is no drops series, not an unknown.
+	f.instant["sum(increase(signalman_differ_events_total[168h]))"] = 1e6
+	f.instant["sum(increase(signalman_events_ingested_total[168h]))"] = 1e6
+	delete(f.instant, "sum(increase(signalman_events_dropped_total[168h]))")
+	if c := statusOf(t, eval(t, Config{Gate: "G1", Source: f}), "differ-keeps-up"); c.Status != Pass {
+		t.Fatalf("differ-keeps-up with no drops %+v", c)
+	}
+	delete(f.instant, "sum(increase(signalman_events_ingested_total[168h]))")
+	if c := statusOf(t, eval(t, Config{Gate: "G1", Source: f}), "differ-keeps-up"); c.Status != Unchecked {
+		t.Fatalf("differ-keeps-up with no ingest series %+v", c)
 	}
 }
 

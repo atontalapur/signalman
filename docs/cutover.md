@@ -279,14 +279,18 @@ samples a `-scrape-interval` (15 s) scrape would give, counted with
 `coverage-baseline` checks the same for the window alert volume is compared
 against. `engines-continuous` counts the 5m steps at which each engine's
 verdict rate was above zero and needs every one of them; a minimum over the
-steps would not see a step with no data.
+steps would not see a step with no data. `differ-running` counts the same
+for the differ's resolution rate, so a differ that stalls partway through
+the window fails, and `differ-keeps-up` needs it to have resolved at least
+the events signalmand evaluated over the window (ingested less dropped),
+within `-verdict-tolerance`, so one that runs far behind fails too.
 
 Where each criterion comes from:
 
 | Gate | Checked from | Not machine-checkable here |
 |---|---|---|
 | G0 | `-corpus` replayed through v1 and v2 with `-rules`, digests compared per partition (`internal/verdict`); `-fuzz-stats` summed, at least `-fuzz-min` (1e8) comparisons; `-go-test` runs `go test` over `internal/engine`, `internal/verdict`, `internal/pipe/chsink` | `fuzz-clean`: the counters do not record the fuzz run's exit status |
-| G1 | Over 7 days, covered: rollout at 0, both engines' verdict rates above zero at every 5m step and their counts within `-verdict-tolerance`, differ resolving events, `signalman_divergences_counted_total` and `signalman_shadow_failures_total` flat | `v2-p99`: no per-engine match latency metric is exported; it comes from the load harness |
+| G1 | Over 7 days, covered: rollout at 0, both engines' verdict rates above zero at every 5m step and their counts within `-verdict-tolerance`, the differ resolving events at every 5m step and at least the events signalmand evaluated (ingested less dropped) within `-verdict-tolerance`, `signalman_divergences_counted_total` and `signalman_shadow_failures_total` flat | `v2-p99`: no per-engine match latency metric is exported; it comes from the load harness |
 | G2, G3 | Over 48 h: rollout held at 1, 10 or 50 on every instance, the G1 checks, alert volume per rule against the 48 h before within `-noise-sigma` (Poisson, default 3), and a rollback in `-drill` from that step, written within `-drill-slack` of the hold, under 30 s | |
 | G4 | The G2 checks at 100 apart from alert volume, `signalman_alerts_total{engine="v1"}` flat, and a rollback from 100 in `-drill` | `flag-only`: no configuration change other than the rollout file |
 | G5 | `-drill` from `cutover gameday`: 100 to 0 and 0 to 100, each under 30 s; started on a weekday inside `-business-hours` in `-tz`; ingest rate at the rollback at least `-full-traffic` (0.8) of the 7 day mean | |
