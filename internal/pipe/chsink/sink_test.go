@@ -629,3 +629,18 @@ func TestDecodeRoundTripsThePipelineAlert(t *testing.T) {
 		t.Fatalf("decoded %+v from %+v", got, a)
 	}
 }
+
+// The pipeline empties Fields and sets fields_omitted when an alert would
+// not fit the output limit. The sink must still accept that record and
+// store it with an empty fields map, raw intact.
+func TestDecodeAcceptsAnAlertWithFieldsOmitted(t *testing.T) {
+	a := genAlert(3, 18, 2)
+	a.Fields, a.FieldsOmitted = map[string]string{}, true
+	got, err := Decode(alertRecord(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.FieldsOmitted || len(got.Fields) != 0 || got.Raw != a.Raw {
+		t.Fatalf("decoded %+v from %+v", got, a)
+	}
+}
