@@ -48,21 +48,8 @@ func cmdNoise(args []string, stdout, stderr io.Writer) int {
 		return exitFail
 	}
 
-	e := v1.New(&sigma.RuleSet{Rules: []sigma.Rule{*r}, TaxonomyV: tax.Version})
-	buf := make([]event.Verdict, 0, 1)
-	var samples []corpusEvent
-	matches := 0
-	for _, ce := range events {
-		buf = e.EvaluateInto(buf[:0], ce.Event)
-		if !buf[0].Matched {
-			continue
-		}
-		matches++
-		if len(samples) < noiseSamples {
-			samples = append(samples, ce)
-		}
-	}
-	rate := float64(matches) * 100000 / float64(len(events))
+	matches, samples := noiseOf(r, tax.Version, events)
+	rate := per100k(matches, len(events))
 
 	fmt.Fprintf(stdout, "rule      %s (%s)\n", r.Path, r.ID)
 	fmt.Fprintf(stdout, "corpus    %s\n", *corpus)
@@ -90,6 +77,30 @@ func cmdNoise(args []string, stdout, stderr io.Writer) int {
 	}
 	return exitOK
 }
+
+// noiseOf runs one rule over the corpus with the v1 evaluator and returns
+// the match count and the first noiseSamples matches in corpus order.
+func noiseOf(r *sigma.Rule, taxV string, events []corpusEvent) (int, []corpusEvent) {
+	e := v1.New(&sigma.RuleSet{Rules: []sigma.Rule{*r}, TaxonomyV: taxV})
+	buf := make([]event.Verdict, 0, 1)
+	var samples []corpusEvent
+	matches := 0
+	for _, ce := range events {
+		buf = e.EvaluateInto(buf[:0], ce.Event)
+		if !buf[0].Matched {
+			continue
+		}
+		matches++
+		if len(samples) < noiseSamples {
+			samples = append(samples, ce)
+		}
+	}
+	return matches, samples
+}
+
+// per100k is the match rate the budget is written in. A corpus is never
+// empty: readCorpus refuses one.
+func per100k(matches, events int) float64 { return float64(matches) * 100000 / float64(events) }
 
 func formatBudget(b float64) string { return strconv.FormatFloat(b, 'f', -1, 64) }
 

@@ -48,6 +48,7 @@ of Plan G need the pipeline first.
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
 and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
+`docs/authoring.md` is the rule author's guide that sits on top of them.
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
 
@@ -63,6 +64,7 @@ signalman explain rules/proc_dump.yml ev.json    # condition tree, results, obse
 signalman lint    rules/                         # every LoadError, structured (--json too)
 signalman bench   rules/ [--corpus dir]          # p50/p99/max per rule, flags p99 over 50us
 signalman noise   rules/proc_dump.yml --corpus dir   # matches per 100k, ten samples, budget:
+signalman gates   --set rules rules/proc_dump.yml    # the five PR gates as a markdown report
 ```
 
 Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
@@ -93,6 +95,15 @@ is stored with the value v1 would compute, so the SQL only compares.
 `docs/backend-ch.md` lists each leak. The retro-hunt-equals-replay test is
 written but has not yet run against a server.
 
+A pull request that touches `rules/` runs `.github/workflows/rules.yml`:
+`signalman gates` checks each changed rule for parse, fixtures, noise
+budget, latency budget, and prefilter, and the report lands in one PR
+comment and the job summary. Only a failed gate fails the job; a rule the
+v2 prefilter cannot key on (the `Always` set) is a warning. The noise gate
+runs when the repository variable `SIGNALMAN_NOISE_CORPUS` names a corpus
+and is skipped otherwise. `docs/authoring.md` covers the supported Sigma
+subset, rejection codes, fixtures, explain, budgets, and the gates.
+
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
@@ -102,7 +113,7 @@ written but has not yet run against a server.
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, and `budget:` done; rule PR CI gates and `docs/authoring.md` not started |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow has not run on a real rule PR yet and no noise corpus is configured |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
@@ -137,7 +148,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ## Repository
 
 ```
-cmd/signalman/          CLI: test, explain, lint, bench, noise
+cmd/signalman/          CLI: test, explain, lint, bench, noise, gates
 cmd/signalmand/         the pipeline daemon
 cmd/differ/             shadow-mode verdict comparison
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
@@ -166,12 +177,14 @@ docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are com
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
 docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
+docs/authoring.md       writing rules: supported subset, rejections, fixtures, budgets, PR gates
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
 rules/                  twenty hand-written rules, each with a .test.yml fixture
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
 scripts/                backlog validator, Jira sync
+.github/workflows/      ci, nightly fuzz, release, rules (the rule PR gates)
 ```
 
 Directories under `cmd/`, `internal/`, and `test/` are created by the plan

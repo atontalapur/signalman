@@ -1,0 +1,102 @@
+# Rule pull request gates: parse, fixtures, noise budget, latency budget,
+# and prefilter, for every rule the PR adds or changes. The report goes to
+# the job summary and to one PR comment that later pushes edit in place.
+#
+# Two jobs, so the code under review never runs with a write token. `gates`
+# builds and runs the PR's signalman with a read-only token; `comment` runs
+# only gh, with no checkout, and is the one job allowed to write. A PR from
+# a fork gets a read-only token whatever this file asks for, so `comment`
+# is skipped there and the job summary carries the report.
+#
+# The noise gate needs a corpus. Set the repository variable
+# SIGNALMAN_NOISE_CORPUS to a directory in the checkout to turn it on;
+# without it the gate reports itself skipped.
+name: rules
+on:
+  pull_request:
+    paths:
+      - "rules/**"
+
+concurrency:
+  group: rules-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      report: ${{ steps.gates.outputs.report }}
+      code: ${{ steps.gates.outputs.code }}
+    steps:
+      # The pull_request checkout is the merge commit, so HEAD^1 is the base
+      # branch tip and the diff is what this PR changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Changed rules
+        run: git diff --name-only -z --diff-filter=d HEAD^1 HEAD -- rules/ > "$RUNNER_TEMP/changed"
+      - run: go build -o "$RUNNER_TEMP/signalman" ./cmd/signalman
+      # Exit 1 is a failed gate and still has a report to post. The step
+      # records the code and the next step fails the job with it.
+      - name: Run gates
+        id: gates
+        env:
+          NOISE_CORPUS: ${{ vars.SIGNALMAN_NOISE_CORPUS }}
+        run: |
+          args=(gates --set rules --changed "$RUNNER_TEMP/changed")
+          if [ -n "$NOISE_CORPUS" ]; then
+            args+=(--corpus "$NOISE_CORPUS")
+          fi
+          set +e
+          "$RUNNER_TEMP/signalman" "${args[@]}" > "$RUNNER_TEMP/report.md"
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "report=$(base64 -w0 < "$RUNNER_TEMP/report.md")" >> "$GITHUB_OUTPUT"
+      - name: Fail on a failed gate
+        if: steps.gates.outputs.code != '0'
+        env:
+          CODE: ${{ steps.gates.outputs.code }}
+        run: |
+          echo "signalman gates exited $CODE; see the job summary"
+          exit 1
+
+  comment:
+    needs: gates
+    if: >-
+      always()
+      && needs.gates.outputs.report != ''
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Post or update the report comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          REPORT: ${{ needs.gates.outputs.report }}
+        run: |
+          printf '%s' "$REPORT" | base64 -d > report.md
+          id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- signalman-gates -->"))) | .id' \
+            | awk 'NR == 1')
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@report.md > /dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@report.md > /dev/null
+          fi
