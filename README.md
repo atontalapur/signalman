@@ -114,9 +114,12 @@ is the spec's `alerts` table (ReplacingMergeTree ordered by
 on first start. `cmd/signalman-sink` consumes the `alerts` topic and inserts
 batches through clickhouse-go, committing offsets only after an insert
 succeeds; while ClickHouse is down it retries and stops polling, so the
-outage is consumer lag, not loss. A redelivered batch collapsing on merge is
-property-tested against a model of the merge; the same check against a real
-ClickHouse is an integration test that has not been run yet.
+outage is consumer lag, not loss. A record the table cannot hold goes to
+the `alerts.dead` topic, counted by `signalman_sink_dead_letters_total`; a
+permanent insert error stops the sink with the offsets it holds. A
+redelivered batch collapsing on merge is checked against a model of the
+merge; the same check against a real ClickHouse is an integration test that
+has not been run yet.
 
 | Plan | What it delivers | State |
 |---|---|---|

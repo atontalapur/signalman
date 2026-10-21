@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,7 +49,38 @@ func (c *countingConsumer) Poll(ctx context.Context) (broker.Fetch, error) {
 }
 
 func newBroker(maxPoll int) *counting {
-	return &counting{Broker: broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3}, broker.WithMaxPoll(maxPoll))}
+	return &counting{Broker: broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3, pipe.TopicAlertsDead: 2}, broker.WithMaxPoll(maxPoll))}
+}
+
+// readTopic returns every record in topic.
+func readTopic(t *testing.T, b broker.Broker, topic string) []broker.Record {
+	t.Helper()
+	ctx := context.Background()
+	end, err := b.EndOffsets(ctx, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []broker.Record
+	for p, n := range end {
+		if n == 0 {
+			continue
+		}
+		c, err := b.ReadFrom(map[broker.TopicPartition]int64{{Topic: topic, Partition: p}: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for int64(len(out)) < n {
+			pctx, cancel := context.WithTimeout(ctx, time.Second)
+			f, err := c.Poll(pctx)
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, f.Records...)
+		}
+		c.Close()
+	}
+	return out
 }
 
 func alertRecord(t *testing.T, a pipe.Alert) broker.Record {
@@ -262,50 +295,205 @@ func TestSinkRedeliveryCollapses(t *testing.T) {
 	sameKeys(t, want, ch.tbl.final())
 }
 
-// A record the table cannot hold stops the sink with its position, commits
-// nothing, and inserts nothing: lag over loss, and never a silent skip.
-func TestSinkStopsOnAnUninsertableRecord(t *testing.T) {
+// badRecords are alerts records the table cannot hold, each as it would be
+// produced.
+func badRecords(t *testing.T) map[string]broker.Record {
+	t.Helper()
 	cases := map[string]func(*pipe.Alert) []byte{
-		"not json":         func(*pipe.Alert) []byte { return []byte("{") },
-		"rule_id not uuid": func(a *pipe.Alert) []byte { a.RuleID = "proc_dump"; return nil },
-		"empty severity":   func(a *pipe.Alert) []byte { a.Severity = ""; return nil },
-		"unknown severity": func(a *pipe.Alert) []byte { a.Severity = "severe"; return nil },
+		"not json":            func(*pipe.Alert) []byte { return []byte("{") },
+		"rule_id not uuid":    func(a *pipe.Alert) []byte { a.RuleID = "proc_dump"; return nil },
+		"empty severity":      func(a *pipe.Alert) []byte { a.Severity = ""; return nil },
+		"unknown severity":    func(a *pipe.Alert) []byte { a.Severity = "severe"; return nil },
+		"event_time too late": func(a *pipe.Alert) []byte { a.EventTime = time.Date(2400, 1, 1, 0, 0, 0, 0, time.UTC); return nil },
 	}
+	out := map[string]broker.Record{}
 	for name, mut := range cases {
+		bad := genAlert(0, 99, 0)
+		raw := mut(&bad)
+		rec := alertRecord(t, bad)
+		if raw != nil {
+			rec.Value = raw
+		}
+		out[name] = rec
+	}
+	return out
+}
+
+// A record the table cannot hold goes to alerts.dead with its position and
+// the reason, is counted, and the sink carries on: one bad record must not
+// stop alert storage for every partition. Its offset is committed only
+// with the batch around it, after the dead-letter write.
+func TestSinkDeadLettersAnUninsertableRecord(t *testing.T) {
+	for name, rec := range badRecords(t) {
 		t.Run(name, func(t *testing.T) {
 			b := newBroker(500)
-			produceAlerts(t, b, 5)
-			bad := genAlert(0, 99, 0)
-			rec := alertRecord(t, bad)
-			if raw := mut(&bad); raw != nil {
-				rec.Value = raw
-			} else {
-				rec = alertRecord(t, bad)
-			}
+			want := produceAlerts(t, b, 5)
 			if err := b.Produce(context.Background(), []broker.Record{rec}); err != nil {
 				t.Fatal(err)
 			}
+			want = append(want, produceAlerts(t, b, 5)...)
 			tbl := &replacingTable{}
-			cfg := testConfig()
-			cfg.BatchRows = 1000
-			s, err := New(cfg, b, tbl, nil, nil)
+			reg := prometheus.NewRegistry()
+			s, err := New(testConfig(), b, tbl, obs.New(reg), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			err = s.Run(ctx)
-			if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("Run returned %v; want a record error", err)
+			stop := start(t, s)
+			waitFor(t, "every offset committed", func() bool { return committedAll(t, b) })
+			if err := stop(); !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run returned %v", err)
 			}
-			if !strings.Contains(err.Error(), "alerts/") || !strings.Contains(err.Error(), "offset") {
-				t.Fatalf("error %q does not name the record's position", err)
+			sameKeys(t, want, tbl.final())
+
+			dead := readTopic(t, b, pipe.TopicAlertsDead)
+			if len(dead) != 1 {
+				t.Fatalf("%d dead-letter records, want 1", len(dead))
 			}
-			got, _ := b.CommittedOffsets(context.Background(), group, pipe.TopicAlerts)
-			if len(got) != 0 || tbl.rawRows() != 0 {
-				t.Fatalf("committed %v, inserted %d rows", got, tbl.rawRows())
+			d := dead[0]
+			if string(d.Value) != string(rec.Value) || string(d.Key) != string(rec.Key) {
+				t.Fatalf("dead-letter record %q does not carry the original %q", d.Value, rec.Value)
+			}
+			if string(d.Header(HeaderDeadTopic)) != pipe.TopicAlerts || len(d.Header(HeaderDeadPartition)) == 0 ||
+				len(d.Header(HeaderDeadOffset)) == 0 || len(d.Header(HeaderDeadReason)) == 0 {
+				t.Fatalf("dead-letter headers %v do not name the position and reason", d.Headers)
+			}
+			if v := testutil.ToFloat64(s.m.SinkDeadLetters); v != 1 {
+				t.Fatalf("signalman_sink_dead_letters_total = %v, want 1", v)
 			}
 		})
+	}
+}
+
+// A poll holding only a bad record still commits, so the sink does not
+// redeliver it forever.
+func TestSinkCommitsADeadLetterOnlyBatch(t *testing.T) {
+	b := newBroker(500)
+	if err := b.Produce(context.Background(), []broker.Record{badRecords(t)["not json"]}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(testConfig(), b, &replacingTable{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, s)
+	waitFor(t, "the dead-lettered offset committed", func() bool { return committedAll(t, b) })
+	_ = stop()
+	if n := len(readTopic(t, b, pipe.TopicAlertsDead)); n != 1 {
+		t.Fatalf("%d dead-letter records", n)
+	}
+}
+
+// failingDead fails produces to alerts.dead while fail is set.
+type failingDead struct {
+	*counting
+	mu   sync.Mutex
+	fail error
+	hits int
+}
+
+func (f *failingDead) Produce(ctx context.Context, recs []broker.Record) error {
+	f.mu.Lock()
+	err := f.fail
+	if err != nil {
+		f.hits++
+	}
+	f.mu.Unlock()
+	if err != nil && len(recs) > 0 && recs[0].Topic == pipe.TopicAlertsDead {
+		return err
+	}
+	return f.counting.Produce(ctx, recs)
+}
+
+func (f *failingDead) set(err error) {
+	f.mu.Lock()
+	f.fail = err
+	f.mu.Unlock()
+}
+
+func (f *failingDead) hitCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hits
+}
+
+// While the dead-letter write fails, the sink retries it and commits
+// nothing; the offset is committed only once the record is durable there.
+func TestSinkCommitsOnlyAfterTheDeadLetterWrite(t *testing.T) {
+	b := &failingDead{counting: newBroker(500)}
+	produceAlerts(t, b.counting, 5)
+	if err := b.counting.Produce(context.Background(), []broker.Record{badRecords(t)["not json"]}); err != nil {
+		t.Fatal(err)
+	}
+	b.set(errors.New("redpanda: not leader for partition"))
+	s, err := New(testConfig(), b, &replacingTable{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, s)
+	waitFor(t, "repeated dead-letter attempts", func() bool { return b.hitCount() >= 10 })
+	if got, _ := b.CommittedOffsets(context.Background(), group, pipe.TopicAlerts); len(got) != 0 {
+		t.Fatalf("committed %v before the dead-letter write landed", got)
+	}
+	b.set(nil)
+	waitFor(t, "every offset committed", func() bool { return committedAll(t, b) })
+	_ = stop()
+	if n := len(readTopic(t, b, pipe.TopicAlertsDead)); n != 1 {
+		t.Fatalf("%d dead-letter records", n)
+	}
+}
+
+// A dead-letter write that cannot succeed stops the sink with the record's
+// position and commits nothing.
+func TestSinkStopsOnAPermanentDeadLetterError(t *testing.T) {
+	b := &failingDead{counting: newBroker(500)}
+	if err := b.counting.Produce(context.Background(), []broker.Record{badRecords(t)["not json"]}); err != nil {
+		t.Fatal(err)
+	}
+	b.set(fmt.Errorf("%w: produce: record too large", broker.ErrPermanent))
+	s, err := New(testConfig(), b, &replacingTable{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = s.Run(ctx)
+	if !errors.Is(err, broker.ErrPermanent) || !strings.Contains(err.Error(), "alerts/") || !strings.Contains(err.Error(), "offset") {
+		t.Fatalf("Run returned %v; want a permanent error naming the record", err)
+	}
+	if got, _ := b.CommittedOffsets(context.Background(), group, pipe.TopicAlerts); len(got) != 0 {
+		t.Fatalf("committed %v", got)
+	}
+}
+
+// Without alerts.dead the sink would find out at the first bad record; it
+// refuses to start instead.
+func TestSinkRefusesToStartWithoutTheDeadLetterTopic(t *testing.T) {
+	b := broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3})
+	s, err := New(testConfig(), b, &replacingTable{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.Run(ctx); err == nil || !strings.Contains(err.Error(), pipe.TopicAlertsDead) {
+		t.Fatalf("Run returned %v; want an error naming %s", err, pipe.TopicAlertsDead)
+	}
+}
+
+// A dead-letter record fits the topic's size limit even when the original
+// was at the limit: the value is cut and the cut is recorded.
+func TestDeadLetterRecordFitsTheLimit(t *testing.T) {
+	r := broker.Record{Topic: pipe.TopicAlerts, Partition: 2, Offset: 7, Key: []byte("k"), Value: make([]byte, broker.MaxMessageBytes-1)}
+	d := deadRecord(r, errors.New(strings.Repeat("x", 10_000)))
+	if n := broker.RecordSize(d); n > broker.MaxMessageBytes {
+		t.Fatalf("dead-letter record is %d bytes, limit %d", n, broker.MaxMessageBytes)
+	}
+	if string(d.Header(HeaderDeadTruncated)) != strconv.Itoa(len(r.Value)) {
+		t.Fatalf("truncation not recorded: %v", d.Header(HeaderDeadTruncated))
+	}
+	small := deadRecord(broker.Record{Topic: pipe.TopicAlerts, Value: []byte("{")}, errors.New("bad"))
+	if small.Header(HeaderDeadTruncated) != nil || string(small.Value) != "{" {
+		t.Fatal("a small record must be carried whole")
 	}
 }
 

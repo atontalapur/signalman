@@ -8,6 +8,12 @@
 // rule_id). When ClickHouse is down the sink retries the batch it holds and
 // stops polling, so the outage shows up as consumer lag on alerts, bounded
 // by retention, and nothing is dropped.
+//
+// A record the table cannot hold (undecodable, a non-UUID rule_id, an
+// unknown severity, a time outside DateTime64) would fail its batch on
+// every retry and stop the sink for every partition. It goes to
+// alerts.dead instead, with its position and the reason, and its offset is
+// committed only after that write is durable.
 package chsink
 
 import (
@@ -111,6 +117,9 @@ func (s *Sink) Run(ctx context.Context) error {
 	if err := s.loadCommitted(ctx); err != nil {
 		return err
 	}
+	if parts, err := s.b.EndOffsets(ctx, pipe.TopicAlertsDead); err != nil || len(parts) == 0 {
+		return fmt.Errorf("dead-letter topic %s is required and was not found: %v", pipe.TopicAlertsDead, err)
+	}
 
 	var (
 		buf      []pipe.Alert
@@ -118,13 +127,18 @@ func (s *Sink) Run(ctx context.Context) error {
 		next     = map[broker.TopicPartition]int64{}
 		deadline time.Time
 	)
+	// flush inserts buf and commits next. next also covers dead-lettered
+	// records, which are durable already, so a batch of only those skips
+	// the insert.
 	flush := func() error {
-		if err := s.insert(ctx, buf); err != nil {
-			if errors.Is(err, ErrPermanent) {
-				return fmt.Errorf("insert of %d rows (%s) cannot succeed; nothing from this batch was committed: %w",
-					len(buf), span(first, next), err)
+		if len(buf) > 0 {
+			if err := s.insert(ctx, buf); err != nil {
+				if errors.Is(err, ErrPermanent) {
+					return fmt.Errorf("insert of %d rows (%s) cannot succeed; nothing from this batch was committed: %w",
+						len(buf), span(first, next), err)
+				}
+				return err
 			}
-			return err
 		}
 		s.commit(ctx, cons, next)
 		buf, first, next = nil, map[broker.TopicPartition]int64{}, map[broker.TopicPartition]int64{}
@@ -132,7 +146,7 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 	for {
 		pctx, cancel := ctx, context.CancelFunc(func() {})
-		if len(buf) > 0 {
+		if len(next) > 0 {
 			pctx, cancel = context.WithDeadline(ctx, deadline)
 		}
 		f, err := cons.Poll(pctx)
@@ -141,7 +155,7 @@ func (s *Sink) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if len(buf) > 0 && errors.Is(err, context.DeadlineExceeded) {
+			if len(next) > 0 && errors.Is(err, context.DeadlineExceeded) {
 				if err := flush(); err != nil {
 					return err
 				}
@@ -154,24 +168,25 @@ func (s *Sink) Run(ctx context.Context) error {
 			continue
 		}
 		s.observe(f.HighWatermarks)
-		if len(buf) == 0 && len(f.Records) > 0 {
+		if len(next) == 0 && len(f.Records) > 0 {
 			deadline = time.Now().Add(s.cfg.FlushInterval)
 		}
 		for _, r := range f.Records {
 			a, err := Decode(r)
 			if err != nil {
-				// The batch is not inserted or committed, so the record and
-				// everything after it stay in the log for the next Run.
-				return fmt.Errorf("%s/%d offset %d: %w; nothing from this batch was committed", r.Topic, r.Partition, r.Offset, err)
+				if err := s.deadLetter(ctx, r, err); err != nil {
+					return err
+				}
+			} else {
+				buf = append(buf, a)
 			}
-			buf = append(buf, a)
 			tp := broker.TopicPartition{Topic: r.Topic, Partition: r.Partition}
 			if _, ok := first[tp]; !ok {
 				first[tp] = r.Offset
 			}
 			next[tp] = max(next[tp], r.Offset+1)
 		}
-		if len(buf) >= s.cfg.BatchRows || (len(buf) > 0 && !time.Now().Before(deadline)) {
+		if len(buf) >= s.cfg.BatchRows || (len(next) > 0 && !time.Now().Before(deadline)) {
 			if err := flush(); err != nil {
 				return err
 			}
@@ -201,6 +216,79 @@ func (s *Sink) insert(ctx context.Context, rows []pipe.Alert) error {
 		}
 		wait = min(2*wait, s.cfg.MaxBackoff)
 	}
+}
+
+// Headers on an alerts.dead record. The key and value are the original
+// record's.
+const (
+	HeaderDeadTopic     = "signalman-dead-topic"
+	HeaderDeadPartition = "signalman-dead-partition"
+	HeaderDeadOffset    = "signalman-dead-offset"
+	HeaderDeadReason    = "signalman-dead-reason"
+	// HeaderDeadTruncated is set, to the original value length, when the
+	// value was cut to fit broker.MaxMessageBytes.
+	HeaderDeadTruncated = "signalman-dead-truncated"
+	maxDeadReason       = 1024
+)
+
+// deadRecord is the alerts.dead record for r, refused for reason. It fits
+// broker.MaxMessageBytes: the reason is capped and the value cut if needed.
+func deadRecord(r broker.Record, reason error) broker.Record {
+	msg := reason.Error()
+	if len(msg) > maxDeadReason {
+		msg = msg[:maxDeadReason]
+	}
+	d := broker.Record{
+		Topic:     pipe.TopicAlertsDead,
+		Partition: broker.AnyPartition,
+		Key:       r.Key,
+		Headers: []broker.Header{
+			{Key: HeaderDeadTopic, Value: []byte(r.Topic)},
+			{Key: HeaderDeadPartition, Value: []byte(strconv.Itoa(int(r.Partition)))},
+			{Key: HeaderDeadOffset, Value: []byte(strconv.FormatInt(r.Offset, 10))},
+			{Key: HeaderDeadReason, Value: []byte(msg)},
+		},
+	}
+	// Room for the truncation header too, so adding it cannot overflow.
+	room := broker.MaxMessageBytes - broker.RecordSize(d) - len(HeaderDeadTruncated) - 20
+	d.Value = r.Value
+	if len(r.Value) > room {
+		d.Value = r.Value[:max(0, room)]
+		d.Headers = append(d.Headers, broker.Header{Key: HeaderDeadTruncated, Value: []byte(strconv.Itoa(len(r.Value)))})
+	}
+	return d
+}
+
+// deadLetter writes r to alerts.dead, retrying a transient failure until it
+// is durable or ctx ends. A permanent failure stops the sink with r's
+// position, nothing committed.
+func (s *Sink) deadLetter(ctx context.Context, r broker.Record, reason error) error {
+	d := deadRecord(r, reason)
+	wait := s.cfg.RetryBackoff
+	for {
+		err := s.b.Produce(ctx, []broker.Record{d})
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, broker.ErrPermanent) {
+			return fmt.Errorf("%s/%d offset %d: %v; the dead-letter write to %s cannot succeed and nothing from this batch was committed: %w",
+				r.Topic, r.Partition, r.Offset, reason, pipe.TopicAlertsDead, err)
+		}
+		s.log.Warn("dead-letter write failed, retrying; not polling until it lands", "err", err)
+		if !sleep(ctx, wait) {
+			return ctx.Err()
+		}
+		wait = min(2*wait, s.cfg.MaxBackoff)
+	}
+	s.log.Error("alert record the table cannot hold; written to "+pipe.TopicAlertsDead,
+		"topic", r.Topic, "partition", r.Partition, "offset", r.Offset, "reason", reason)
+	if s.m != nil {
+		s.m.SinkDeadLetters.Inc()
+	}
+	return nil
 }
 
 // commit records the next offset per partition. A failed commit is logged,

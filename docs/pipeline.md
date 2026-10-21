@@ -23,6 +23,7 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 | `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions |
 | `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
+| `alerts.dead` | the alert's key | an `alerts` record the ClickHouse table cannot hold, written by `signalman-sink`; not in the spec |
 
 `verdicts.v1` holds one record per event rather than one per verdict, so the
 topic grows with events, not events times rules, and an event's verdicts are
@@ -171,12 +172,31 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   retention. Nothing is dropped. signalmand itself is not slowed: the
   acceptance line "the sink backpressures the pipeline" holds for the
   alerts consumer, whose lag is the backpressure, not for detection.
-- **Records the table cannot hold.** The rule loader accepts any rule id
-  and any level, but the table's `rule_id` is a UUID and `severity` is an
-  Enum8 of the five Sigma levels. A record that would fail every insert of
-  its batch stops the sink with its topic, partition, and offset, and
-  nothing in that batch is committed. Skipping it would be silent loss;
-  stopping is lag an operator can see and fix.
+- **Records the table cannot hold.** The table's `rule_id` is a UUID,
+  `severity` is an Enum8 of the five Sigma levels, and the times are
+  DateTime64(3). The rule loader now rejects a non-UUID id and a missing or
+  unknown level (codes `invalid-id` and `level`), so these come from a
+  hand-written record, an older rule set, or a bug, but a record that would
+  fail every insert of its batch would still stop the sink for every
+  partition. `Decode` checks each record, and one it refuses goes to the
+  `alerts.dead` topic: same key and value, with headers naming its topic,
+  partition, offset, and the reason (capped at 1 KiB; a value too large to
+  fit beside the headers is cut, and `signalman-dead-truncated` records its
+  length). Its offset is committed with the batch around it, only after the
+  dead-letter write returned, so a crash redelivers it and it may be
+  dead-lettered twice. Each one increments
+  `signalman_sink_dead_letters_total`; any increase is an alert stored
+  nowhere queryable and needs an operator. `alerts.dead` keeps 30 days and
+  has the same 1 MiB record limit as the other topics. The sink refuses to
+  start without it. A transient dead-letter write failure is retried like
+  an insert; a permanent one stops the sink with the record's position.
+- **Permanent insert errors.** ClickHouse exceptions an identical insert
+  hits again (parse and type errors, a missing table or column, refused
+  auth, too many partitions in one block) and client-side append errors
+  wrap `chsink.ErrPermanent`. The sink then stops at once, naming the
+  offsets it holds per partition, and commits nothing. Everything else,
+  including "too many parts" while merges catch up, is retried as an
+  outage.
 
 Idempotence is tested twice. `TestReingestingABatchChangesNoRow` models the
 merge (last insert wins per sorting key, within a day partition) and checks
@@ -246,6 +266,7 @@ Names from the spec's core metrics table, in `internal/obs`.
 | `signalman_consumer_lag_records` | topic, partition | log end offset minus committed offset |
 | `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | partition | the audit; not in the spec table |
+| `signalman_sink_dead_letters_total` | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
 
 Not yet exported: `signalman_rule_eval_seconds`,
 `signalman_event_staleness_seconds`, `signalman_canary_age_seconds`. Those are
