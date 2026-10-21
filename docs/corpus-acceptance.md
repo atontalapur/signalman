@@ -116,6 +116,15 @@ a rule without one cannot be reported on or compared across engines.
 No rule in the corpus has a detection block shape the compiler rejects, and
 no two rules share an id.
 
+### `invalid-id` and `level` — 0 rules, correct rejections
+
+A rule id that is not a canonical UUID, or a `level` that is missing or not
+one of the five Sigma levels, is rejected because the ClickHouse alerts
+table stores both as typed columns. Rerun on 2026-10-21 against the same
+corpus commit after these checks were added: every count in the table above
+is unchanged and both codes reject nothing, since SigmaHQ requires a UUID id
+and a level on every rule.
+
 ## Differential fuzzer runs
 
 Loading is not matching, so `test/fuzz` checks the frontend's semantics

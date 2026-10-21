@@ -146,3 +146,57 @@ func TestMemoryRejectsUnknownTopicAndBadPartition(t *testing.T) {
 		t.Fatal("a positioned reader has no group to commit to")
 	}
 }
+
+func TestMemoryProduceErrorsThatCannotSucceedArePermanent(t *testing.T) {
+	m := NewMemory(map[string]int32{"t": 1}, WithMaxRecordBytes(100))
+	for name, rec := range map[string]Record{
+		"unknown topic":     {Topic: "nope"},
+		"missing partition": {Topic: "t", Partition: 4},
+		"too large":         {Topic: "t", Partition: AnyPartition, Key: []byte("k"), Value: make([]byte, 100)},
+	} {
+		err := m.Produce(context.Background(), []Record{rec})
+		if !errors.Is(err, ErrPermanent) {
+			t.Fatalf("%s: err = %v, want one wrapping ErrPermanent", name, err)
+		}
+	}
+	end, _ := m.EndOffsets(context.Background(), "t")
+	if end[0] != 0 {
+		t.Fatal("a rejected produce writes nothing")
+	}
+	produce(t, m, Record{Topic: "t", Partition: AnyPartition, Key: []byte("k"), Value: make([]byte, 99)})
+}
+
+func TestMemoryDefaultRecordLimitIsMaxMessageBytes(t *testing.T) {
+	m := NewMemory(map[string]int32{"t": 1})
+	err := m.Produce(context.Background(), []Record{{Topic: "t", Partition: AnyPartition, Value: make([]byte, MaxMessageBytes+1)}})
+	if !errors.Is(err, ErrPermanent) {
+		t.Fatalf("err = %v; a record over MaxMessageBytes is refused like a broker would", err)
+	}
+}
+
+func TestMemoryTrimMovesTheLogStart(t *testing.T) {
+	m := NewMemory(map[string]int32{"t": 2})
+	for range 5 {
+		produce(t, m, Record{Topic: "t", Partition: 1, Value: []byte("x")})
+	}
+	m.Trim(TopicPartition{"t", 1}, 3)
+	start, err := m.StartOffsets(context.Background(), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start[0] != 0 || start[1] != 3 {
+		t.Fatalf("start offsets = %v, want 0 and 3", start)
+	}
+	c, err := m.Consume("g", []string{"t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := pollAll(t, c, 2)
+	if got[0].Offset != 3 || got[1].Offset != 4 {
+		t.Fatalf("a group with no commit resumes at the log start: %+v", got)
+	}
+	r, _ := m.ReadFrom(map[TopicPartition]int64{{"t", 1}: 0})
+	if got := pollAll(t, r, 2); got[0].Offset != 3 {
+		t.Fatalf("a read below the log start begins at it, got offset %d", got[0].Offset)
+	}
+}

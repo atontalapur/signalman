@@ -20,19 +20,30 @@ fuzzer and the corpus tools generate rules that never touch the disk.
 3. **Read the condition.** Sigma allows a single string or a list of strings;
    a list is an OR over the arms. Any other shape is `condition`, with the
    type named. Missing or empty is `condition`.
-4. **Resolve the logsource.** No taxonomy entry is `no-taxonomy`. See
-   `docs/taxonomy.md` for why resolution is exact.
-5. **Compile the detection block.** A bad shape is `detection`; an
+4. **Compile the detection block.** A bad shape is `detection`; an
    unsupported or contradictory modifier chain is `modifier`. The two are
    told apart with `errors.Is(err, match.ErrUnsupportedModifier)`, never by
    error text: the text is for humans and will change, the code is counted.
-6. **Parse each condition arm.** An aggregation pipe is `aggregation`, with
+5. **Parse each condition arm.** An aggregation pipe is `aggregation`, with
    the phrase "aggregation is not supported" and the condition's line number.
    Anything else the parser rejects is `condition`.
-7. **Expand quantifiers and bind names.** `1 of selection_*` becomes an OR
+6. **Expand quantifiers and bind names.** `1 of selection_*` becomes an OR
    over the matching selections. A reference to a selection that does not
    exist is `condition`.
-8. **Substitute the selections** into the condition tree, then **rename
+7. **Check the id and level.** The id must be a UUID in the 36-character
+   8-4-4-4-12 form, hex in either case; anything else, including braces, a
+   `urn:uuid:` prefix, or the 32-digit form, is `invalid-id`. `level` must
+   be one of `informational`, `low`, `medium`, `high`, `critical`, spelled
+   that way; missing or anything else is `level`. The ClickHouse alerts
+   table stores `rule_id` as a UUID and `severity` as an enum of those five,
+   so a rule outside either would load, match, and produce alerts no insert
+   can hold. These run after the engine checks so a rule with an
+   aggregation pipe and no level still reports `aggregation`.
+8. **Resolve the logsource.** No taxonomy entry is `no-taxonomy`. See
+   `docs/taxonomy.md` for why resolution is exact. It runs last of the
+   checks, so the corpus acceptance report measures the engine, not this
+   deployment's config.
+9. **Substitute the selections** into the condition tree, then **rename
    fields** through the taxonomy mapping. A field with no mapping keeps its
    name, which is what a source that already speaks Sigma field names needs.
 
@@ -45,6 +56,8 @@ of fields the rule reads.
 |---|---|---|
 | `yaml` | The file did not decode | Author error |
 | `missing-id` | No `id` field | Author error |
+| `invalid-id` | The `id` is not a canonical UUID | Author error; the alerts table keys on a UUID |
+| `level` | `level` missing or not one of the five Sigma levels | Author error; the alerts table needs a severity |
 | `duplicate-id` | Another file already claimed the id | Author error; names both paths |
 | `no-taxonomy` | The logsource is not mapped | Expected; a deployment maps what it ingests |
 | `condition` | Condition missing, malformed, or naming an undefined selection | Author error |
@@ -79,7 +92,10 @@ count shows up in the acceptance report.
 loaded rules by id, and hashes the result. `<rule>.test.yml` fixture files
 sit beside their rules and are skipped by the walk (`sigma.IsFixture`).
 `LoadRuleFiles(paths, tax)` does the same for an explicit list of files,
-which is what the `signalman` CLI hands it. The hash covers:
+which is what the `signalman` CLI hands it. `RuleFiles` builds that list
+and dedupes on the absolute path, so one file named both relative and
+absolute loads once instead of reporting a false `duplicate-id`. The hash
+covers:
 
 - each rule's id, and
 - `ast.Canonical` of its bound tree, and

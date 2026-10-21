@@ -62,6 +62,10 @@ var extras = map[string]specMetric{
 	// How many canary records the generator wrote, so a stalled canary can
 	// be told apart from a generator that stopped (Plan E, S-51).
 	"signalman_canary_injected_total": {typ: "counter", labels: []string{"partition"}},
+	// Alerts records signalman-sink wrote to alerts.dead because the table
+	// cannot hold them (Plan D); any increase is an alert stored nowhere
+	// queryable.
+	"signalman_sink_dead_letters_total": {typ: "counter"},
 }
 
 // touch gives every vector one child, so Gather reports it.
@@ -78,6 +82,7 @@ func touch(m *Metrics) {
 	m.CanaryInjected.WithLabelValues("0").Inc()
 	m.RuleSetVersion.WithLabelValues("rs", "tx").Set(1)
 	m.AuditViolations.WithLabelValues("0").Inc()
+	m.SinkDeadLetters.Inc()
 }
 
 func typeName(t dto.MetricType) string {

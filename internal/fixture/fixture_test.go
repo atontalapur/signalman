@@ -46,6 +46,7 @@ func TestLoadRejectsAuthorErrors(t *testing.T) {
 		"testdata/unknown_key.test.yml": "expected",
 		"testdata/no_event.test.yml":    "no event",
 		"testdata/missing.test.yml":     "no such file",
+		"testdata/two_docs.test.yml":    "one YAML document",
 	} {
 		_, err := Load(file)
 		if err == nil || !strings.Contains(err.Error(), want) {

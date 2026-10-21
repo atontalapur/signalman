@@ -17,7 +17,7 @@ func ruleFrom(t testing.TB, detection string) *sigma.Rule {
 	if err != nil {
 		t.Fatal(err)
 	}
-	y := "title: t\nid: r\nlogsource: {product: windows, category: process_creation}\ndetection:\n" + detection
+	y := "title: t\nid: 00000000-0000-4000-8000-00000000a001\nlevel: low\nlogsource: {product: windows, category: process_creation}\ndetection:\n" + detection
 	r, lerr := sigma.LoadRuleBytes("r", []byte(y), tax)
 	if lerr != nil {
 		t.Fatal(lerr)
@@ -204,7 +204,7 @@ func fuzzCase(modSel, condSel, kind uint8, val, val2, evVal string) (string, *ev
 	q := func(s string) string { return fmt.Sprintf("%q", s) }
 	det := fmt.Sprintf("  sel: {%s: [%s, %s]}\n  sel2: {ParentImage|contains: %s}\n  filter: {User|startswith: %s}\n  kw: [%s]\n  condition: %s\n",
 		q(key), q(val), q(val2), q(val2), q(val), q(val2), cond)
-	y := "title: t\nid: f\nlogsource: {product: windows, category: process_creation}\ndetection:\n" + det
+	y := "title: t\nid: 00000000-0000-4000-8000-00000000a002\nlevel: low\nlogsource: {product: windows, category: process_creation}\ndetection:\n" + det
 
 	var v event.Value
 	switch kind % 5 {

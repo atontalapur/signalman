@@ -173,9 +173,10 @@ error values `strconv` and `netip` allocate. Scratch state comes from a
 
 ### How v2 is held to v1
 
-- Verdict by verdict and digest by digest over the fixtures and, when
-  `SIGNALMAN_CORPUS` or `corpora/sigmahq` exists, the SigmaHQ corpus
-  (`TestEquivalenceOnCorpus`, `TestCompileLargestRuleSet`).
+- Verdict by verdict and digest by digest over the fixtures and the shipped
+  `rules/` directory in CI and, when `SIGNALMAN_CORPUS` or `corpora/sigmahq`
+  exists, the SigmaHQ corpus (`TestEquivalenceOnCorpus`,
+  `TestCompileLargestRuleSet`).
 - Rule independence: sampled rules compiled alone, and the whole set
   shuffled, give the same verdicts (`TestRuleIndependence`).
 - Soundness of each shortcut: prefilter rejects implies v1 false

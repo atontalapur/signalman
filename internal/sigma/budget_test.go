@@ -9,6 +9,7 @@ import (
 
 const budgetRule = `title: t
 id: 0b0d0e0a-0000-4000-8000-000000000001
+level: low
 logsource:
   product: windows
   category: process_creation
@@ -52,7 +53,7 @@ func TestLoadRuleRejectsABadBudget(t *testing.T) {
 		if lerr == nil {
 			t.Fatalf("%q should be rejected", src)
 		}
-		if lerr.Code != CodeYAML || lerr.Line != 10 || !strings.Contains(lerr.Reason, "budget") {
+		if lerr.Code != CodeYAML || lerr.Line != 11 || !strings.Contains(lerr.Reason, "budget") {
 			t.Fatalf("%q: %+v", src, lerr)
 		}
 	}
