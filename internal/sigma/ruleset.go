@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/atontalapur/signalman/internal/sigma/ast"
 )
@@ -28,23 +30,83 @@ type RuleSet struct {
 // LoadRuleSet loads every .yml and .yaml file under dir. Rejections are
 // returned rather than raised, because a corpus run needs the full list, but
 // no rule is ever dropped without an entry in it.
+//
+// Fixture files (see IsFixture) sit beside their rules and are skipped.
 func LoadRuleSet(dir string, tax *Taxonomy) (*RuleSet, []LoadError, error) {
-	var paths []string
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if ext := filepath.Ext(p); ext == ".yml" || ext == ".yaml" {
-			paths = append(paths, p)
-		}
-		return nil
-	})
+	paths, err := RuleFiles(dir)
 	if err != nil {
 		return nil, nil, err
 	}
+	rs, errs := LoadRuleFiles(paths, tax)
+	return rs, errs, nil
+}
+
+// IsFixture reports whether path is a rule's test fixture file,
+// <rule>.test.yml, rather than a rule.
+func IsFixture(path string) bool {
+	ext := filepath.Ext(path)
+	if ext != ".yml" && ext != ".yaml" {
+		return false
+	}
+	return strings.HasSuffix(strings.TrimSuffix(filepath.Base(path), ext), ".test")
+}
+
+// FixturePath is where a rule's fixture file lives: beside it, with .test
+// before the extension.
+func FixturePath(rulePath string) string {
+	ext := filepath.Ext(rulePath)
+	return strings.TrimSuffix(rulePath, ext) + ".test" + ext
+}
+
+// RuleFiles expands files and directories into a sorted, deduplicated list
+// of rule files. Directories are walked for .yml and .yaml. Fixture files
+// are skipped even when named directly, because a shell glob such as
+// rules/*.yml hands them over alongside the rules.
+func RuleFiles(roots ...string) ([]string, error) {
+	seen := map[string]bool{}
+	var paths []string
+	add := func(p string) {
+		p = filepath.Clean(p)
+		if IsFixture(p) || seen[p] {
+			return
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	for _, root := range roots {
+		info, err := os.Stat(root)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			add(root)
+			continue
+		}
+		err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if ext := filepath.Ext(p); ext == ".yml" || ext == ".yaml" {
+				add(p)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+// LoadRuleFiles loads the given rule files as one rule set. The paths are
+// sorted first, so the outcome, including which file keeps a duplicated id,
+// does not depend on the order the caller listed them in.
+func LoadRuleFiles(paths []string, tax *Taxonomy) (*RuleSet, []LoadError) {
+	paths = append([]string(nil), paths...)
 	sort.Strings(paths)
 
 	rs := &RuleSet{TaxonomyV: tax.Version}
@@ -83,5 +145,5 @@ func LoadRuleSet(dir string, tax *Taxonomy) (*RuleSet, []LoadError, error) {
 	}
 	h.Write([]byte(tax.Version))
 	rs.Version = hex.EncodeToString(h.Sum(nil))[:16]
-	return rs, errs, nil
+	return rs, errs
 }

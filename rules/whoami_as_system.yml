@@ -1,0 +1,21 @@
+title: Whoami Run as SYSTEM
+id: 5c8354f8-9e93-4f12-bb2a-065596bf51a5
+status: test
+description: whoami executed by the local system account, usually an attacker checking what an exploit gave them.
+author: signalman
+tags:
+  - attack.privilege-escalation
+  - attack.discovery
+  - attack.t1033
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_img:
+    Image|endswith: '\whoami.exe'
+  selection_user:
+    User|contains:
+      - 'AUTHORI'
+      - 'AUTORI'
+  condition: all of selection_*
+level: high

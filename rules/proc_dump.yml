@@ -1,0 +1,22 @@
+title: LSASS Memory Dump via comsvcs
+id: 47c606a8-cce7-4720-aafa-90c8e2a0f166
+status: test
+description: rundll32 calling the MiniDump export of comsvcs.dll, the usual way to dump LSASS without dropping a tool.
+author: signalman
+tags:
+  - attack.credential-access
+  - attack.t1003.001
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_img:
+    Image|endswith: '\rundll32.exe'
+  selection_cli:
+    CommandLine|contains:
+      - 'comsvcs.dll'
+      - 'MiniDump'
+  filter_backup:
+    ParentImage|endswith: '\veeam.exe'
+  condition: selection_img and selection_cli and not filter_backup
+level: high

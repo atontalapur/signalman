@@ -1,0 +1,25 @@
+rule: rundll32_no_args.yml
+cases:
+  - name:   bare rundll32.exe
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: C:\Windows\System32\rundll32.exe
+
+  - name:   quoted, upper case
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: '"C:\Windows\System32\RUNDLL32.EXE"'
+
+  - name:   rundll32 with an export
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: rundll32.exe shell32.dll,Control_RunDLL

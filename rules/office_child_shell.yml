@@ -1,0 +1,25 @@
+title: Office Application Spawning a Shell
+id: 33e9b4c5-761e-4484-8600-33add4de67e1
+status: test
+description: Word, Excel, or PowerPoint starting a command interpreter, typical of a malicious macro.
+author: signalman
+tags:
+  - attack.execution
+  - attack.t1204.002
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_parent:
+    ParentImage|endswith:
+      - '\winword.exe'
+      - '\excel.exe'
+      - '\powerpnt.exe'
+  selection_child:
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+  condition: selection_parent and selection_child
+level: high

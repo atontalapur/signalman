@@ -1,0 +1,19 @@
+title: Encoded PowerShell Download Cradle
+id: 35b87878-bbdd-4cbf-89e0-b956b945d034
+status: test
+description: A base64 UTF-16 command line that decodes to IEX or DownloadString, at any byte alignment.
+author: signalman
+tags:
+  - attack.execution
+  - attack.t1059.001
+  - attack.t1027
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    CommandLine|wide|base64offset|contains:
+      - 'IEX ('
+      - 'DownloadString('
+  condition: selection
+level: high

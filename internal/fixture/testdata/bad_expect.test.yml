@@ -1,0 +1,6 @@
+rule: proc_dump.yml
+cases:
+  - name:   typo in expect
+    expect: matches
+    event:
+      Image: x

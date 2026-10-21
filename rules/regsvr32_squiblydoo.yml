@@ -1,0 +1,18 @@
+title: Regsvr32 Scriptlet Execution
+id: a07fd967-66a0-40a1-ab01-e99f4124cdc8
+status: test
+description: regsvr32 loading scrobj.dll with an /i argument, the Squiblydoo technique.
+author: signalman
+tags:
+  - attack.defense-evasion
+  - attack.t1218.010
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\regsvr32.exe'
+    CommandLine|contains: 'scrobj.dll'
+    CommandLine|windash|contains: ' -i:'
+  condition: selection
+level: high
