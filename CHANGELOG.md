@@ -3,6 +3,42 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.8.0] - 2026-10-21
+
+### Added
+
+- `signalman`, the rule author CLI. Every command takes `--taxonomy` and
+  exits 0 on pass, 1 on a failed check, 2 when it could not run.
+- `signalman test`: each rule ships a sibling `<rule>.test.yml` of match and
+  no-match cases, run through the v1 evaluator. A disagreeing case, a
+  missing fixture, or a fixture without both kinds of case fails.
+- `signalman explain <rule> <event.json>`: the condition tree with each
+  node's result, each leaf's observed value, and the logsource test. Its
+  walker is held equal to v1 by a test over every shipped rule and fixture.
+- `signalman lint`: every `LoadError` in structured form, or JSON with
+  `--json`, duplicate ids across files included.
+- `signalman bench`: p50, p99 and max per rule over a corpus or the
+  fixtures; a p99 over the threshold (50us by default) fails.
+- `signalman noise`: one rule over a corpus, with matches per 100k events
+  and the first ten matches. A rule may declare `budget:` in matches per
+  100k; noise fails above it. The budget does not enter RuleSetV.
+- `rules/`: twenty hand-written rules, 56 fixture cases, all passing.
+- The loader keeps each rule's expanded condition, selections and tags for
+  `explain`. The bound tree and RuleSetV are unchanged.
+
+### Fixed
+
+- A YAML integer above MaxInt64 no longer wraps to a negative Int, and a
+  float at or beyond 2^63 no longer converts differently per platform. Both
+  stay as text.
+- An event file or corpus line with a key given twice in one object is
+  rejected instead of keeping the last copy. An empty object `{}` adds no
+  fields; that is now documented and tested.
+- A fixture file with a second YAML document is rejected instead of
+  silently ignoring the second document's cases.
+- One rule file named both relative and absolute loads once instead of
+  reporting a false duplicate id.
+
 ## [0.7.1] - 2026-10-01
 
 ### Changed
