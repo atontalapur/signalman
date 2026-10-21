@@ -13,8 +13,10 @@ import (
 	"github.com/atontalapur/signalman/internal/obs"
 )
 
-// CanaryRuleID is the id of rules/signalman_canary.yml. The sink resets
-// signalman_canary_age_seconds when a match of this rule is durable.
+// CanaryRuleID is the id of rules/signalman_canary.yml. signalmand resets
+// signalman_canary_age_seconds when a match of this rule is durable on the
+// alerts topic, and signalman-sink resets signalman_sink_canary_age_seconds
+// when it is stored in ClickHouse.
 const CanaryRuleID = "fbb72593-085d-4c15-8571-908e2b2d257c"
 
 // CanaryHostID is the record key of every canary event. Staleness skips

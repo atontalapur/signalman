@@ -405,11 +405,14 @@ func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-cha
 // partition, so a partition's records reach every topic in Seq order, which
 // is the ordering invariant for alerts.
 //
-// An item whose events.norm or alert record would be over
-// MaxOutputRecordBytes becomes an output-too-large drop instead: nothing
-// for it has been written yet, so it still leaves as exactly one outcome.
-// A verdict record over the limit is a property of the rule set, not the
-// event, and is an error.
+// An item whose events.norm record would be over MaxOutputRecordBytes
+// becomes an output-too-large drop instead: nothing for it has been written
+// yet, so it still leaves as exactly one outcome. That record depends on
+// the event alone. Alerts never cause a drop, since that would let an
+// event's own fields suppress its detection and make the drop depend on the
+// rule set: AlertRecord leaves out the fields to fit. A verdict or alert
+// record still over the limit is a property of the rule set, not the event,
+// and is an error.
 func (p *Pipeline) outputs(b *batch) ([]broker.Record, error) {
 	recs := make([]broker.Record, 0, 2*len(b.items))
 	for _, it := range b.items {
@@ -430,29 +433,29 @@ func (p *Pipeline) outputs(b *batch) ([]broker.Record, error) {
 					broker.ErrPermanent, rs.Version, len(rs.Rules), vr.Topic, n, MaxOutputRecordBytes)
 			}
 		}
-		mine := append([]broker.Record{NormRecord(it)}, vrs...)
-		alerts(b, it, func(r *sigma.Rule, eng Engine) {
-			mine = append(mine, AlertRecord(r, it, eng.Name()))
-		})
-		if big := oversized(mine); big != "" {
+		nr := NormRecord(it)
+		if n := broker.RecordSize(nr); n > MaxOutputRecordBytes {
 			it.Verdicts, it.Shadow, it.Event.Fields = nil, nil, nil
-			p.norm.drop(it, ReasonOutputTooLarge, big)
+			p.norm.drop(it, ReasonOutputTooLarge, fmt.Sprintf("%s record would be %d bytes, limit %d", nr.Topic, n, MaxOutputRecordBytes))
 			recs = append(recs, DropRecord(it))
 			continue
 		}
-		recs = append(recs, mine...)
-	}
-	return recs, nil
-}
-
-// oversized describes the first record over MaxOutputRecordBytes, or is "".
-func oversized(recs []broker.Record) string {
-	for _, r := range recs {
-		if n := broker.RecordSize(r); n > MaxOutputRecordBytes {
-			return fmt.Sprintf("%s record would be %d bytes, limit %d", r.Topic, n, MaxOutputRecordBytes)
+		recs = append(recs, nr)
+		recs = append(recs, vrs...)
+		var err error
+		alerts(b, it, func(r *sigma.Rule, eng Engine) {
+			ar := AlertRecord(r, it, eng.Name())
+			if n := broker.RecordSize(ar); n > MaxOutputRecordBytes && err == nil {
+				err = fmt.Errorf("%w: rule %s in rule set %s makes a %d byte alert at partition %d seq %d even without fields, over the %d byte output limit",
+					broker.ErrPermanent, r.ID, eng.RuleSet().Version, n, it.Event.Partition, it.Event.Seq, MaxOutputRecordBytes)
+			}
+			recs = append(recs, ar)
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
-	return ""
+	return recs, nil
 }
 
 // alerts calls emit once per alert the item owes: for each matched rule,

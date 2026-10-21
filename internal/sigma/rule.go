@@ -122,6 +122,14 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 	if f.ID == "" {
 		return nil, fail(CodeMissingID, "rule has no id", 1)
 	}
+	// A UUID's hex is case insensitive, and macOS uuidgen writes upper
+	// case. The id is lowered here, before anything compares, hashes, or
+	// reports it, so the duplicate check, RuleSetV, verdicts, and alerts all
+	// see one spelling. Two rules whose ids differ only in case would
+	// otherwise both load and write the same alerts row.
+	if canonicalUUID(f.ID) {
+		f.ID = strings.ToLower(f.ID)
+	}
 	budget, err := budgetValue(f.Budget)
 	if err != nil {
 		return nil, fail(CodeYAML, err.Error(), keyLine(src, "budget:"))
@@ -235,8 +243,8 @@ var Levels = map[string]bool{
 
 // canonicalUUID reports whether s is a UUID in the 36-character hyphenated
 // form, hex digits in either case. Braces, a urn:uuid: prefix, and the
-// 32-digit form are refused: a rule id is written once and compared as a
-// string everywhere, so it has one spelling.
+// 32-digit form are refused: a rule id is compared as a string everywhere,
+// so it has one spelling, and LoadRuleBytes lowers the hex to give it one.
 func canonicalUUID(s string) bool {
 	if len(s) != 36 {
 		return false
@@ -370,7 +378,7 @@ func renameNode(n ast.Node, mapping map[string]string, seen map[string]bool) ast
 			seen[field] = true
 		}
 		return &ast.Pred{
-			Field: field, Desc: n.Desc, M: n.M,
+			Field: field, Desc: n.Desc, Key: n.Key, M: n.M,
 			Mods: n.Mods, Vals: n.Vals, Keyword: n.Keyword,
 		}
 	}

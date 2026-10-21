@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/pipe"
@@ -49,7 +51,7 @@ func (c *countingConsumer) Poll(ctx context.Context) (broker.Fetch, error) {
 }
 
 func newBroker(maxPoll int) *counting {
-	return &counting{Broker: broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3, pipe.TopicAlertsDead: 2}, broker.WithMaxPoll(maxPoll))}
+	return &counting{Broker: broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3, pipe.TopicAlertsDead: 2, pipe.TopicEventsRaw: 4}, broker.WithMaxPoll(maxPoll))}
 }
 
 // readTopic returns every record in topic.
@@ -480,6 +482,22 @@ func TestSinkRefusesToStartWithoutTheDeadLetterTopic(t *testing.T) {
 	}
 }
 
+// The canary age is tracked per events.raw partition, so the sink needs to
+// list them; without the topic it refuses to start rather than export no
+// age, which only absent() would catch.
+func TestSinkRefusesToStartWithoutEventsRaw(t *testing.T) {
+	b := broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3, pipe.TopicAlertsDead: 2})
+	s, err := New(testConfig(), b, &replacingTable{}, obs.New(prometheus.NewRegistry()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.Run(ctx); err == nil || !strings.Contains(err.Error(), pipe.TopicEventsRaw) {
+		t.Fatalf("Run returned %v; want an error naming %s", err, pipe.TopicEventsRaw)
+	}
+}
+
 // A dead-letter record fits the topic's size limit even when the original
 // was at the limit: the value is cut and the cut is recorded.
 func TestDeadLetterRecordFitsTheLimit(t *testing.T) {
@@ -509,41 +527,111 @@ func TestConfigRejectsZeroSizes(t *testing.T) {
 	}
 }
 
-// DateTime64(3) holds 1900-01-01 to 2299-12-31. A time outside it would be
-// stored as something else or refused, so Decode refuses it with a reason.
+// Decode refuses a time the insert would store as a different time. For
+// event_time that is the DateTime64(3) range cut at 2262-04-11, where the
+// driver's UnixNano encoding overflows. ingest_time also feeds the TTL
+// toDateTime(ingest_time) + INTERVAL 90 DAY, so it must stay in DateTime's
+// 1970 to 2106 range with 90 days to spare.
 func TestDecodeRejectsTimesOutsideDateTime64(t *testing.T) {
-	ok := []time.Time{
-		time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
-		time.Date(2299, 12, 31, 23, 59, 59, 999e6, time.UTC),
+	cases := []struct {
+		field   string
+		ok, bad []time.Time
+	}{
+		{"event_time",
+			[]time.Time{
+				time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Unix(0, math.MaxInt64).UTC(),
+			},
+			[]time.Time{
+				{},
+				time.Date(1899, 12, 31, 23, 59, 59, 0, time.UTC),
+				time.Unix(0, math.MaxInt64).Add(time.Nanosecond),
+				time.Date(2262, 4, 12, 0, 0, 0, 0, time.UTC),
+				time.Date(2290, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Date(2299, 12, 31, 23, 59, 59, 999e6, time.UTC),
+				time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC),
+			}},
+		{"ingest_time",
+			[]time.Time{
+				time.Unix(0, 0).UTC(),
+				time.Date(2105, 11, 9, 6, 28, 15, 999e6, time.UTC),
+			},
+			[]time.Time{
+				{},
+				time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Unix(0, -1).UTC(),
+				time.Date(2105, 11, 9, 6, 28, 16, 0, time.UTC),
+				time.Date(2106, 2, 7, 6, 28, 15, 0, time.UTC),
+				time.Date(2262, 4, 12, 0, 0, 0, 0, time.UTC),
+				time.Date(2290, 1, 1, 0, 0, 0, 0, time.UTC),
+			}},
 	}
-	bad := []time.Time{
-		{},
-		time.Date(1899, 12, 31, 23, 59, 59, 0, time.UTC),
-		time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
-	for _, field := range []string{"event_time", "ingest_time"} {
+	for _, c := range cases {
 		set := func(a *pipe.Alert, ts time.Time) {
-			if field == "event_time" {
+			if c.field == "event_time" {
 				a.EventTime = ts
 			} else {
 				a.IngestTime = ts
 			}
 		}
-		for _, ts := range ok {
+		for _, ts := range c.ok {
 			a := genAlert(0, 1, 0)
 			set(&a, ts)
 			if _, err := Decode(alertRecord(t, a)); err != nil {
-				t.Errorf("%s %v rejected: %v", field, ts, err)
+				t.Errorf("%s %v rejected: %v", c.field, ts, err)
 			}
 		}
-		for _, ts := range bad {
+		for _, ts := range c.bad {
 			a := genAlert(0, 1, 0)
 			set(&a, ts)
 			_, err := Decode(alertRecord(t, a))
-			if err == nil || !strings.Contains(err.Error(), field) {
-				t.Errorf("%s %v: got %v, want an error naming %s", field, ts, err, field)
+			if err == nil || !strings.Contains(err.Error(), c.field) {
+				t.Errorf("%s %v: got %v, want an error naming %s", c.field, ts, err, c.field)
 			}
 		}
+	}
+}
+
+// The bounds Decode accepts are times the driver encodes exactly. This
+// appends them through clickhouse-go's own DateTime64(3) column, the path
+// Insert takes, and reads them back.
+func TestAcceptedTimeBoundsRoundTripThroughTheDriver(t *testing.T) {
+	col, err := column.Type("DateTime64(3)").Column("event_time", &column.ServerContext{Timezone: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first two bound event_time, the last two ingest_time.
+	want := []time.Time{
+		time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Unix(0, math.MaxInt64).UTC().Truncate(time.Millisecond),
+		time.Unix(0, 0).UTC(),
+		time.Date(2105, 11, 9, 6, 28, 15, 999e6, time.UTC),
+	}
+	for i, ts := range want {
+		a := genAlert(0, 1, 0)
+		if i < 2 {
+			a.EventTime = ts
+		} else {
+			a.IngestTime = ts
+		}
+		if _, err := Decode(alertRecord(t, a)); err != nil {
+			t.Fatalf("%v rejected: %v", ts, err)
+		}
+		if err := col.AppendRow(ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, ts := range want {
+		if got := col.Row(i, false).(time.Time); !got.Equal(ts) {
+			t.Errorf("%v stored as %v", ts, got)
+		}
+	}
+	// The case the old 2299 bound let through: stored as a time in 1705.
+	if err := col.AppendRow(time.Date(2290, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if got := col.Row(len(want), false).(time.Time); got.Year() == 2290 {
+		t.Errorf("2290 encoded as %v; the driver no longer overflows, so the bound can widen", got)
 	}
 }
 
@@ -554,6 +642,96 @@ func TestDecodeRoundTripsThePipelineAlert(t *testing.T) {
 		t.Fatal(err)
 	}
 	if keyOf(got) != keyOf(a) || got.Raw != a.Raw || got.Fields["Image"] != a.Fields["Image"] || !got.EventTime.Equal(a.EventTime) {
+		t.Fatalf("decoded %+v from %+v", got, a)
+	}
+}
+
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func sinkCanaryAges(t *testing.T, m *obs.Metrics) map[int32]float64 {
+	t.Helper()
+	out := map[int32]float64{}
+	for p := range int32(4) {
+		a, ok := m.SinkCanaryAge.Age(p)
+		if !ok {
+			t.Fatalf("events.raw partition %d has no sink canary age", p)
+		}
+		out[p] = a.Seconds()
+	}
+	return out
+}
+
+// The end-to-end canary: the sink's age for a partition resets only once a
+// canary alert from it is stored in the table. Every events.raw partition
+// is tracked from startup, so one whose canary never lands climbs. A failed
+// insert and other rules' alerts reset nothing.
+func TestSinkResetsCanaryAgeOnlyAfterTheCanaryAlertIsStored(t *testing.T) {
+	b := newBroker(500)
+	canary := genAlert(1, 7, 0)
+	canary.RuleID, canary.RuleTitle, canary.Severity = pipe.CanaryRuleID, "signalman canary", "informational"
+	other := genAlert(2, 8, 1)
+	if err := b.Produce(context.Background(), []broker.Record{alertRecord(t, canary), alertRecord(t, other)}); err != nil {
+		t.Fatal(err)
+	}
+	clk := &fakeClock{t: time.Unix(1790000000, 0)}
+	m := obs.NewWithClock(prometheus.NewRegistry(), clk.Now)
+	ch := &flaky{tbl: &replacingTable{}, down: true}
+	s, err := New(testConfig(), b, ch, m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, s)
+	defer func() { _ = stop() }()
+
+	waitFor(t, "failed insert attempts", func() bool { return ch.attemptCount() >= 5 })
+	clk.Add(40 * time.Second)
+	for p, a := range sinkCanaryAges(t, m) {
+		if a != 40 {
+			t.Fatalf("partition %d sink canary age %vs while ClickHouse is down, want 40", p, a)
+		}
+	}
+
+	ch.setDown(false)
+	waitFor(t, "the batch committed", func() bool { return committedAll(t, b) })
+	clk.Add(10 * time.Second)
+	want := map[int32]float64{0: 50, 1: 10, 2: 50, 3: 50}
+	for p, a := range sinkCanaryAges(t, m) {
+		if a != want[p] {
+			t.Fatalf("partition %d sink canary age %vs after the insert, want %v", p, a, want[p])
+		}
+	}
+	// signalmand owns signalman_canary_age_seconds; the sink never sets it.
+	if _, ok := m.CanaryAge.Age(1); ok {
+		t.Fatal("the sink set signalmand's canary age")
+	}
+}
+
+// The pipeline empties Fields and sets fields_omitted when an alert would
+// not fit the output limit. The sink must still accept that record and
+// store it with an empty fields map, raw intact.
+func TestDecodeAcceptsAnAlertWithFieldsOmitted(t *testing.T) {
+	a := genAlert(3, 18, 2)
+	a.Fields, a.FieldsOmitted = map[string]string{}, true
+	got, err := Decode(alertRecord(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.FieldsOmitted || len(got.Fields) != 0 || got.Raw != a.Raw {
 		t.Fatalf("decoded %+v from %+v", got, a)
 	}
 }
