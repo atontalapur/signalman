@@ -30,14 +30,6 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P2
 **Depends on:** Plan C
 
-### Add integration test entrypoint when compose lands
-**What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.
-**Why:** The job is wired now so Plan C only has to add the compose file and tagged tests.
-**Context:** See `.github/workflows/ci.yml` `integration` job and `Makefile` `integration` target.
-**Effort:** S
-**Priority:** P2
-**Depends on:** Plan C (S-02)
-
 ### Case folding applied to base64 text widens matching
 **What:** `Equals` lowercases both sides, and encoding transforms run before that fold, so a `base64offset|contains` matcher compares lowercased base64. Two different plaintext bytes can encode to base64 characters that differ only in case (`A` and `a`), so a value can match a blob it did not encode.
 **Why:** Sigma string matching is case insensitive by default and pySigma's backends fold case the same way, so following the spec here is right and the fuzzer will confirm it. The cost is a wider match on encoded values, which is a false positive, never a missed detection.
@@ -55,6 +47,15 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Depends on:** None
 
 ## Completed
+
+### Add integration test entrypoint when compose lands
+**What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.
+**Why:** The job is wired now so Plan C only has to add the compose file and tagged tests.
+**Context:** See `.github/workflows/ci.yml` `integration` job and `Makefile` `integration` target.
+**Effort:** S
+**Priority:** P2
+**Depends on:** Plan C (S-02)
+**Completed:** SIG-26. `deploy/docker-compose.yml` runs Redpanda, a topic setup service, and ClickHouse; `internal/broker/kafka` carries the first `integration`-tagged tests.
 
 ### Stop an oracle subprocess that outlives its fuzz worker
 **What:** If a fuzz worker is SIGKILLed while its pySigma subprocess is stuck in a backtracking regex, the subprocess keeps running until the regex finishes. When Python is idle, stdin EOF ends it, so only the stuck case leaks.
