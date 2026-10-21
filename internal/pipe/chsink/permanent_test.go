@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -89,8 +90,17 @@ func TestSinkStopsOnAPermanentInsertError(t *testing.T) {
 
 // The sink commits an offset once Insert returns, so Insert must not return
 // before the part is on disk.
-func TestInsertAsksForFsync(t *testing.T) {
-	if v, ok := insertSettings["fsync_after_insert"]; !ok || v != 1 {
-		t.Fatalf("insert settings %v; want fsync_after_insert=1", insertSettings)
+// fsync_after_insert is a MergeTree table setting, not a query setting:
+// ClickHouse refuses it on an INSERT with "Unknown setting" (code 115), so
+// it lives in the table DDL.
+func TestAlertsTableFsyncsEachInsert(t *testing.T) {
+	ddl, err := os.ReadFile(ddlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"fsync_after_insert = 1", "fsync_part_directory = 1"} {
+		if !strings.Contains(string(ddl), s) {
+			t.Errorf("alerts DDL lacks %q", s)
+		}
 	}
 }
