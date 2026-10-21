@@ -35,12 +35,15 @@ lint:
 
 ## check-alerts: validate the Prometheus config and alert rules and run their
 ## promtool unit tests. Needs promtool on PATH (it ships in the Prometheus
-## release archive); without it, say so rather than pass silently.
+## release archive; CI installs 3.5.0, the compose version). Without it,
+## say so locally, and fail when CI=true so CI cannot pass unchecked.
 check-alerts:
 	@if command -v promtool >/dev/null; then \
 	  promtool check config --syntax-only deploy/prometheus/prometheus.yml && \
 	  promtool check rules deploy/prometheus/alerts/*.yml && \
 	  cd deploy/prometheus && promtool test rules alerts_test.yml alerts_silence_test.yml; \
+	elif [ "$$CI" = true ]; then \
+	  echo "error: promtool not on PATH and CI=true, alert rules were not checked"; exit 1; \
 	else \
 	  echo "note: promtool not on PATH, alert rules were not checked"; \
 	fi

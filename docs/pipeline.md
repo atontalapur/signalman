@@ -345,7 +345,11 @@ on the in-memory broker with a fake clock, kills the consumer, and evaluates
 the rule as written in the file against the gauge every scrape interval.
 
 `deploy/prometheus/` holds the scrape config and alert rules, with promtool
-unit tests in `alerts_test.yml` (`make check-alerts`).
+unit tests in `alerts_test.yml` (`make check-alerts`). CI runs that target
+in the `alerts` job with promtool 3.5.0, the compose Prometheus version,
+taken from the official release tarball after a sha256 check against a
+value pinned in `ci.yml`. A version bump changes both the compose image and
+that pin.
 `deploy/grafana/dashboards/signalman.json` is the dashboard, provisioned
 into the compose stack's Grafana at `localhost:3000`.
 

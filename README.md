@@ -261,8 +261,10 @@ that needs them.
   `events.raw` and would collide with stored alerts.
 - `make check-alerts` validates the Prometheus config and alert rules and runs
   their promtool unit tests. It needs `promtool` on PATH (from the Prometheus
-  release archive) and says so when it is missing. It is not part of
-  `make check`.
+  release archive) and says so when it is missing; with `CI=true` a missing
+  promtool fails it. It is not part of `make check`; CI's `alerts` job
+  installs promtool 3.5.0 from the release tarball, checks its sha256, and
+  runs it.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.
