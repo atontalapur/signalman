@@ -60,8 +60,10 @@ rollout have only run over the in-memory broker in tests.
 The gate tooling is built. `cmd/cutover check` evaluates one gate from its
 sources (a corpus replay and the fuzzer's counters for G0, Prometheus for
 G1 to G6, a game day result for the rollback timings) and prints every
-criterion with its evidence; with `-record` it dates a passed gate in
-`docs/cutover.md`. `cmd/cutover gameday` rolls the rollout file back and
+criterion with its evidence. A gate with a window also checks the window
+was scraped for at least 95% of it, and G6 checks the invariant 1 audit ran
+throughout. With `-record` it dates a passed gate in `docs/cutover.md`, in
+ladder order and never for a window that has not ended. `cmd/cutover gameday` rolls the rollout file back and
 forward and times both from metrics. `signalmand -serve v2` is the
 configuration after G6: v2 serves every rule, and v1 either shadows as the
 oracle or is out of the pipeline. The default is still v1. None of this has
