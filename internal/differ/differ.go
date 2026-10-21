@@ -92,10 +92,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 // with no shadow owes no v2 record and is passed over without waiting.
 //
 // Divergence records are produced before the offsets that cover them are
-// committed, so a restart repeats work rather than skipping it. The
-// repeat-dropping state starts empty after a restart, so a redelivered
-// batch that straddles the committed offset can be compared twice; a
-// divergence written twice carries the same (partition, seq, rule_id).
+// committed, so a restart repeats work rather than skipping it: a
+// divergence written twice carries the same (partition, seq, rule_id). The
+// repeat-dropping state is committed with each offset as its metadata, so
+// a restart drops exactly the repeats the stopped differ would have.
 type Differ struct {
 	cfg Config
 	b   broker.Broker
@@ -139,9 +139,9 @@ func (d *Differ) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	start := map[string]map[int32]int64{}
+	start := map[string]map[int32]broker.Checkpoint{}
 	for _, t := range []string{pipe.TopicVerdictsV1, pipe.TopicVerdictsV2} {
-		if start[t], err = d.b.CommittedOffsets(ctx, d.cfg.Group, t); err != nil {
+		if start[t], err = d.b.Checkpoints(ctx, d.cfg.Group, t); err != nil {
 			return err
 		}
 	}
@@ -163,11 +163,11 @@ func (d *Differ) Run(ctx context.Context) error {
 		b := make(chan record, d.cfg.Queue)
 		j := &joiner{d: d, part: p,
 			sides: [2]*sideState{
-				{ch: a, tp: broker.TopicPartition{Topic: pipe.TopicVerdictsV1, Partition: p}, next: start[pipe.TopicVerdictsV1][p]},
-				{ch: b, tp: broker.TopicPartition{Topic: pipe.TopicVerdictsV2, Partition: p}, next: start[pipe.TopicVerdictsV2][p]},
+				{ch: a, tp: broker.TopicPartition{Topic: pipe.TopicVerdictsV1, Partition: p}},
+				{ch: b, tp: broker.TopicPartition{Topic: pipe.TopicVerdictsV2, Partition: p}},
 			}}
 		for i, s := range j.sides {
-			s.committed = s.next
+			s.restore(start[s.tp.Topic][p], d.log)
 			tp, from := s.tp, s.next
 			eng := []string{v1.Name, v2.Name}[i]
 			out := []chan record{a, b}[i]
@@ -243,13 +243,73 @@ func (d *Differ) read(ctx context.Context, tp broker.TopicPartition, from int64,
 
 // sideState is one verdict topic's partition as the joiner sees it.
 type sideState struct {
-	ch        <-chan record
-	tp        broker.TopicPartition
-	head      *record
-	last      uint64 // highest seq taken as a head
-	started   bool
-	next      int64 // offset after the last record fully handled
-	committed int64
+	ch   <-chan record
+	tp   broker.TopicPartition
+	head *record
+	// peek is v1's record after head, read while head waits on v2, and
+	// skip the offset after the repeats read ahead of it, which next moves
+	// to once head is handled.
+	peek *record
+	skip int64
+	cur  cursor // what the records below next leave behind
+	next int64  // offset after the last record fully handled
+	// committed is the checkpoint last committed.
+	committed broker.Checkpoint
+}
+
+// cursor is the repeat-dropping state of one side: the highest seq handled
+// and, on v1, the highest seq handled with a shadow beside it. It covers
+// exactly the records below the side's next offset, and is committed with
+// that offset as its metadata, so a restart drops the same repeats a
+// running differ would. Without it, a commit that lands inside a
+// redelivered run on one side and not the other would turn the rest of the
+// run into false missing verdicts after a restart.
+type cursor struct {
+	Last        uint64 `json:"last"`
+	HasLast     bool   `json:"has_last,omitempty"`
+	Shadowed    uint64 `json:"shadowed"`
+	HasShadowed bool   `json:"has_shadowed,omitempty"`
+}
+
+// repeat reports whether r was handled already. On v1 a shadowed record is
+// a repeat only of an earlier shadowed one: when signalmand restarts with
+// -shadow and redelivers events it first evaluated without it, the shadowed
+// copies are the ones v2 has records for, and they are compared.
+func (c cursor) repeat(r *record) bool {
+	if r.ev.Shadow != "" {
+		return c.HasShadowed && r.ev.Seq <= c.Shadowed
+	}
+	return c.HasLast && r.ev.Seq <= c.Last
+}
+
+func (c *cursor) handle(r *record) {
+	if !c.HasLast || r.ev.Seq > c.Last {
+		c.Last, c.HasLast = r.ev.Seq, true
+	}
+	if r.ev.Shadow != "" {
+		c.Shadowed, c.HasShadowed = r.ev.Seq, true
+	}
+}
+
+// restore positions s at its committed checkpoint. A checkpoint with no
+// cursor, from an older differ, starts with an empty one.
+func (s *sideState) restore(cp broker.Checkpoint, log *slog.Logger) {
+	s.next, s.committed = cp.Next, cp
+	if cp.Meta == "" {
+		return
+	}
+	if err := json.Unmarshal([]byte(cp.Meta), &s.cur); err != nil {
+		log.Warn("differ: unreadable checkpoint metadata; starting with no repeat state", "topic", s.tp.Topic, "partition", s.tp.Partition, "err", err)
+		s.cur = cursor{}
+	}
+}
+
+func (s *sideState) checkpoint() broker.Checkpoint {
+	b, err := json.Marshal(s.cur)
+	if err != nil {
+		panic(err)
+	}
+	return broker.Checkpoint{Next: s.next, Meta: string(b)}
 }
 
 type joiner struct {
@@ -271,8 +331,17 @@ func (j *joiner) run(ctx context.Context) error {
 			j.consume(a)
 			continue
 		}
-		if err := j.pull(ctx, b); err != nil {
+		gone, err := j.pullV2(ctx)
+		if err != nil {
 			return err
+		}
+		if gone {
+			if err := j.emit(ctx, Compare(&a.head.ev, nil)); err != nil {
+				return err
+			}
+			j.consume(a)
+			j.d.m.Events.Inc()
+			continue
 		}
 		h1, h2 := &a.head.ev, &b.head.ev
 		switch {
@@ -288,6 +357,14 @@ func (j *joiner) run(ctx context.Context) error {
 				return err
 			}
 			j.consume(a)
+		case a.cur.HasLast && h2.Seq <= a.cur.Last:
+			// v1 has moved past h2's seq without a shadowed record for it,
+			// so it wrote that event unshadowed (or dropped it, which v2
+			// could not have evaluated). v1 has its verdict; v2's record
+			// is a leftover of an attempt v1's side did not keep, not a
+			// missing verdict.
+			j.d.log.Debug("differ: v2 record for an event v1 wrote unshadowed", "partition", j.part, "seq", h2.Seq)
+			j.consume(b)
 		default:
 			if err := j.emit(ctx, Compare(nil, h2)); err != nil {
 				return err
@@ -299,18 +376,23 @@ func (j *joiner) run(ctx context.Context) error {
 }
 
 // pull makes sure s has a head, blocking until its reader delivers one.
-// Records at or below the side's last head are redelivery repeats: they
-// were compared already and are passed over. Offsets are committed while
-// it waits, so an idle partition still checkpoints.
+// Repeats of records already handled are passed over. Offsets are
+// committed while it waits, so an idle partition still checkpoints.
 func (j *joiner) pull(ctx context.Context, s *sideState) error {
 	for s.head == nil {
+		if s.peek != nil {
+			r := s.peek
+			s.peek = nil
+			s.head = r
+			continue
+		}
 		select {
 		case r := <-s.ch:
-			if s.started && r.ev.Seq <= s.last {
+			if s.cur.repeat(&r) {
 				s.next = r.off + 1
 				continue
 			}
-			s.head, s.last, s.started = &r, r.ev.Seq, true
+			s.head = &r
 		case <-j.tick.C:
 			j.commit(ctx)
 		case <-ctx.Done():
@@ -320,29 +402,90 @@ func (j *joiner) pull(ctx context.Context, s *sideState) error {
 	return nil
 }
 
+// pullV2 gets a v2 head for v1's shadowed head, or reports that v2 will
+// never write one. While it waits it reads ahead on v1. A v1 record past
+// the head's seq with no shadow means signalmand moved on without the v2
+// lane, and v2 records are written in the same produce as their v1 record
+// and before any later one, so once that record is seen, every v2 record
+// for the head's seq that will ever exist is below v2's end offset. When
+// the joiner has handled v2 up to that offset without finding it, it is
+// missing. A shadowed v1 record past the head proves nothing yet: its own
+// v2 record will resolve the head when it arrives.
+func (j *joiner) pullV2(ctx context.Context) (gone bool, err error) {
+	a, b := j.sides[0], j.sides[1]
+	ahead := a.cur
+	ahead.handle(a.head) // what v1 will have handled once head is
+	proof := int64(-1)   // v2's end offset once a later unshadowed v1 record is seen
+	for b.head == nil {
+		if proof < 0 && a.peek != nil && a.peek.ev.Shadow == "" {
+			end, err := j.d.b.EndOffsets(ctx, b.tp.Topic)
+			switch {
+			case err == nil:
+				proof = end[b.tp.Partition]
+			case ctx.Err() != nil:
+				return false, ctx.Err()
+			default:
+				j.d.log.Warn("differ: end offsets failed; retrying", "partition", j.part, "err", err)
+			}
+		}
+		if proof >= 0 && b.next >= proof {
+			return true, nil
+		}
+		var v1 <-chan record
+		if a.peek == nil {
+			v1 = a.ch
+		}
+		select {
+		case r := <-v1:
+			if ahead.repeat(&r) {
+				// A repeat once head is handled; next moves past it then.
+				a.skip = r.off + 1
+				continue
+			}
+			a.peek = &r
+		case r := <-b.ch:
+			if b.cur.repeat(&r) {
+				b.next = r.off + 1
+				continue
+			}
+			b.head = &r
+		case <-j.tick.C:
+			j.commit(ctx)
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	return false, nil
+}
+
 func (j *joiner) consume(s *sideState) {
-	s.next = s.head.off + 1
+	s.cur.handle(s.head)
+	s.next = max(s.head.off+1, s.skip)
 	s.head = nil
 }
 
 // commit checkpoints both sides. Everything below next was compared and
 // its divergences are durable, because emit returns only once they are.
+// Each offset carries its side's cursor, so a restart resumes with the
+// repeat state that goes with it.
 func (j *joiner) commit(ctx context.Context) {
-	next := map[broker.TopicPartition]int64{}
+	next := map[broker.TopicPartition]broker.Checkpoint{}
 	for _, s := range j.sides {
-		if s.next != s.committed {
-			next[s.tp] = s.next
+		if cp := s.checkpoint(); cp != s.committed {
+			next[s.tp] = cp
 		}
 	}
 	if len(next) == 0 {
 		return
 	}
-	if err := j.d.b.CommitOffsets(ctx, j.d.cfg.Group, next); err != nil {
+	if err := j.d.b.CommitCheckpoints(ctx, j.d.cfg.Group, next); err != nil {
 		j.d.log.Warn("differ: offset commit failed; the next one supersedes it", "partition", j.part, "err", err)
 		return
 	}
 	for _, s := range j.sides {
-		s.committed = s.next
+		if cp, ok := next[s.tp]; ok {
+			s.committed = cp
+		}
 	}
 }
 
