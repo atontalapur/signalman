@@ -215,7 +215,9 @@ event once, before and after a merge.
 
 A `windash` value at the five-dash limit expands to 3125 patterns. Two of
 them exceed ClickHouse's default 256 KiB `max_query_size`, so the compiler
-rejects with `too-large` rather than fail at run time.
+rejects with `too-large` rather than fail at run time. The limit covers the
+whole statement, so `HuntQuery` checks the full SELECT as well: a WHERE
+clause just under the limit can still be rejected once wrapped.
 
 ### Event time precision
 

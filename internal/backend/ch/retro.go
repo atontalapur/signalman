@@ -40,11 +40,19 @@ func HuntQuery(table string, r *sigma.Rule, w Window) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "SELECT DISTINCT partition, seq FROM " + table +
+	q := "SELECT DISTINCT partition, seq FROM " + table +
 		" WHERE toUnixTimestamp64Milli(" + colTime + ") >= " + strconv.FormatInt(w.From.UnixMilli(), 10) +
 		" AND toUnixTimestamp64Milli(" + colTime + ") < " + strconv.FormatInt(w.To.UnixMilli(), 10) +
 		" AND (" + where + ")" +
-		" ORDER BY partition, seq", nil
+		" ORDER BY partition, seq"
+	// max_query_size covers the whole statement, so a WHERE clause that
+	// fits on its own can still be refused once wrapped.
+	if len(q) > MaxQueryBytes {
+		rj := reject(CodeTooLarge, "the retro-hunt query is %d bytes, over the %d byte limit", len(q), MaxQueryBytes)
+		rj.RuleID = r.ID
+		return "", rj
+	}
+	return q, nil
 }
 
 // RetroHunt runs r over the events stored in table within w. db is any
