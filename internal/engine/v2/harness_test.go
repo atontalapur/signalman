@@ -60,6 +60,13 @@ func corpusRoot() string {
 	return "../../../corpora/sigmahq"
 }
 
+// corpusDir is the corpus `rules` tree, or an error when it is absent.
+func corpusDir() (string, error) {
+	dir := filepath.Join(corpusRoot(), "rules")
+	_, err := os.Stat(dir)
+	return dir, err
+}
+
 var (
 	corpusOnce sync.Once
 	corpusRS   *sigma.RuleSet
@@ -71,8 +78,8 @@ var (
 // the corpus is absent, which it is in CI.
 func corpusSource(t testing.TB) *sigma.RuleSet {
 	t.Helper()
-	dir := filepath.Join(corpusRoot(), "rules")
-	if _, err := os.Stat(dir); err != nil {
+	dir, err := corpusDir()
+	if err != nil {
 		t.Skip("SigmaHQ corpus not vendored (set SIGNALMAN_CORPUS or clone into corpora/sigmahq)")
 	}
 	corpusOnce.Do(func() {

@@ -12,11 +12,17 @@ import (
 // Program is a rule set compiled for evaluation. Every leaf predicate in
 // every rule, logsource tests included, is interned once into Preds; each
 // rule's condition becomes a Tree whose leaves are indices into Preds. An
-// event fills a bitset of predicate results lazily, so a predicate shared by
-// forty rules is evaluated at most once per event.
+// event fills a lazily evaluated bitset of predicate results, so a
+// predicate shared by forty rules is evaluated at most once per event.
+//
+// Before any tree is walked, two cheaper tests can settle a rule as false:
+// field presence gating (a bitset AND of the rule's required fields against
+// the fields the event has) and the literal prefilter (an Aho-Corasick scan
+// for the literals the rule requires). Both are necessary conditions for a
+// match, never sufficient ones.
 //
 // A Program is read-only after Compile. Per-event state lives in a scratch
-// the evaluator owns per call.
+// the evaluator owns for the length of one call.
 type Program struct {
 	// Preds is deduplicated: no two entries share a Key.
 	Preds []Pred
@@ -30,6 +36,16 @@ type Program struct {
 	// required literal: the prefilter admits them on every event.
 	Always []int
 
+	// fields is the field table: every field a non-keyword predicate
+	// reads, in first-use order. Presence bitsets, required-field masks,
+	// and prefilter slots all index it.
+	fields   []string
+	fieldIdx map[string]int32
+	// reqMask holds each rule's required fields as fieldWords words.
+	reqMask    []uint64
+	fieldWords int
+
+	cpreds []cpred
 	reqs   [][]Literal // per rule, the prefilter alternatives
 	lits   []string
 	pf     *prefilter
@@ -45,7 +61,8 @@ type Pred struct {
 	// with equal keys are built from the same field, keyword flag,
 	// modifier chain, and values, and so have the same matcher.
 	Key string
-	src *ast.Pred
+	// Desc is the first interned leaf's display form, for explain output.
+	Desc string
 }
 
 // Tree is one rule's compiled condition, with the logsource test folded in
@@ -72,35 +89,45 @@ type node struct {
 }
 
 // Compile builds the program. It fails only on a tree the rule loader did
-// not bind, which is a programming error upstream rather than bad input.
+// not bind, or a leaf whose modifier chain no longer plans, both of which
+// are programming errors upstream rather than bad input.
 func Compile(rs *sigma.RuleSet) (*Program, error) {
 	c := &compiler{
-		p:     &Program{ByField: map[string][]int{}},
+		p:     &Program{ByField: map[string][]int{}, fieldIdx: map[string]int32{}},
 		index: map[string]int{},
 	}
-	c.p.Trees = make([]Tree, 0, len(rs.Rules))
+	p := c.p
+	p.Trees = make([]Tree, 0, len(rs.Rules))
+	full := make([]ast.Node, 0, len(rs.Rules))
 	for i := range rs.Rules {
 		r := &rs.Rules[i]
-		cond, err := c.node(r.Cond)
+		root := r.Cond
+		if r.LogSource.Node != nil {
+			// v1 tests the logsource and only then walks the condition; a
+			// conjunction with the logsource first is the same function.
+			root = &ast.And{Children: []ast.Node{r.LogSource.Node, r.Cond}}
+		}
+		idx, err := c.node(root)
 		if err != nil {
 			return nil, fmt.Errorf("rule %s: %w", r.ID, err)
 		}
-		root := cond
-		if r.LogSource.Node != nil {
-			// v1 tests the logsource and only then walks the condition;
-			// a conjunction with the logsource first is the same function.
-			ls, err := c.node(r.LogSource.Node)
-			if err != nil {
-				return nil, fmt.Errorf("rule %s logsource: %w", r.ID, err)
-			}
-			root = c.list(opAnd, []int32{ls, cond})
-		}
-		c.p.Trees = append(c.p.Trees, Tree{RuleID: r.ID, Root: root})
+		p.Trees = append(p.Trees, Tree{RuleID: r.ID, Root: idx})
+		full = append(full, root)
 	}
+
+	p.fieldWords = (len(p.fields) + 63) / 64
+	p.reqMask = make([]uint64, len(rs.Rules)*p.fieldWords)
+	for i, root := range full {
+		for _, f := range requiredFields(root) {
+			fi := p.fieldIdx[f] // every required field is a predicate field
+			p.reqMask[i*p.fieldWords+int(fi>>6)] |= 1 << (uint(fi) & 63)
+		}
+	}
+
 	if err := c.buildPrefilter(rs); err != nil {
 		return nil, err
 	}
-	return c.p, nil
+	return p, nil
 }
 
 // Leaves is the number of leaf predicates before interning, so the table
@@ -151,21 +178,44 @@ func (c *compiler) node(n ast.Node) (int32, error) {
 		return c.emit(node{op: opNot, a: ch}), nil
 	case *ast.Pred:
 		c.p.leaves++
-		return c.emit(node{op: opPred, a: int32(c.intern(n))}), nil
+		i, err := c.intern(n)
+		if err != nil {
+			return 0, err
+		}
+		return c.emit(node{op: opPred, a: int32(i)}), nil
 	}
 	return 0, fmt.Errorf("unbound node %T", n)
 }
 
-func (c *compiler) intern(p *ast.Pred) int {
+func (c *compiler) field(name string) int32 {
+	if fi, ok := c.p.fieldIdx[name]; ok {
+		return fi
+	}
+	fi := int32(len(c.p.fields))
+	c.p.fields = append(c.p.fields, name)
+	c.p.fieldIdx[name] = fi
+	return fi
+}
+
+func (c *compiler) intern(p *ast.Pred) (int, error) {
 	key := predKey(p)
 	if i, ok := c.index[key]; ok {
-		return i
+		return i, nil
+	}
+	fi := int32(-1)
+	if !p.Keyword {
+		fi = c.field(p.Field)
+	}
+	cp, err := compilePred(p, fi)
+	if err != nil {
+		return 0, err
 	}
 	i := len(c.p.Preds)
-	c.p.Preds = append(c.p.Preds, Pred{Field: p.Field, Key: key, src: p})
+	c.p.Preds = append(c.p.Preds, Pred{Field: p.Field, Key: key, Desc: p.Desc})
+	c.p.cpreds = append(c.p.cpreds, cp)
 	c.index[key] = i
 	c.p.ByField[p.Field] = append(c.p.ByField[p.Field], i)
-	return i
+	return i, nil
 }
 
 // predKey is the canonical form of a leaf. Every string is quoted, so a

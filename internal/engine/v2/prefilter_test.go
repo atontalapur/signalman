@@ -99,7 +99,7 @@ func admittedBy(e *Evaluator, ev *event.Event) []bool {
 	s := e.pool.Get().(*scratch)
 	defer e.pool.Put(s)
 	s.reset(ev)
-	s.prefilter()
+	s.load()
 	out := make([]bool, len(e.prog.Trees))
 	for i := range out {
 		out[i] = s.candidate(i)

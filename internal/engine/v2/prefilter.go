@@ -2,10 +2,8 @@ package v2
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/atontalapur/signalman/internal/engine/v2/aho"
-	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/sigma"
 	"github.com/atontalapur/signalman/internal/sigma/ast"
 	"github.com/atontalapur/signalman/internal/sigma/match"
@@ -150,7 +148,7 @@ func valueLiterals(p *ast.Pred, v match.ValueSpec) []Literal {
 }
 
 // slot says a literal hit admits rule when found in field (an index into
-// the prefilter's field table, or -1 for a keyword literal, found anywhere).
+// the program's field table, or -1 for a keyword literal, found anywhere).
 type slot struct {
 	field int32
 	rule  int32
@@ -158,12 +156,11 @@ type slot struct {
 
 // prefilter is the compiled literal index.
 type prefilter struct {
-	filter   *aho.Matcher // nil when no rule has a literal
-	lits     []string
-	slots    [][]slot // per literal id
-	fieldIdx map[string]int32
-	keyword  bool // some literal is a keyword literal
-	always   []uint64
+	filter  *aho.Matcher // nil when no rule has a literal
+	lits    []string
+	slots   [][]slot // per literal id
+	keyword bool     // some literal is a keyword literal
+	always  []uint64
 }
 
 // buildPrefilter derives each rule's literals from its condition and, only
@@ -172,7 +169,7 @@ type prefilter struct {
 // key, but it is sound and keeps a regex-only rule off other channels.
 func (c *compiler) buildPrefilter(rs *sigma.RuleSet) error {
 	p := c.p
-	pf := &prefilter{fieldIdx: map[string]int32{}}
+	pf := &prefilter{}
 	litID := map[string]int32{}
 	p.reqs = make([][]Literal, len(rs.Rules))
 	for i := range rs.Rules {
@@ -198,12 +195,9 @@ func (c *compiler) buildPrefilter(rs *sigma.RuleSet) error {
 			if l.Keyword {
 				pf.keyword = true
 			} else {
-				fi, ok := pf.fieldIdx[l.Field]
-				if !ok {
-					fi = int32(len(pf.fieldIdx))
-					pf.fieldIdx[l.Field] = fi
-				}
-				f = fi
+				// A literal comes from a leaf, so its field is in the
+				// program's field table.
+				f = p.fieldIdx[l.Field]
 			}
 			pf.slots[id] = append(pf.slots[id], slot{field: f, rule: int32(i)})
 		}
@@ -229,51 +223,12 @@ func (c *compiler) buildPrefilter(rs *sigma.RuleSet) error {
 // in it is walked for every event.
 func (p *Program) AlwaysSize() int { return len(p.Always) }
 
-// prefilter fills the candidate bitset: the Always rules, plus every rule
-// one of whose literals occurs in the field it is required in.
-//
-// It ranges over the event's field map. That order cannot reach a verdict:
-// the only effect of a hit is to set a bit, and setting bits commutes.
-func (s *scratch) prefilter() {
+// scanSpan runs one folded scalar of field fi (-1 for a field no predicate
+// names) through the automaton and admits every rule whose literal it holds
+// in the field the literal is required in.
+func (s *scratch) scanSpan(fi int32, text []byte) {
 	pf := s.p.pf
-	copy(s.cand, pf.always)
-	if pf.filter == nil {
-		return
-	}
-	s.epoch++
-	for name, v := range s.ev.Fields {
-		fi, ok := pf.fieldIdx[name]
-		if !ok {
-			if !pf.keyword {
-				continue
-			}
-			fi = -1
-		}
-		if v.Kind == event.KindList {
-			for _, item := range v.L {
-				s.scanValue(fi, item)
-			}
-			continue
-		}
-		s.scanValue(fi, v)
-	}
-}
-
-// scanValue folds one scalar's text, exactly as the matchers see it, and
-// runs it through the automaton.
-func (s *scratch) scanValue(fi int32, v event.Value) {
-	switch v.Kind {
-	case event.KindString:
-		s.fold = match.AppendFold(s.fold[:0], v.S)
-	case event.KindInt:
-		s.fold = strconv.AppendInt(s.fold[:0], v.I, 10)
-	case event.KindBool:
-		s.fold = strconv.AppendBool(s.fold[:0], v.B)
-	default:
-		return // null and nested lists have no text, and match nothing
-	}
-	pf := s.p.pf
-	s.hits = pf.filter.Scan(s.fold, s.hits[:0])
+	s.hits = pf.filter.Scan(text, s.hits[:0])
 	for _, id := range s.hits {
 		// A literal found twice in one field admits the same rules twice;
 		// skip the repeat.

@@ -34,6 +34,17 @@ into a valid rule skeleton and requires the two to agree, and every
 suppression has a section in `test/fuzz/KNOWN_DIVERGENCES.md`. The run
 counts are in `docs/results.md`.
 
+The compiled engine has started early: `internal/engine/v2` interns every
+leaf predicate across the rule set, skips rules with a field presence
+bitset and an Aho-Corasick literal prefilter, and evaluates the rest from a
+per-event predicate bitset with no allocation. Its verdicts are compared
+with v1's one by one and by per-partition digest; over the 1,236 accepted
+`rules`-tree rules and 30.6 million generated verdicts they are identical.
+In process on an M1 Pro it is about 125 times faster than v1 on the
+benchmark event. `docs/evaluation.md` describes it and `docs/results.md`
+has the numbers. The shadow lane, differ, and rollout that make up the rest
+of Plan G need the pipeline first.
+
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
 and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
@@ -48,7 +59,7 @@ the first Go code.
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
-| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | not started |
+| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | not started |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
@@ -92,7 +103,8 @@ internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
 internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
 internal/engine/v1/     reference evaluator, permanent oracle (no index, no cache)
-internal/engine/v2/     compiled evaluator
+internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
+internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL
 internal/pipe/          stages, bounded queues, drop ledger
 internal/obs/           metrics, canary
@@ -105,7 +117,7 @@ docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
-docs/evaluation.md      the v1 evaluator and how verdict streams are compared
+docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
@@ -132,6 +144,10 @@ that needs them.
   `python3 -m venv test/fuzz/.venv && test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt`.
   Without it every case in `test/fuzz` skips, so a green `make check` on a
   machine with no venv says nothing about the fuzzer.
+- The corpus tests in `internal/engine/v2` look for the SigmaHQ clone at
+  `corpora/sigmahq` or at `SIGNALMAN_CORPUS`, and skip without it, as CI
+  does. `SIGNALMAN_EQUIV_PER_RULE` lengthens the equivalence stream and
+  `SIGNALMAN_LATENCY=1` turns on the latency report.
 - `make check-backlog` after editing `docs/backlog.yml`.
 - Debt too small for a story lives in `TODOS.md`.
 - Jira project SIG. One story per branch, `feat/SIG-<n>-<slug>`. PR titles are
