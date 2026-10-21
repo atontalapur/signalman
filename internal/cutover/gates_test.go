@@ -514,3 +514,34 @@ func TestG6NeedsTheAuditToHaveRun(t *testing.T) {
 		t.Fatalf("G6: %+v", r.Checks)
 	}
 }
+
+// A rollback drill is evidence for the step it was run at and for the hold
+// it sits beside, not for any step at any time.
+func TestRollbackEvidenceMatchesTheStepAndWindow(t *testing.T) {
+	f := newFake()
+	healthy(f, "48h", 10)
+	alertsByRule(f, checkAt, map[string]float64{"a": 1000})
+	alertsByRule(f, checkAt.Add(-48*time.Hour), map[string]float64{"a": 1000})
+	cfg := Config{Gate: "G3", Percent: 10, Source: f}
+
+	cfg.Drill = stepDrill(10, 0, 5)
+	if r := eval(t, cfg); !r.Passed() {
+		t.Fatalf("a 10%% rollback in the window: %+v", r.Checks)
+	}
+	cfg.Drill = stepDrill(50, 0, 5)
+	if c := statusOf(t, eval(t, cfg), "rollback"); c.Status != Fail || !strings.Contains(c.Evidence, "10%") {
+		t.Fatalf("a 50%% rollback for the 10%% step: %+v", c)
+	}
+	old := stepDrill(10, 0, 5)
+	old.Rollback.WrittenAt = checkAt.Add(-48*time.Hour - 25*time.Hour)
+	cfg.Drill = old
+	if c := statusOf(t, eval(t, cfg), "rollback"); c.Status != Fail || !strings.Contains(c.Evidence, "written") {
+		t.Fatalf("a rollback a day before the hold: %+v", c)
+	}
+	late := stepDrill(10, 0, 5)
+	late.Rollback.WrittenAt = checkAt.Add(25 * time.Hour)
+	cfg.Drill, cfg.Now = late, func() time.Time { return checkAt.Add(30 * time.Hour) }
+	if c := statusOf(t, eval(t, cfg), "rollback"); c.Status != Fail {
+		t.Fatalf("a rollback a day after the hold: %+v", c)
+	}
+}

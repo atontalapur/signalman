@@ -216,8 +216,39 @@ func TestDrillRollbackOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !d.Rollback.Measured() || d.RollForward != nil || s.read(t) != 0 {
+	// The rollback drill for G2 to G4 must not leave production rolled
+	// back: the file is restored to -from once the rollback is measured.
+	if !d.Rollback.Measured() || d.RollForward != nil || s.read(t) != 100 || d.RestoredAt == nil {
 		t.Fatalf("drill %+v, file %d", d, s.read(t))
+	}
+	if !d.RestoredAt.After(d.Rollback.WrittenAt) {
+		t.Fatalf("restored at %s, rollback written %s", d.RestoredAt, d.Rollback.WrittenAt)
+	}
+}
+
+// A restore the gauge never shows is an error naming the rollout, not a
+// quiet success.
+func TestDrillRollbackOnlyFailsLoudlyWhenTheRestoreDoesNotApply(t *testing.T) {
+	s := &sim{file: rolloutFile(t, 100), rules: ruleIDs(5), applyAfter: 2 * time.Second, servedAfter: 3 * time.Second, last: 100}
+	c := &clock{now: t0}
+	cfg := drillConfig(t, s, c)
+	cfg.NoForward = true
+	src := cfg.Source.(*fakeSource)
+	sleeps := 0
+	inner := cfg.Sleep
+	cfg.Sleep = func(ctx context.Context, d time.Duration) error {
+		err := inner(ctx, d)
+		if sleeps++; sleeps == 2 {
+			src.instant[qRolloutMin], src.instant[qRolloutMax] = 0, 0
+		}
+		return err
+	}
+	_, err := RunDrill(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "restored") {
+		t.Fatalf("err = %v", err)
+	}
+	if s.read(t) != 100 {
+		t.Fatalf("file %d, want restored to 100", s.read(t))
 	}
 }
 

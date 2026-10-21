@@ -81,6 +81,9 @@ type Drill struct {
 	StartedAt   time.Time `json:"started_at"`
 	Rollback    *Step     `json:"rollback,omitempty"`
 	RollForward *Step     `json:"roll_forward,omitempty"`
+	// RestoredAt is when a rollback-only drill wrote From back, once the
+	// rollback was measured.
+	RestoredAt *time.Time `json:"restored_at,omitempty"`
 }
 
 // MeasureConfig is one rollout change to time.
@@ -260,7 +263,10 @@ type DrillConfig struct {
 	// Hold is how long the rollback stays in place, counted from the
 	// rollback, before rolling forward. Default 5m.
 	Hold time.Duration
-	// NoForward stops after the rollback: a rollback drill for G2 to G4.
+	// NoForward skips the hold and the measured roll-forward: a rollback
+	// drill for G2 to G4. Once the rollback is measured the file is set
+	// back to From and the gauge checked, so the drill does not leave
+	// production rolled back.
 	NoForward bool
 	Measure   MeasureConfig // Step, Quiet, Lead; the rest is filled in
 	Source    Source
@@ -272,7 +278,9 @@ type DrillConfig struct {
 
 // RunDrill runs a game day against a live signalmand. It checks the
 // rollout file and the gauge both read From, writes To with a rename,
-// measures the rollback, holds, writes From back, and measures that.
+// measures the rollback, holds, writes From back, and measures that. With
+// NoForward it writes From back right after the measured rollback and
+// checks the gauge instead of holding and measuring.
 //
 // If the rollback is not measured, the drill stops with the rollout at To,
 // which is v1 serving the moved rules: the side to be on when something did
@@ -316,6 +324,19 @@ func RunDrill(ctx context.Context, c DrillConfig) (Drill, error) {
 		return d, fmt.Errorf("rollback was not measured (%s); the rollout is left at %d%%", rb.Problem, c.To)
 	}
 	if c.NoForward {
+		c.Log("restoring: writing %d%% to %s", c.From, c.RolloutFile)
+		if err := WriteRollout(c.RolloutFile, c.From, c.Now()); err != nil {
+			return d, fmt.Errorf("restoring %d%%: %w; the rollout is left at %d%%", c.From, err, c.To)
+		}
+		t := c.Now().UTC()
+		d.RestoredAt = &t
+		if err := c.Sleep(ctx, c.Observe); err != nil {
+			return d, err
+		}
+		if err := preflight(ctx, c, c.From); err != nil {
+			return d, fmt.Errorf("the rollout file was restored to %d%% but signalmand does not show it: %w", c.From, err)
+		}
+		c.Log("restored %d%%", c.From)
 		return d, nil
 	}
 	if err := c.Sleep(ctx, c.Hold-c.Observe); err != nil {

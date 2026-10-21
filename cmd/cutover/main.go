@@ -135,6 +135,7 @@ func cmdCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	fs.Float64Var(&c.FullTraffic, "full-traffic", 0.8, "G5: share of the 7 day mean ingest rate that counts as full traffic")
 	fs.Float64Var(&c.NoiseSigma, "noise-sigma", 3, "alert volume: standard deviations a rule's count may move")
 	fs.Float64Var(&c.VerdictTolerance, "verdict-tolerance", 0.001, "largest |v2/v1 - 1| on verdict counts")
+	fs.DurationVar(&c.DrillSlack, "drill-slack", 24*time.Hour, "G2 to G4: how far outside the hold the -drill rollback may have been written")
 	fs.DurationVar(&c.ScrapeInterval, "scrape-interval", 15*time.Second, "Prometheus scrape interval, for the window coverage checks")
 	fs.Float64Var(&c.MinCoverage, "min-coverage", 0.95, "share of a window's expected samples that must exist")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
@@ -291,7 +292,7 @@ func cmdGameday(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	fs.IntVar(&c.To, "to", 0, "rollout to roll back to")
 	fs.DurationVar(&c.Observe, "observe", 90*time.Second, "how long each change is watched before it is measured")
 	fs.DurationVar(&c.Hold, "hold", 5*time.Minute, "how long the rollback is held before rolling forward")
-	fs.BoolVar(&c.NoForward, "rollback-only", false, "stop after the rollback (the G2 to G4 rollback drill)")
+	fs.BoolVar(&c.NoForward, "rollback-only", false, "measure the rollback, then restore -from without a hold or a measured roll-forward (the G2 to G4 rollback drill)")
 	out := fs.String("out", "", "file the result is written to as JSON (required)")
 	measureFlags(fs, &c.Measure)
 	if err := fs.Parse(args); err != nil {

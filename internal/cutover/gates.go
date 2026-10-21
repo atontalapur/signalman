@@ -115,6 +115,10 @@ type Config struct {
 	// RollbackBudget is the most a rollback or roll-forward may take.
 	// Default 30s.
 	RollbackBudget time.Duration
+	// DrillSlack is how far outside the hold a G2 to G4 rollback may have
+	// been written and still count for it: before the hold starts, or
+	// after it ends and before the check. Default 24h.
+	DrillSlack time.Duration
 	// ScrapeInterval is Prometheus's scrape interval, which sets how many
 	// samples a fully covered window holds. Default 15s, as
 	// deploy/prometheus/prometheus.yml has it.
@@ -152,6 +156,9 @@ func (c *Config) defaults() {
 	}
 	if c.RollbackBudget <= 0 {
 		c.RollbackBudget = 30 * time.Second
+	}
+	if c.DrillSlack <= 0 {
+		c.DrillSlack = 24 * time.Hour
 	}
 	if c.ScrapeInterval <= 0 {
 		c.ScrapeInterval = 15 * time.Second
@@ -514,9 +521,12 @@ func (e *evaluator) alertVolume(base time.Time, against string) {
 	e.add(key, crit, Fail, "%d of %d rules moved beyond %g sigma: %s", len(outs), len(ids), e.c.NoiseSigma, strings.Join(ex, "; "))
 }
 
-// rollback checks a measured rollback under budget. from100 requires it to
-// start at 100%, as G4 and G5 do.
-func (e *evaluator) rollback(key string, from100 bool) {
+// rollback checks a measured rollback under budget, run at this gate's
+// step (from percent) and written within DrillSlack of the hold. A drill
+// from another step, or from long before or after the hold, says nothing
+// about rolling back from this one. from100 also requires it to go to 0,
+// as G4 does.
+func (e *evaluator) rollback(key string, percent int, from100 bool) {
 	crit := fmt.Sprintf("a rollback measured to take effect in under %s", e.c.RollbackBudget)
 	if from100 {
 		crit = fmt.Sprintf("a rollback from 100%% measured to take effect in under %s", e.c.RollbackBudget)
@@ -526,7 +536,16 @@ func (e *evaluator) rollback(key string, from100 bool) {
 		return
 	}
 	s := e.c.Drill.Rollback
-	e.stepCheck(key, crit, s, from100, false)
+	lo, hi := e.c.At.Add(-e.c.Window-e.c.DrillSlack), e.c.At.Add(e.c.DrillSlack)
+	switch {
+	case s.From != percent:
+		e.add(key, crit, Fail, "%s: rollback was from %d%%; this gate's step is %d%%", e.drillName(), s.From, percent)
+	case s.WrittenAt.Before(lo) || s.WrittenAt.After(hi):
+		e.add(key, crit, Fail, "%s: rollback written %s, more than %s outside the %s ending %s",
+			e.drillName(), s.WrittenAt.UTC().Format(time.RFC3339), e.c.DrillSlack, e.w(), e.c.At.UTC().Format(time.RFC3339))
+	default:
+		e.stepCheck(key, crit, s, from100, false)
+	}
 }
 
 func (e *evaluator) stepCheck(key, crit string, s *Step, from100, forward bool) {
@@ -637,7 +656,7 @@ func (e *evaluator) step(percent int, full bool) {
 	} else {
 		e.alertVolume(e.c.At.Add(-e.c.Window), "the window before")
 	}
-	e.rollback("rollback", full)
+	e.rollback("rollback", percent, full)
 }
 
 func (e *evaluator) g5() {

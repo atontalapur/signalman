@@ -286,7 +286,7 @@ Where each criterion comes from:
 |---|---|---|
 | G0 | `-corpus` replayed through v1 and v2 with `-rules`, digests compared per partition (`internal/verdict`); `-fuzz-stats` summed, at least `-fuzz-min` (1e8) comparisons; `-go-test` runs `go test` over `internal/engine`, `internal/verdict`, `internal/pipe/chsink` | `fuzz-clean`: the counters do not record the fuzz run's exit status |
 | G1 | Over 7 days, covered: rollout at 0, both engines' verdict rates above zero at every 5m step and their counts within `-verdict-tolerance`, differ resolving events, `signalman_divergences_counted_total` and `signalman_shadow_failures_total` flat | `v2-p99`: no per-engine match latency metric is exported; it comes from the load harness |
-| G2, G3 | Over 48 h: rollout held at 1, 10 or 50 on every instance, the G1 checks, alert volume per rule against the 48 h before within `-noise-sigma` (Poisson, default 3), and a rollback in `-drill` under 30 s | |
+| G2, G3 | Over 48 h: rollout held at 1, 10 or 50 on every instance, the G1 checks, alert volume per rule against the 48 h before within `-noise-sigma` (Poisson, default 3), and a rollback in `-drill` from that step, written within `-drill-slack` of the hold, under 30 s | |
 | G4 | The G2 checks at 100 apart from alert volume, `signalman_alerts_total{engine="v1"}` flat, and a rollback from 100 in `-drill` | `flag-only`: no configuration change other than the rollout file |
 | G5 | `-drill` from `cutover gameday`: 100 to 0 and 0 to 100, each under 30 s; started on a weekday inside `-business-hours` in `-tz`; ingest rate at the rollback at least `-full-traffic` (0.8) of the 7 day mean | |
 | G6 | Over 14 days: rollout at 100, the G1 checks, the audit closing windows at every 5m step and its violations flat, zero `version_skew`, alert volume against `-baseline-at` (a window when v1 served everything), the G5 drill, G0 to G5 dated here, no open divergence log entry | `v2-p99`; `skew-in-reloads` when there was any skew |
@@ -333,7 +333,13 @@ go run ./cmd/cutover gameday -prom http://localhost:9090 \
 The result is a JSON file holding both steps; pass it to
 `cutover check -gate G5 -drill` (and later to G6). `-rollback-only` runs
 the rollback alone, for the measured rollback G2 to G4 need, with `-from`
-set to the current step. `cutover measure` times a change an operator made
+set to the current step: once the rollback is measured it writes `-from`
+back without a hold, waits `-observe`, and checks every instance's gauge
+reads it, exiting non-zero if not. The result file records `restored_at`.
+`cutover check` takes that rollback for G2 to G4 only if it starts at the
+gate's step (1, 10, 50 or 100) and was written within `-drill-slack` (24 h)
+of the hold: run it just before the hold starts or after it ends, since a
+rollback inside the hold breaks `rollout-held`. `cutover measure` times a change an operator made
 by hand from its write time, without touching the file.
 
 Each time is the first sample that showed it, so a measured duration is an
