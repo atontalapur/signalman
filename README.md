@@ -218,10 +218,10 @@ that needs them.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`:
   `docker compose -f deploy/docker-compose.yml up -d --wait`. Integration tests
   carry the `integration` build tag and reach Redpanda at `localhost:19092`
-  (override with `SIGNALMAN_BROKERS`). The ClickHouse retro-hunt test reads a
-  clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`, which `make integration`
-  sets to the compose server. Without it the test skips locally and fails
-  when `CI=true`.
+  (override with `SIGNALMAN_BROKERS`). The ClickHouse tests (retro-hunt and
+  alert sink) read a clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`, which
+  `make integration` sets to the compose server. Without it they skip
+  locally and fail when `CI=true`.
 - Run the daemon against the compose stack:
   `go run ./cmd/signalmand -rules <dir> -taxonomy config/taxonomy`. It
   serves `/metrics` on `:9464`, reloads rules on `SIGHUP`, and by default
@@ -233,8 +233,9 @@ that needs them.
   (`-clickhouse` DSN, defaulting to the compose stack), and serves
   `/metrics` on `:9465`. The table is created when the ClickHouse volume is
   first initialized; after changing the DDL, `docker compose down -v`.
-  `make integration` sets `SIGNALMAN_CLICKHOUSE_DSN` to the compose stack;
-  without it the ClickHouse tests skip.
+  It needs the `alerts.dead` topic, which compose creates. Reset the
+  Redpanda and ClickHouse volumes together: `seq` restarts with a new
+  `events.raw` and would collide with stored alerts.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.
