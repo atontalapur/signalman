@@ -94,7 +94,7 @@ func compileMap(m map[string]any) (ast.Node, error) {
 		if err != nil {
 			return nil, fmt.Errorf("field %q: %w", key, err)
 		}
-		kids = append(kids, &ast.Pred{Field: field, Desc: describe(key, vals), M: matcher})
+		kids = append(kids, &ast.Pred{Field: field, Desc: describe(key, vals), Key: predKey(mods, vals), M: matcher})
 	}
 	if len(kids) == 0 {
 		return nil, fmt.Errorf("empty map in selection")
@@ -125,6 +125,7 @@ func keywordPred(raw any) (ast.Node, error) {
 	return &ast.Pred{
 		Field: "",
 		Desc:  fmt.Sprintf("keyword '%s'", text),
+		Key:   fmt.Sprintf("(keyword %q)", text),
 		M:     keywordMatcher{inner: match.Contains(text)},
 	}, nil
 }
@@ -195,8 +196,8 @@ func toValue(x any) (event.Value, error) {
 	}
 }
 
-// describe is the explain-output form of one detection entry. It is not used
-// for hashing; ast.Canonical is.
+// describe is the explain-output form of one detection entry. It does not
+// quote its values, so hashing relies on predKey, not on this.
 func describe(key string, vals []event.Value) string {
 	texts := make([]string, 0, len(vals))
 	for _, v := range vals {
@@ -207,4 +208,27 @@ func describe(key string, vals []event.Value) string {
 		}
 	}
 	return key + " " + strings.Join(texts, ", ")
+}
+
+// predKey is the hashing form of one detection entry: the modifier chain and
+// the values match.Build was given, every string quoted, so that it decides
+// the matcher and no two different inputs share a key. It carries each
+// value's kind even though Build only tells null from text today, so a
+// matcher that starts to care cannot slip past RuleSetV.
+func predKey(mods []string, vals []event.Value) string {
+	var b strings.Builder
+	b.WriteString("(mods")
+	for _, m := range mods {
+		fmt.Fprintf(&b, " %q", m)
+	}
+	b.WriteString(") (vals")
+	for _, v := range vals {
+		if s, ok := v.Text(); ok {
+			fmt.Fprintf(&b, " (%s %q)", v.Kind, s)
+		} else {
+			fmt.Fprintf(&b, " (%s)", v.Kind)
+		}
+	}
+	b.WriteString(")")
+	return b.String()
 }

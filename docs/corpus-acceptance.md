@@ -19,7 +19,9 @@ source.
 
 - Corpus commit `2e8fd89f82d9104c1b30321a307254ddeea17de2`
 - Taxonomy `33c005fb8a7c69be` (`config/taxonomy/`, three logsources)
-- Rule set `7d1bba9e7029d5b5` for the `rules` tree
+- Rule set `7e799898dbe3e4c3` for the `rules` tree (recomputed on 2026-10-21
+  after RuleSetV started covering each rule's logsource test and renamed
+  fields; the counts below did not change)
 
 | Tree | Files | Accepted | `aggregation` | `condition` | `modifier` | `missing-id` | `no-taxonomy` |
 |---|---|---|---|---|---|---|---|

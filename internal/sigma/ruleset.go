@@ -19,10 +19,11 @@ type RuleSet struct {
 	// Rules is sorted by ID, so iteration order is fixed regardless of how
 	// the filesystem returned the files.
 	Rules []Rule
-	// Version is RuleSetV: a hash over each rule's ID and the canonical form
-	// of its bound tree, plus the taxonomy version it was bound against.
-	// Two loads of the same rules produce the same version, and a change to
-	// any rule's semantics changes it.
+	// Version is RuleSetV: a hash over each rule's ID, the canonical form of
+	// its logsource test, and the canonical form of its bound, renamed
+	// tree, plus the taxonomy version it was bound against. Two loads of
+	// the same rules produce the same version, and a change to anything
+	// that decides a verdict changes it.
 	Version   string
 	TaxonomyV string
 }
@@ -151,14 +152,27 @@ func LoadRuleFiles(paths []string, tax *Taxonomy) (*RuleSet, []LoadError) {
 	}
 	sort.Slice(rs.Rules, func(i, j int) bool { return rs.Rules[i].ID < rs.Rules[j].ID })
 
-	// Canonical, not String: every string is quoted, so a value carrying a
-	// separator cannot collide with the structure around it.
-	h := sha256.New()
-	for _, r := range rs.Rules {
-		h.Write([]byte(r.ID))
-		h.Write([]byte(ast.Canonical(r.Cond)))
-	}
-	h.Write([]byte(tax.Version))
-	rs.Version = hex.EncodeToString(h.Sum(nil))[:16]
+	rs.Version = ruleSetVersion(rs.Rules, tax.Version)
 	return rs, errs
+}
+
+// ruleSetVersion hashes exactly what an engine evaluates for each rule: its
+// logsource test and its bound, renamed condition tree. Hashing those trees,
+// not the rule file's fields, means anything the loader folds into them is
+// covered without being listed here.
+//
+// Canonical, not String: every string is quoted and every form is
+// parenthesized, so a value carrying a separator cannot collide with the
+// structure around it, and one rule's forms cannot run into the next.
+func ruleSetVersion(rules []Rule, taxV string) string {
+	h := sha256.New()
+	for _, r := range rules {
+		ls := "(any)"
+		if r.LogSource.Node != nil {
+			ls = ast.Canonical(r.LogSource.Node)
+		}
+		fmt.Fprintf(h, "(rule %q (logsource %s) (cond %s))", r.ID, ls, ast.Canonical(r.Cond))
+	}
+	fmt.Fprintf(h, "(taxonomy %q)", taxV)
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }

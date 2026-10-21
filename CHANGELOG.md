@@ -38,6 +38,10 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   silently ignoring the second document's cases.
 - One rule file named both relative and absolute loads once instead of
   reporting a false duplicate id.
+- RuleSetV now covers each rule's logsource test and its renamed fields, and
+  hashes predicate values quoted. A rule with and without
+  `service: security` used to share a RuleSetV while giving different
+  verdicts. Every RuleSetV value changes.
 
 ## [0.7.1] - 2026-10-01
 
