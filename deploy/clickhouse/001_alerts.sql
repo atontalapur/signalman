@@ -41,4 +41,9 @@ CREATE TABLE IF NOT EXISTS signalman.alerts (
 ) ENGINE = ReplacingMergeTree
 ORDER BY (partition, seq, rule_id)
 PARTITION BY toYYYYMMDD(ingest_time)
-TTL toDateTime(ingest_time) + INTERVAL 90 DAY;
+TTL toDateTime(ingest_time) + INTERVAL 90 DAY
+-- The sink commits an offset as soon as an insert is acknowledged. These
+-- make the acknowledgement wait until the part and its directory are
+-- fsynced, so a host crash cannot lose rows whose offsets are committed.
+-- They are table settings; ClickHouse refuses them on an INSERT.
+SETTINGS fsync_after_insert = 1, fsync_part_directory = 1;
