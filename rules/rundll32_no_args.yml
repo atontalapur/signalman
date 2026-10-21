@@ -1,0 +1,17 @@
+title: Rundll32 Without Arguments
+id: 845cc43c-e1ac-4f6a-8620-1fd1d1b3e3d8
+status: test
+description: rundll32 started with nothing after it, which is what process hollowing into rundll32 looks like.
+author: signalman
+tags:
+  - attack.defense-evasion
+  - attack.t1218.011
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\rundll32.exe'
+    CommandLine|re|i: 'rundll32(\.exe)?"?\s*$'
+  condition: selection
+level: high

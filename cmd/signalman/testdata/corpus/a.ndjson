@@ -1,0 +1,5 @@
+{"channel":"Microsoft-Windows-Sysmon/Operational","event_id":1,"Image":"C:\\Windows\\System32\\rundll32.exe","CommandLine":"rundll32.exe comsvcs.dll, MiniDump 624 C:\\t.dmp full","ParentImage":"C:\\Windows\\explorer.exe"}
+{"channel":"Microsoft-Windows-Sysmon/Operational","event_id":1,"Image":"C:\\Windows\\System32\\notepad.exe","CommandLine":"notepad.exe","ParentImage":"C:\\Windows\\explorer.exe"}
+
+{"channel":"Microsoft-Windows-Sysmon/Operational","event_id":1,"Image":"C:\\Windows\\System32\\cmd.exe","CommandLine":"cmd.exe /c dir","ParentImage":"C:\\Windows\\explorer.exe"}
+{"channel":"Microsoft-Windows-Sysmon/Operational","event_id":3,"Image":"C:\\Windows\\System32\\svchost.exe","DestinationIp":"198.51.100.9","DestinationPort":443}

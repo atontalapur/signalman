@@ -1,0 +1,16 @@
+title: Process Started by the PsExec Service
+id: 4ca385cc-ae64-44e8-b644-a549ff1f768f
+status: test
+description: Any process whose parent is PSEXESVC, meaning someone ran PsExec against this host.
+author: signalman
+tags:
+  - attack.lateral-movement
+  - attack.t1569.002
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    ParentImage|endswith: '\PSEXESVC.exe'
+  condition: selection
+level: medium

@@ -40,6 +40,18 @@ distinguishable: a detection that silently never ran is the failure this
 pipeline exists to rule out, and it is invisible if absence is an allowed
 outcome.
 
+### Explain is a second walker, held to v1
+
+`signalman explain` needs selection names and every leaf's value, and the
+bound tree v1 walks has neither, so `internal/explain` walks the rule's
+named condition (`Rule.Condition` with `Rule.Selections`) instead. It
+differs from `ast.Eval` only in never short circuiting, which cannot change
+a result because predicates are pure. Two tests keep it honest: substituting
+the selections into the named condition gives exactly the bound tree
+(`internal/sigma/named_test.go`), and the explained verdict equals v1's for
+every shipped rule against every shipped fixture event
+(`TestExplainAgreesWithV1`). v1 itself is unchanged.
+
 ## The digest
 
 `internal/verdict` folds a verdict stream into 16 hex characters with
@@ -181,4 +193,6 @@ Numbers are in `docs/results.md`.
 - `internal/engine/v1/evaluator.go` — the walk, the logsource gate, verdicts
 - `internal/verdict/digest.go` — the fold, per-partition sets
 - `internal/engine/v1/digest_property_test.go` — the gate property
+- `internal/fixture/` — rule fixtures, run through v1
+- `internal/explain/` — the explain walker and its v1 equivalence test
 - `internal/engine/v2/` — compile, gate, prefilter, and the equivalence tests

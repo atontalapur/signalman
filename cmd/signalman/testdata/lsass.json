@@ -1,0 +1,7 @@
+{
+  "channel": "Microsoft-Windows-Sysmon/Operational",
+  "event_id": 1,
+  "Image": "C:\\Windows\\System32\\rundll32.exe",
+  "CommandLine": "rundll32.exe comsvcs.dll, MiniDump 624 C:\\t.dmp full",
+  "ParentImage": "C:\\Windows\\explorer.exe"
+}

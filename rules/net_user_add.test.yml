@@ -1,0 +1,31 @@
+rule: net_user_add.yml
+cases:
+  - name:   net user add
+    expect: match
+    event:
+      channel:     Security
+      event_id:    4688
+      NewProcessName:    C:\Windows\System32\net.exe
+      CommandLine:       net user backdoor P@ssw0rd! /add
+      ParentProcessName: C:\Windows\System32\cmd.exe
+      SubjectUserName:   alice
+
+  - name:   net1 child of net
+    expect: match
+    event:
+      channel:     Security
+      event_id:    4688
+      NewProcessName:    C:\Windows\System32\net1.exe
+      CommandLine:       C:\Windows\system32\net1 user backdoor P@ssw0rd! /ADD
+      ParentProcessName: C:\Windows\System32\net.exe
+      SubjectUserName:   alice
+
+  - name:   listing users
+    expect: no-match
+    event:
+      channel:     Security
+      event_id:    4688
+      NewProcessName:    C:\Windows\System32\net.exe
+      CommandLine:       net user
+      ParentProcessName: C:\Windows\System32\cmd.exe
+      SubjectUserName:   alice
