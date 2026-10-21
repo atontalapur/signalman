@@ -321,6 +321,44 @@ func TestConfigRejectsZeroSizes(t *testing.T) {
 	}
 }
 
+// DateTime64(3) holds 1900-01-01 to 2299-12-31. A time outside it would be
+// stored as something else or refused, so Decode refuses it with a reason.
+func TestDecodeRejectsTimesOutsideDateTime64(t *testing.T) {
+	ok := []time.Time{
+		time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2299, 12, 31, 23, 59, 59, 999e6, time.UTC),
+	}
+	bad := []time.Time{
+		{},
+		time.Date(1899, 12, 31, 23, 59, 59, 0, time.UTC),
+		time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	for _, field := range []string{"event_time", "ingest_time"} {
+		set := func(a *pipe.Alert, ts time.Time) {
+			if field == "event_time" {
+				a.EventTime = ts
+			} else {
+				a.IngestTime = ts
+			}
+		}
+		for _, ts := range ok {
+			a := genAlert(0, 1, 0)
+			set(&a, ts)
+			if _, err := Decode(alertRecord(t, a)); err != nil {
+				t.Errorf("%s %v rejected: %v", field, ts, err)
+			}
+		}
+		for _, ts := range bad {
+			a := genAlert(0, 1, 0)
+			set(&a, ts)
+			_, err := Decode(alertRecord(t, a))
+			if err == nil || !strings.Contains(err.Error(), field) {
+				t.Errorf("%s %v: got %v, want an error naming %s", field, ts, err, field)
+			}
+		}
+	}
+}
+
 func TestDecodeRoundTripsThePipelineAlert(t *testing.T) {
 	a := genAlert(3, 17, 2)
 	got, err := Decode(alertRecord(t, a))

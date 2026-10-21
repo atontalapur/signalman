@@ -149,11 +149,21 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   ones. The buffer never holds more than `batch-rows + max-poll` rows.
 - **Commit after insert.** Offsets are committed only after the INSERT
   returns. A crash between the two redelivers the batch. A redelivered alert
-  is an exact copy (same partition, seq, rule_id, and event_time, so the
+  is an exact copy (same partition, seq, rule_id, and ingest_time, so the
   same PARTITION BY day), and the ReplacingMergeTree collapses the copies
   when parts merge. Until a merge runs the copies are visible: read with
   `FINAL`, or `OPTIMIZE TABLE alerts FINAL`, to see the collapsed table. A
   failed commit is logged, not retried, as in the pipeline.
+- **Partitioning and TTL on ingest_time.** The spec partitions and expires
+  the table on `event_time`. Here both read `ingest_time` instead, the
+  `events.raw` record timestamp, which a replay reproduces. `event_time`
+  comes from the source: an alert for an event older than 90 days would be
+  TTL-deleted on insert, after its offset was committed, which is loss; and
+  a batch with skewed times could touch more than the 100 partitions one
+  INSERT may. Queries still filter on `event_time`. A record whose
+  `event_time` or `ingest_time` is outside the DateTime64(3) range
+  (1900-01-01 to 2299-12-31) is refused by the sink, since the normalizer
+  has no drop reason for it at this layer.
 - **Outage.** A failed insert is retried with the same rows, backing off
   from 100ms to 5s, and nothing is polled meanwhile. The outage surfaces as
   `signalman_consumer_lag_records{topic="alerts"}` on the sink's `/metrics`

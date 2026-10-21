@@ -39,14 +39,18 @@ func TestReingestCollapsesInClickHouse(t *testing.T) {
 		}
 	}
 
-	// Negative partitions never come from Kafka. Recent event times keep
-	// the rows inside the 90 day TTL.
+	// Negative partitions never come from Kafka. TTL reads ingest_time, so
+	// a recent ingest_time keeps the rows; half the event times are two
+	// years old, which an event_time TTL would delete on the merge below.
 	part := -int32(time.Now().UnixNano()%1_000_000_000) - 1
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	var batch []pipe.Alert
 	for seq := range uint64(50) {
 		a := genAlert(part, seq, int(seq)%len(ruleIDs))
 		a.EventTime, a.IngestTime = now, now.Add(time.Second)
+		if seq%2 == 0 {
+			a.EventTime = now.AddDate(-2, 0, 0)
+		}
 		batch = append(batch, a)
 	}
 

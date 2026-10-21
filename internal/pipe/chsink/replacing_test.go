@@ -34,14 +34,14 @@ func (t *replacingTable) Insert(_ context.Context, rows []pipe.Alert) error {
 }
 
 type sortKey struct {
-	day       string // toYYYYMMDD(event_time)
+	day       string // toYYYYMMDD(ingest_time)
 	partition int32
 	seq       uint64
 	ruleID    string
 }
 
 func keyOf(a pipe.Alert) sortKey {
-	return sortKey{a.EventTime.UTC().Format("20060102"), a.Partition, a.Seq, a.RuleID}
+	return sortKey{a.IngestTime.UTC().Format("20060102"), a.Partition, a.Seq, a.RuleID}
 }
 
 // final returns the merged rows in (day, ORDER BY) order without merging
@@ -178,7 +178,7 @@ func TestReplacingModelCollapsesOnKeyOnly(t *testing.T) {
 	}
 	// The same key on another day sits in another PARTITION BY partition.
 	other := a
-	other.EventTime = a.EventTime.Add(24 * time.Hour)
+	other.IngestTime = a.IngestTime.Add(24 * time.Hour)
 	_ = tbl.Insert(ctx, []pipe.Alert{other})
 	if got := len(tbl.final()); got != 5 {
 		t.Fatalf("%d rows; a different day is a different partition", got)
