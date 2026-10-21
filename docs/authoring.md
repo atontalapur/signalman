@@ -228,8 +228,16 @@ too. Locally `signalman gates` prints the full report to stdout.
 | Latency | p99 is over 50µs |
 | Prefilter | Never. Landing in Always is a warning |
 
-The job fails only on a failed gate. Run the same thing locally before
-pushing:
+The job fails on a failed gate, and on a PR that changes rules together
+with anything the gates are built from or read: `cmd/`, `internal/`,
+`config/taxonomy/`, `go.mod`, `go.sum`, the noise corpus, or the workflow
+itself. The gates run the PR's own code, so such a PR would be judging its
+rules with code it brings; it fails without running them, and the comment
+says so. Put rule changes in their own PR. A PR that edits the workflow
+runs its own copy of it, so that edge is held by CODEOWNERS review, not by
+the check.
+
+Run the same thing locally before pushing:
 
 ```
 signalman gates --set rules rules/my_rule.yml

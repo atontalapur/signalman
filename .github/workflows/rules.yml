@@ -9,6 +9,13 @@
 # a fork gets a read-only token whatever this file asks for, so `comment`
 # is skipped there and the job summary carries the report.
 #
+# The gates build and run the PR's own signalman against the PR's own
+# taxonomy and corpus, so a PR that changes rules and also changes cmd/,
+# internal/, config/taxonomy/, go.mod, go.sum, the noise corpus, or this
+# file would be judged by code it brings. Such a PR fails the job without
+# running the gates; split it. A PR that edits this file runs its own copy
+# of it, so CODEOWNERS review on .github/ is what holds that edge.
+#
 # The noise gate needs a corpus. Set the repository variable
 # SIGNALMAN_NOISE_CORPUS to a directory in the checkout to turn it on;
 # without it the gate reports itself skipped.
@@ -32,8 +39,8 @@ jobs:
     permissions:
       contents: read
     outputs:
-      report: ${{ steps.gates.outputs.report }}
-      code: ${{ steps.gates.outputs.code }}
+      report: ${{ steps.gates.outputs.report || steps.scope.outputs.report }}
+      code: ${{ steps.gates.outputs.code || steps.scope.outputs.code }}
     steps:
       # The pull_request checkout is the merge commit, so HEAD^1 is the base
       # branch tip and the diff is what this PR changes.
@@ -41,17 +48,49 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      # Paths are counted, never printed: a file name is PR input, and
+      # echoing it would let it carry a workflow command or markdown.
+      - name: Refuse a PR that also changes what judges it
+        id: scope
+        env:
+          NOISE_CORPUS: ${{ vars.SIGNALMAN_NOISE_CORPUS }}
+        run: |
+          paths=(cmd/ internal/ config/taxonomy/ go.mod go.sum .github/workflows/rules.yml)
+          if [ -n "$NOISE_CORPUS" ]; then
+            paths+=("$NOISE_CORPUS")
+          fi
+          n=$(( $(git diff --name-only -z HEAD^1 HEAD -- "${paths[@]}" | tr -cd '\0' | wc -c) ))
+          if [ "$n" -eq 0 ]; then
+            echo "mixed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "<!-- signalman-gates -->"
+            echo "## Rule gates"
+            echo
+            echo "Not run. This PR changes rules and also $n file(s) the gates are built from or read:"
+            echo "\`cmd/\`, \`internal/\`, \`config/taxonomy/\`, \`go.mod\`, \`go.sum\`, the noise corpus, or this workflow."
+            echo "The rules would be judged by the PR's own code. Split the rule changes into their own PR."
+          } > "$RUNNER_TEMP/scope.md"
+          cat "$RUNNER_TEMP/scope.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "mixed=true" >> "$GITHUB_OUTPUT"
+          echo "code=1" >> "$GITHUB_OUTPUT"
+          echo "report=$(base64 -w0 < "$RUNNER_TEMP/scope.md")" >> "$GITHUB_OUTPUT"
+      - if: steps.scope.outputs.mixed == 'false'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
       - name: Changed rules
+        if: steps.scope.outputs.mixed == 'false'
         run: git diff --name-only -z --diff-filter=d HEAD^1 HEAD -- rules/ > "$RUNNER_TEMP/changed"
-      - run: go build -o "$RUNNER_TEMP/signalman" ./cmd/signalman
+      - if: steps.scope.outputs.mixed == 'false'
+        run: go build -o "$RUNNER_TEMP/signalman" ./cmd/signalman
       # Exit 1 is a failed gate and still has a report to post. The step
       # records the code and the next step fails the job with it.
       - name: Run gates
         id: gates
+        if: steps.scope.outputs.mixed == 'false'
         env:
           NOISE_CORPUS: ${{ vars.SIGNALMAN_NOISE_CORPUS }}
         run: |
@@ -76,11 +115,11 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "report=$(base64 -w0 < "$RUNNER_TEMP/comment.md")" >> "$GITHUB_OUTPUT"
       - name: Fail on a failed gate
-        if: steps.gates.outputs.code != '0'
+        if: steps.scope.outputs.mixed == 'true' || steps.gates.outputs.code != '0'
         env:
-          CODE: ${{ steps.gates.outputs.code }}
+          CODE: ${{ steps.gates.outputs.code || steps.scope.outputs.code }}
         run: |
-          echo "signalman gates exited $CODE; see the job summary"
+          echo "rule gates failed with code $CODE; see the job summary"
           exit 1
 
   comment:

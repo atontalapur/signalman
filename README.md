@@ -100,8 +100,10 @@ written but has not yet run against a server.
 A pull request that touches `rules/` runs `.github/workflows/rules.yml`:
 `signalman gates` checks each changed rule for parse, fixtures, noise
 budget, latency budget, and prefilter, and the report lands in one PR
-comment and the job summary. Only a failed gate fails the job; a rule the
-v2 prefilter cannot key on (the `Always` set) is a warning. The noise gate
+comment and the job summary. A failed gate fails the job; a rule the
+v2 prefilter cannot key on (the `Always` set) is a warning. A PR that also
+changes `cmd/`, `internal/`, the taxonomy, or the corpus fails without
+running the gates, since the gates would run its own code. The noise gate
 runs when the repository variable `SIGNALMAN_NOISE_CORPUS` names a corpus
 and is skipped otherwise. `docs/authoring.md` covers the supported Sigma
 subset, rejection codes, fixtures, explain, budgets, and the gates.
