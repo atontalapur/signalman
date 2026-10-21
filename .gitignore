@@ -9,3 +9,10 @@ dist/
 
 # differential fuzzer per-worker counters
 .fuzzstats/
+
+# binaries from `go build ./cmd/<name>` at the repo root
+/corpusaccept
+/differ
+/signalman
+/signalman-sink
+/signalmand
