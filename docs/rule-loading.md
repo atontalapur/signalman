@@ -99,13 +99,25 @@ and dedupes on the absolute path, so one file named both relative and
 absolute loads once instead of reporting a false `duplicate-id`. The hash
 covers:
 
-- each rule's id, and
-- `ast.Canonical` of its bound tree, and
+- each rule's id,
+- `ast.Canonical` of its logsource test (the taxonomy entry's match
+  criteria it bound to),
+- `ast.Canonical` of its bound, renamed condition tree, and
 - the taxonomy version.
 
-`Canonical` rather than `String`: every string is written quoted, so a
-detection value containing a separator cannot collide with the structure
-around it and produce the same hash as a different rule set.
+These are the two trees an engine evaluates, so hashing them covers
+everything that decides a verdict, including anything the loader folds into
+them later, without listing rule fields by hand. A predicate is written as
+its renamed field, its `Key` (the modifier chain and the typed values
+`match.Build` was given), and its description. Without the logsource test
+and the renamed field, one rule with and without `service: security`
+hashed the same and gave different verdicts.
+
+`Canonical` rather than `String`: every string is written quoted and every
+form parenthesized, so a detection value containing a separator cannot
+collide with the structure around it and produce the same hash as a
+different rule set. The description alone is not enough, since it does not
+quote the values it lists.
 
 Sorting by id before hashing is what makes the version independent of
 filesystem order. Hashing the taxonomy version in is what makes a taxonomy

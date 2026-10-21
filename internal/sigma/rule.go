@@ -378,7 +378,7 @@ func renameNode(n ast.Node, mapping map[string]string, seen map[string]bool) ast
 			seen[field] = true
 		}
 		return &ast.Pred{
-			Field: field, Desc: n.Desc, M: n.M,
+			Field: field, Desc: n.Desc, Key: n.Key, M: n.M,
 			Mods: n.Mods, Vals: n.Vals, Keyword: n.Keyword,
 		}
 	}
