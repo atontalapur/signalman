@@ -86,6 +86,11 @@ that, inside the output limit. A verdict record grows with the rule count
 (about 60 bytes a rule), so a rule set of more than roughly 16,000 rules
 stops the pipeline with an error naming the rule set.
 
+Topics that already exist keep their configuration: neither the compose
+setup nor `-create-topics` alters them. On a Redpanda volume created before
+this limit, set it by hand with
+`rpk topic alter-config <topic> --set max.message.bytes=1048576`.
+
 ## Delivery: at-least-once
 
 A batch is one poll. The sink waits for every item in the batch, writes all of
