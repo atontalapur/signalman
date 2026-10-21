@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -210,14 +211,26 @@ func (p *Pipeline) Run(ctx context.Context) error {
 // checkTopics refuses a topic layout the sink cannot write to. Verdicts are
 // pinned to the event's partition, so a verdict topic with fewer partitions
 // than events.raw fails every produce for the partitions it lacks, forever.
-// The other outputs are keyed and need only exist.
+// That holds for the shadow's verdict topic too when there is a shadow at
+// startup; one added later by a reload that lacks partitions stops the
+// pipeline on its first produce instead. The other outputs are keyed and
+// need only exist.
 func (p *Pipeline) checkTopics(ctx context.Context) error {
 	raw, err := p.b.EndOffsets(ctx, TopicEventsRaw)
 	if err != nil {
 		return fmt.Errorf("topic check: %w", err)
 	}
-	vt := VerdictTopic(p.slot.load().eng)
-	for _, t := range []string{TopicEventsNorm, vt, TopicAlerts, TopicDrops} {
+	a := p.slot.load()
+	pinned := map[string]bool{VerdictTopic(a.eng): true}
+	if a.shadow != nil {
+		pinned[VerdictTopic(a.shadow)] = true
+	}
+	topics := []string{TopicEventsNorm, TopicAlerts, TopicDrops}
+	for t := range pinned {
+		topics = append(topics, t)
+	}
+	slices.Sort(topics)
+	for _, t := range topics {
 		parts, err := p.b.EndOffsets(ctx, t)
 		if err != nil {
 			return fmt.Errorf("topic check: output topic %s: %w", t, err)
@@ -225,9 +238,9 @@ func (p *Pipeline) checkTopics(ctx context.Context) error {
 		if len(parts) == 0 {
 			return fmt.Errorf("topic check: output topic %s does not exist", t)
 		}
-		if t == vt && len(parts) < len(raw) {
+		if pinned[t] && len(parts) < len(raw) {
 			return fmt.Errorf("topic check: %s has %d partitions and %s has %d; verdicts are pinned to the event's partition, so it needs at least as many",
-				vt, len(parts), TopicEventsRaw, len(raw))
+				t, len(parts), TopicEventsRaw, len(raw))
 		}
 	}
 	return nil

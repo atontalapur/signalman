@@ -115,8 +115,10 @@ large, unknown topic or partition, a pinned partition the topic lacks, an
 authorization failure). Retrying those cannot succeed and would hold every
 partition behind the batch, so the pipeline stops with the batch
 uncommitted and an error naming its offsets. At startup it also refuses a
-missing output topic, or a `verdicts.v1` with fewer partitions than
-`events.raw`, since verdicts are pinned to the event's partition. A failed commit is logged and not retried: the next batch's commit
+missing output topic, or a `verdicts.v1` (and, with `-shadow`, a
+`verdicts.v2`) with fewer partitions than `events.raw`, since verdicts are
+pinned to the event's partition. The output size limit covers the
+`verdicts.v2` record the same way. A failed commit is logged and not retried: the next batch's commit
 supersedes it, and the worst case is redelivery.
 
 A batch still in flight when a rebalance takes its partition away does not
