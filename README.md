@@ -127,10 +127,14 @@ exported with its type and labels, and a test holds the registered set to
 the table. `signalman_event_staleness_seconds` (now minus the newest event
 time) is separate from consumer lag. A canary generator in `signalmand`
 writes a synthetic event to every `events.raw` partition every 30 seconds;
-`rules/signalman_canary.yml` turns it into an alert, which resets
-`signalman_canary_age_seconds`. `deploy/prometheus/` has the scrape config
-and the alert rules: `SignalmanCanaryStalled` and `SignalmanCanaryAbsent`
-page, `SignalmanRuleWentSilent` files a ticket. `deploy/grafana/` has the
+`rules/signalman_canary.yml` turns it into an alert. Two ages track it:
+`signalman_canary_age_seconds` in signalmand resets when the alert is
+durable on the `alerts` topic, and `signalman_sink_canary_age_seconds` in
+signalman-sink resets when it is stored in ClickHouse, so a dead sink or
+ClickHouse pages too and the pair says which half failed.
+`deploy/prometheus/` scrapes both binaries and has the alert rules:
+`SignalmanCanaryStalled`, `SignalmanCanaryAbsent`, and their `SignalmanSink`
+counterparts page, `SignalmanRuleWentSilent` files a ticket. `deploy/grafana/` has the
 dashboard. In-process tests kill the consumer under a fake clock and show
 the page fires within two minutes, and show a taxonomy field rename
 silencing exactly the rules that read the field. The gate is not passed:
@@ -254,9 +258,10 @@ that needs them.
 - Run the alert sink alongside it: `go run ./cmd/signalman-sink`. It
   reads `alerts` as group `signalman-sink`, inserts into ClickHouse
   (`-clickhouse` DSN, defaulting to the compose stack), and serves
-  `/metrics` on `:9465`. The table is created when the ClickHouse volume is
+  `/metrics` on `:9465`, which Prometheus scrapes. The table is created when the ClickHouse volume is
   first initialized; after changing the DDL, `docker compose down -v`.
-  It needs the `alerts.dead` topic, which compose creates. Reset the
+  It needs the `alerts.dead` and `events.raw` topics, which compose
+  creates; it reads the `events.raw` partitions for its canary age. Reset the
   Redpanda and ClickHouse volumes together: `seq` restarts with a new
   `events.raw` and would collide with stored alerts.
 - `make check-alerts` validates the Prometheus config and alert rules and runs

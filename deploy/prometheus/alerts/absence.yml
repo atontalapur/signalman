@@ -1,5 +1,6 @@
-# Alerting on absence (spec phase 06). The canary pages; the silence
-# detector files a ticket. Keep the paging tier this small.
+# Alerting on absence (spec phase 06). The canary pages, read twice: at
+# signalmand (alerts topic) and at signalman-sink (ClickHouse table). The
+# silence detector files a ticket. Keep the paging tier this small.
 groups:
   - name: signalman-absence
     rules:
@@ -44,6 +45,36 @@ groups:
           summary: "signalmand exports no canary age: the daemon is down or the canary is off"
           runbook: "Pipeline is not producing detections, or nothing is checking.
             Check that signalmand is running and that -canary-interval is not 0."
+
+      # The same canary read at the end of the path. signalmand's age above
+      # resets when the canary alert is durable on the alerts topic, so it
+      # cannot see signalman-sink or ClickHouse. This one resets when
+      # signalman-sink has stored the alert in the table, which is where the
+      # spec says the canary lands. Same threshold and for: the sink adds
+      # its flush interval (1s) to the path, well inside the 20s headroom.
+      # When only this one fires, the pipeline is fine and alert storage is
+      # not; when both fire, start with the pipeline.
+      - alert: SignalmanSinkCanaryStalled
+        expr: signalman_sink_canary_age_seconds > 50
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "No canary alert from partition {{ $labels.partition }} stored in ClickHouse for 2m"
+          runbook: "Alerts are not reaching the alerts table. If SignalmanCanaryStalled
+            is quiet the pipeline is fine: check signalman-sink's log, its
+            consumer lag on alerts, signalman_sink_dead_letters_total, and
+            ClickHouse. Alerts wait in the alerts topic until the sink stores them."
+
+      - alert: SignalmanSinkCanaryAbsent
+        expr: absent(signalman_sink_canary_age_seconds)
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "signalman-sink exports no canary age: the sink is down"
+          runbook: "Alerts are not reaching the alerts table, or nothing is checking.
+            Check that signalman-sink is running and that Prometheus scrapes it on :9465."
 
       # As in the spec. A ticket, not a page: legitimately quiet rules are
       # common, and a paging tier that cries wolf gets muted along with the

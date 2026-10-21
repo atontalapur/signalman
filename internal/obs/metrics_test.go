@@ -62,6 +62,11 @@ var extras = map[string]specMetric{
 	// How many canary records the generator wrote, so a stalled canary can
 	// be told apart from a generator that stopped (Plan E, S-51).
 	"signalman_canary_injected_total": {typ: "counter", labels: []string{"partition"}},
+	// The canary age as signalman-sink sees it: reset when a canary alert
+	// is stored in ClickHouse, so a dead sink or a down ClickHouse pages
+	// (Plan E, S-51). The spec's canary age is the same reading taken at
+	// the sink; signalman_canary_age_seconds stays as the pipeline's half.
+	"signalman_sink_canary_age_seconds": {typ: "gauge", labels: []string{"partition"}},
 	// Alerts records signalman-sink wrote to alerts.dead because the table
 	// cannot hold them (Plan D); any increase is an alert stored nowhere
 	// queryable.
@@ -83,6 +88,7 @@ func touch(m *Metrics) {
 	m.ConsumerLag.WithLabelValues("events.raw", "0").Set(1)
 	m.Staleness.Advance(0, time.Unix(0, 0))
 	m.CanaryAge.Start(0)
+	m.SinkCanaryAge.Start(0)
 	m.CanaryInjected.WithLabelValues("0").Inc()
 	m.RuleSetVersion.WithLabelValues("rs", "tx").Set(1)
 	m.AuditViolations.WithLabelValues("0").Inc()

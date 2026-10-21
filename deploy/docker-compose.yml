@@ -6,7 +6,8 @@
 # Redpanda is reachable from the host at localhost:19092, ClickHouse at
 # localhost:8123 (HTTP) and localhost:9000 (native), Prometheus at
 # localhost:9090, Grafana at localhost:3000. Prometheus scrapes signalmand
-# on the host at :9464. Images are pinned; bump them deliberately.
+# on the host at :9464 and signalman-sink at :9465. Images are pinned; bump
+# them deliberately.
 name: signalman
 
 services:
@@ -86,7 +87,8 @@ services:
       timeout: 5s
       retries: 30
 
-  # Scrapes signalmand on the host and evaluates deploy/prometheus/alerts.
+  # Scrapes signalmand and signalman-sink on the host and evaluates
+  # deploy/prometheus/alerts.
   prometheus:
     image: prom/prometheus:v3.5.0
     command:

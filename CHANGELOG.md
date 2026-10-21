@@ -41,6 +41,13 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   the wall clock caught up with it. Staleness now advances to the earlier
   of the event time and now.
 - The promtool alert tests never ran in CI.
+- The canary never reached ClickHouse: its age reset once the alert was on
+  the alerts topic, so a dead signalman-sink or ClickHouse never paged, and
+  Prometheus did not scrape signalman-sink at all. signalman-sink now
+  exports `signalman_sink_canary_age_seconds`, reset after the insert
+  holding a partition's canary alert succeeds, paged on by
+  `SignalmanSinkCanaryStalled` and `SignalmanSinkCanaryAbsent`, and
+  Prometheus scrapes it on `:9465`. signalman-sink now needs `events.raw`.
 
 ## [0.13.1] - 2026-10-21
 

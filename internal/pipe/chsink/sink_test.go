@@ -49,7 +49,7 @@ func (c *countingConsumer) Poll(ctx context.Context) (broker.Fetch, error) {
 }
 
 func newBroker(maxPoll int) *counting {
-	return &counting{Broker: broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3, pipe.TopicAlertsDead: 2}, broker.WithMaxPoll(maxPoll))}
+	return &counting{Broker: broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3, pipe.TopicAlertsDead: 2, pipe.TopicEventsRaw: 4}, broker.WithMaxPoll(maxPoll))}
 }
 
 // readTopic returns every record in topic.
@@ -480,6 +480,22 @@ func TestSinkRefusesToStartWithoutTheDeadLetterTopic(t *testing.T) {
 	}
 }
 
+// The canary age is tracked per events.raw partition, so the sink needs to
+// list them; without the topic it refuses to start rather than export no
+// age, which only absent() would catch.
+func TestSinkRefusesToStartWithoutEventsRaw(t *testing.T) {
+	b := broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3, pipe.TopicAlertsDead: 2})
+	s, err := New(testConfig(), b, &replacingTable{}, obs.New(prometheus.NewRegistry()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.Run(ctx); err == nil || !strings.Contains(err.Error(), pipe.TopicEventsRaw) {
+		t.Fatalf("Run returned %v; want an error naming %s", err, pipe.TopicEventsRaw)
+	}
+}
+
 // A dead-letter record fits the topic's size limit even when the original
 // was at the limit: the value is cut and the cut is recorded.
 func TestDeadLetterRecordFitsTheLimit(t *testing.T) {
@@ -555,5 +571,80 @@ func TestDecodeRoundTripsThePipelineAlert(t *testing.T) {
 	}
 	if keyOf(got) != keyOf(a) || got.Raw != a.Raw || got.Fields["Image"] != a.Fields["Image"] || !got.EventTime.Equal(a.EventTime) {
 		t.Fatalf("decoded %+v from %+v", got, a)
+	}
+}
+
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func sinkCanaryAges(t *testing.T, m *obs.Metrics) map[int32]float64 {
+	t.Helper()
+	out := map[int32]float64{}
+	for p := range int32(4) {
+		a, ok := m.SinkCanaryAge.Age(p)
+		if !ok {
+			t.Fatalf("events.raw partition %d has no sink canary age", p)
+		}
+		out[p] = a.Seconds()
+	}
+	return out
+}
+
+// The end-to-end canary: the sink's age for a partition resets only once a
+// canary alert from it is stored in the table. Every events.raw partition
+// is tracked from startup, so one whose canary never lands climbs. A failed
+// insert and other rules' alerts reset nothing.
+func TestSinkResetsCanaryAgeOnlyAfterTheCanaryAlertIsStored(t *testing.T) {
+	b := newBroker(500)
+	canary := genAlert(1, 7, 0)
+	canary.RuleID, canary.RuleTitle, canary.Severity = pipe.CanaryRuleID, "signalman canary", "informational"
+	other := genAlert(2, 8, 1)
+	if err := b.Produce(context.Background(), []broker.Record{alertRecord(t, canary), alertRecord(t, other)}); err != nil {
+		t.Fatal(err)
+	}
+	clk := &fakeClock{t: time.Unix(1790000000, 0)}
+	m := obs.NewWithClock(prometheus.NewRegistry(), clk.Now)
+	ch := &flaky{tbl: &replacingTable{}, down: true}
+	s, err := New(testConfig(), b, ch, m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, s)
+	defer func() { _ = stop() }()
+
+	waitFor(t, "failed insert attempts", func() bool { return ch.attemptCount() >= 5 })
+	clk.Add(40 * time.Second)
+	for p, a := range sinkCanaryAges(t, m) {
+		if a != 40 {
+			t.Fatalf("partition %d sink canary age %vs while ClickHouse is down, want 40", p, a)
+		}
+	}
+
+	ch.setDown(false)
+	waitFor(t, "the batch committed", func() bool { return committedAll(t, b) })
+	clk.Add(10 * time.Second)
+	want := map[int32]float64{0: 50, 1: 10, 2: 50, 3: 50}
+	for p, a := range sinkCanaryAges(t, m) {
+		if a != want[p] {
+			t.Fatalf("partition %d sink canary age %vs after the insert, want %v", p, a, want[p])
+		}
+	}
+	// signalmand owns signalman_canary_age_seconds; the sink never sets it.
+	if _, ok := m.CanaryAge.Age(1); ok {
+		t.Fatal("the sink set signalmand's canary age")
 	}
 }

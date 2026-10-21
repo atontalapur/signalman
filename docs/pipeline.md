@@ -287,11 +287,12 @@ the registered set, types, or labels differ from it.
 | `signalman_stage_queue_depth` | gauge | stage (normalize, match, sink, batches) | sampled every second |
 | `signalman_consumer_lag_records` | gauge | topic, partition | log end offset minus committed offset |
 | `signalman_event_staleness_seconds` | gauge | partition | now minus the newest durable event time, at scrape |
-| `signalman_canary_age_seconds` | gauge | partition | seconds since the last canary alert was durable, at scrape |
+| `signalman_canary_age_seconds` | gauge | partition | signalmand: seconds since the last canary alert was durable on `alerts`, at scrape |
 | `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | counter | partition | the audit; not in the spec table |
 | `signalman_canary_injected_total` | counter | partition | the canary generator, per record written; not in the spec table |
 | `signalman_event_time_future_total` | counter | partition | sink, per durable event whose event time is ahead of the clock; not in the spec table |
+| `signalman_sink_canary_age_seconds` | gauge | partition | signalman-sink: seconds since the last canary alert was stored in ClickHouse, at scrape; not in the spec table |
 | `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
 
 `signalman_rule_eval_seconds` is sampled: on events whose Seq is a multiple
@@ -320,10 +321,26 @@ every `-canary-interval` (default 30s; 0 turns it off), pinned to the
 partition, keyed `signalman-canary`, source `sysmon`. The event matches one
 rule, `rules/signalman_canary.yml`, and nothing else in `rules/`. The rule
 loads and is evaluated like any other, so the canary takes the same path as
-a real detection: normalize, the engine slot, the sink. When a batch holding
-a canary alert is durable, the sink resets that partition's
-`signalman_canary_age_seconds`. When no alert arrives, the gauge climbs,
-because it is computed at scrape time from the last reset.
+a real detection: normalize, the engine slot, the sink, signalman-sink,
+ClickHouse. Two gauges read it, one at each end of the alert path, and
+both climb when no alert arrives, because they are computed at scrape time
+from the last reset:
+
+- `signalman_canary_age_seconds`, in signalmand, resets when a batch
+  holding the partition's canary alert is durable on the `alerts` topic.
+  It covers ingest through the alerts produce.
+- `signalman_sink_canary_age_seconds`, in signalman-sink, resets when the
+  insert holding the partition's canary alert has returned, so the alert
+  is in the table. It covers the whole path, including signalman-sink and
+  ClickHouse, which is where the spec says the canary lands. signalman-sink
+  tracks every `events.raw` partition from startup (it refuses to start
+  without the topic), so one whose canary never lands climbs; partitions
+  added later are tracked after a restart.
+
+The spec has one canary age, read at the sink. signalmand's half stays
+because it localizes the fault: only the sink age climbing means detection
+works and alert storage does not; both climbing means start with the
+pipeline.
 
 The generator starts a partition's age the first time it injects there, so
 a consumer that never comes up pages too. signalmand refuses to start, or
@@ -336,13 +353,18 @@ verdicts stay a pure function of the event and the rule set. The generator
 only produces; it buffers nothing, and a failed injection is logged and
 left for the next tick.
 
-`deploy/prometheus/alerts/absence.yml` pages on two conditions.
+`deploy/prometheus/alerts/absence.yml` pages on four conditions.
 `SignalmanCanaryStalled` fires when a partition's age is over 50s for 30s.
 The spec writes it as `> 120` for `2m`, which pages three to four and a
 half minutes after a consumer dies and misses the two-minute target; the
 file has the budget (50s + one scrape + one evaluation + 30s = 110s worst
 case). `SignalmanCanaryAbsent` covers the case the age cannot: when
 signalmand itself is gone, the gauge goes with it.
+`SignalmanSinkCanaryStalled` and `SignalmanSinkCanaryAbsent` are the same
+two rules on `signalman_sink_canary_age_seconds`, with the same threshold
+and `for` (a test holds them equal); the sink adds its 1s flush interval to
+the path. Prometheus scrapes signalmand on `:9464` and signalman-sink on
+`:9465`; a test fails if either is missing from `prometheus.yml`.
 `TestCanaryStallPagesWithinTwoMinutes` runs the pipeline and the generator
 on the in-memory broker with a fake clock, kills the consumer, and evaluates
 the rule as written in the file against the gauge every scrape interval.

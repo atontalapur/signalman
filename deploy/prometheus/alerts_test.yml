@@ -87,3 +87,61 @@ tests:
       - eval_time: 1m45s
         alertname: SignalmanCanaryStalled
         exp_alerts: []
+
+  # ClickHouse goes down at 2m. signalmand keeps producing canary alerts to
+  # the alerts topic, so its age stays healthy and SignalmanCanaryStalled
+  # stays quiet; the sink stores nothing, so its age climbs from the kill
+  # and SignalmanSinkCanaryStalled pages at 3m30s, as in the pipeline case.
+  - interval: 15s
+    input_series:
+      - series: 'signalman_canary_age_seconds{partition="0"}'
+        values: '0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15 0 15'
+      - series: 'signalman_sink_canary_age_seconds{partition="0"}'
+        values: '0 15 0 15 0 15 0 15 0 15+15x17'
+    alert_rule_test:
+      - eval_time: 3m15s
+        alertname: SignalmanSinkCanaryStalled
+        exp_alerts: []
+      - eval_time: 3m30s
+        alertname: SignalmanSinkCanaryStalled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              partition: "0"
+            exp_annotations:
+              summary: "No canary alert from partition 0 stored in ClickHouse for 2m"
+              runbook: "Alerts are not reaching the alerts table. If SignalmanCanaryStalled is quiet the pipeline is fine: check signalman-sink's log, its consumer lag on alerts, signalman_sink_dead_letters_total, and ClickHouse. Alerts wait in the alerts topic until the sink stores them."
+      - eval_time: 3m30s
+        alertname: SignalmanCanaryStalled
+        exp_alerts: []
+      - eval_time: 3m30s
+        alertname: SignalmanSinkCanaryAbsent
+        exp_alerts: []
+
+  # signalman-sink crashes after the 1m scrape. Its gauge goes stale, which
+  # the age rule cannot see; signalmand's canary is untouched. Absent from
+  # 1m15s, paging 30s later.
+  - interval: 15s
+    input_series:
+      - series: 'signalman_canary_age_seconds{partition="0"}'
+        values: '0 15 0 15 0 15 0 15 0'
+      - series: 'signalman_sink_canary_age_seconds{partition="0"}'
+        values: '0 15 0 15 0 stale'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: SignalmanSinkCanaryAbsent
+        exp_alerts: []
+      - eval_time: 1m45s
+        alertname: SignalmanSinkCanaryAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "signalman-sink exports no canary age: the sink is down"
+              runbook: "Alerts are not reaching the alerts table, or nothing is checking. Check that signalman-sink is running and that Prometheus scrapes it on :9465."
+      - eval_time: 1m45s
+        alertname: SignalmanCanaryAbsent
+        exp_alerts: []
+      - eval_time: 1m45s
+        alertname: SignalmanSinkCanaryStalled
+        exp_alerts: []

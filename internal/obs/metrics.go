@@ -40,9 +40,16 @@ type Metrics struct {
 	// the metrics clock. Staleness advances to now for them, not to their
 	// time. Not in the spec's table. Labels: partition.
 	EventTimeFuture *prometheus.CounterVec
-	// CanaryAge is the time since the last canary alert reached the sink
-	// on each partition. Labels: partition.
+	// CanaryAge is the time since the last canary alert on each
+	// events.raw partition was durable on the alerts topic. signalmand
+	// sets it; it covers ingest through the alerts produce. Labels:
+	// partition.
 	CanaryAge *AgeGauge
+	// SinkCanaryAge is the time since signalman-sink last stored a canary
+	// alert from each events.raw partition in the ClickHouse table, so it
+	// covers the whole path through the sink. signalman-sink sets it. Not
+	// in the spec's table. Labels: partition.
+	SinkCanaryAge *AgeGauge
 	// CanaryInjected counts canary records the generator wrote, so a
 	// stalled canary can be told apart from a generator that stopped. Not
 	// in the spec's table. Labels: partition.
@@ -109,7 +116,9 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 			Help: "Durable events whose event time was ahead of the clock; staleness used now for them.",
 		}, []string{"partition"}),
 		CanaryAge: newAgeGauge("signalman_canary_age_seconds",
-			"Seconds since the last canary alert on the partition reached the sink.", now),
+			"Seconds since the last canary alert from the partition was durable on the alerts topic.", now),
+		SinkCanaryAge: newAgeGauge("signalman_sink_canary_age_seconds",
+			"Seconds since signalman-sink last stored a canary alert from the partition in ClickHouse.", now),
 		CanaryInjected: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "signalman_canary_injected_total",
 			Help: "Canary records written to events.raw, per partition.",
@@ -134,5 +143,5 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 // Collectors is every collector New registers.
 func (m *Metrics) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
-		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.EventTimeFuture, m.CanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations, m.SinkDeadLetters}
+		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.EventTimeFuture, m.CanaryAge, m.SinkCanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations, m.SinkDeadLetters}
 }
