@@ -7,8 +7,9 @@ import (
 	"github.com/atontalapur/signalman/internal/sigma"
 )
 
-// Engine is the evaluation slot. v1 fills it today; v2 drops in by
-// implementing the same three methods.
+// Engine is the evaluation slot. v1 serves from it by default; v2 sits
+// beside it as the shadow during the rollout and serves from it with
+// signalmand -serve v2 after the cutover.
 //
 // The contract is the data contract: EvaluateInto appends exactly one
 // verdict per rule in RuleSet() to dst, stamped with the event's Seq and

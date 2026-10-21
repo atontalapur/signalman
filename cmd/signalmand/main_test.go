@@ -103,14 +103,55 @@ func TestShadowFlagInstallsV2BesideV1(t *testing.T) {
 		t.Fatalf("-shadow: %+v %v", f, err)
 	}
 	slot := pipe.NewSlot(pipe.V1(rs), obs.New(prometheus.NewRegistry()))
-	if err := install(slot, rs, true); err != nil {
+	if err := install(slot, rs, "v1", true); err != nil {
 		t.Fatal(err)
 	}
 	if slot.Load().Name() != "v1" || slot.Shadow() == nil || slot.Shadow().Name() != "v2" {
 		t.Fatal("shadow mode serves from v1 with v2 beside it")
 	}
-	if err := install(slot, rs, false); err != nil || slot.Shadow() != nil {
+	if err := install(slot, rs, "v1", false); err != nil || slot.Shadow() != nil {
 		t.Fatal("without -shadow there is no shadow engine")
+	}
+}
+
+func TestServeV2TakesV1OutOfTheServingPath(t *testing.T) {
+	f, err := parseFlags([]string{"-rules", "r"})
+	if err != nil || f.serve != "v1" {
+		t.Fatalf("default -serve %q, %v; nothing flips by default", f.serve, err)
+	}
+	f, err = parseFlags([]string{"-rules", "r", "-serve", "v2", "-shadow"})
+	if err != nil || f.serve != "v2" || !f.shadow {
+		t.Fatalf("-serve v2 -shadow: %+v %v", f, err)
+	}
+	for _, bad := range [][]string{
+		{"-rules", "r", "-serve", "v3"},
+		{"-rules", "r", "-serve", "v2", "-rollout", "rollout.txt"},
+	} {
+		if _, err := parseFlags(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+
+	rs := fixtureRules(t)
+	m := obs.New(prometheus.NewRegistry())
+	slot := pipe.NewSlot(primaryEngine("v2", rs), m)
+	if err := install(slot, rs, "v2", true); err != nil {
+		t.Fatal(err)
+	}
+	if slot.Load().Name() != "v2" || slot.Shadow() == nil || slot.Shadow().Name() != "v1" {
+		t.Fatal("-serve v2 -shadow serves from v2 with v1 beside it as the oracle")
+	}
+	if pipe.VerdictTopic(slot.Load()) != servingTopic("v2") || servingTopic("v1") != pipe.TopicVerdictsV1 {
+		t.Fatal("the audit must read the serving engine's verdict topic")
+	}
+	if err := slot.SetRollout(50); err == nil {
+		t.Fatal("a rollout with v2 serving hands rules back to v1")
+	}
+	if got := testutil.ToFloat64(m.RolloutPercent); got != 100 {
+		t.Fatalf("signalman_rollout_percent %v with v2 serving, want 100", got)
+	}
+	if err := install(slot, rs, "v2", false); err != nil || slot.Shadow() != nil || slot.Load().Name() != "v2" {
+		t.Fatal("-serve v2 without -shadow runs v2 alone")
 	}
 }
 
@@ -150,7 +191,7 @@ func TestRolloutFlagImpliesShadow(t *testing.T) {
 func TestBadRolloutFileKeepsTheCurrentRollout(t *testing.T) {
 	rs := fixtureRules(t)
 	slot := pipe.NewSlot(pipe.V1(rs), obs.New(prometheus.NewRegistry()))
-	if err := install(slot, rs, true); err != nil {
+	if err := install(slot, rs, "v1", true); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "rollout")
@@ -214,7 +255,7 @@ func TestRollbackTakesEffectWithin30Seconds(t *testing.T) {
 	mem := broker.NewMemory(topics, broker.WithMaxPoll(20))
 	m := obs.New(prometheus.NewRegistry())
 	slot := pipe.NewSlot(pipe.V1(rs), m)
-	if err := install(slot, rs, true); err != nil {
+	if err := install(slot, rs, "v1", true); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "rollout")

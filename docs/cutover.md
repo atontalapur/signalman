@@ -195,9 +195,40 @@ only when every item holds:
    none is open.
 
 Retirement removes v1 from the serving path and tears down the shadow lane
-and the differ. It does not delete `internal/engine/v1`: v1 stays as the
-test oracle, and the differential, property, and replay tests keep running
-against it.
+and the differ (see "After G6: v2 serves"). It does not delete
+`internal/engine/v1`: v1 stays as the test oracle, and the differential,
+property, and replay tests keep running against it.
+
+## After G6: v2 serves
+
+Switching the serving engine is the last step of the ladder, taken only
+once G6 is recorded below. Until then nothing changes: `-serve` defaults to
+v1.
+
+`signalmand -serve v2` makes v2 the primary engine. Its verdicts go to
+`verdicts.v2`, which the invariant 1 audit then checks, and every alert
+carries `engine: v2`. `signalman_rollout_percent` reads 100. `-rollout` is
+refused, and so is any rollout above zero in the slot, because a rollout
+would hand the rules inside it back to v1. A v2 failure on an event is now
+the primary's failure and stops the process, as a v1 failure did before:
+lag, not a short verdict list.
+
+The shadow lane is torn down by running without `-shadow` and stopping the
+differ. `-serve v2 -shadow` keeps v1 evaluating every event as the oracle
+and writing `verdicts.v1` with no alerts, for `differ -primary v2`, whose
+divergence classes stay relative to v1. A failing v1 costs a v1 record,
+which the differ reports as a missing verdict, and never an alert. Both
+engines still evaluate in the same batch, so this mode runs at v1's speed;
+it is for checking the switch, not for serving full rate.
+
+v1 stays in the repository as the test oracle and is not changed by the
+switch. The fixture runner and `signalman test`, `signalman explain`, the
+pySigma differential fuzzer, the v1 and v2 property tests, the equivalence
+and digest harness, and the G0 corpus replay keep running against it.
+
+Going back to v1 after the switch is a restart with `-serve v1 -rollout`
+and a file holding 100, then lowering the file. That is a restart, not the
+30 s flag; the flag rollback ends at G6 by design.
 
 ## Checking the gates
 

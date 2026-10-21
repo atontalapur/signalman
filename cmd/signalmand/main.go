@@ -16,6 +16,13 @@
 // -rollout-poll and on SIGHUP, and a change applies from the next batch, so
 // a rollback is an edit to one file.
 //
+// With -serve v2, v2 is the serving engine for every rule and v1 leaves the
+// serving path: the configuration after gate G6. v2's verdicts go to
+// verdicts.v2 and its alerts to alerts. With -shadow as well, v1 evaluates
+// every event beside it as the oracle and writes verdicts.v1 for the differ
+// (run with -primary v2), and never serves an alert. -rollout is refused:
+// there is nothing left to roll out. The default is -serve v1.
+//
 // SIGHUP reloads the rule directory. The new rule set applies from the next
 // batch on; a batch in flight finishes under the rules it started with. A
 // taxonomy change needs a restart, because the normalizer is built from it.
@@ -36,6 +43,7 @@ import (
 
 	"github.com/atontalapur/signalman/internal/broker/kafka"
 	"github.com/atontalapur/signalman/internal/differ"
+	"github.com/atontalapur/signalman/internal/engine/v2"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/pipe"
 	"github.com/atontalapur/signalman/internal/sigma"
@@ -66,6 +74,7 @@ type flags struct {
 	partitions       int
 	auditInterval    time.Duration
 	auditWindow      int64
+	serve            string
 	shadow           bool
 	rollout          string
 	rolloutPoll      time.Duration
@@ -98,7 +107,8 @@ func parseFlags(args []string) (flags, error) {
 	fs.IntVar(&f.partitions, "partitions", 8, "partitions per topic for -create-topics")
 	fs.DurationVar(&f.auditInterval, "audit-interval", 10*time.Second, "how often the invariant 1 audit runs; 0 disables it")
 	fs.Int64Var(&f.auditWindow, "audit-window", 10000, "widest seq range the audit checks at once")
-	fs.BoolVar(&f.shadow, "shadow", false, "also evaluate every event with v2 and write verdicts.v2 (no alerts)")
+	fs.StringVar(&f.serve, "serve", "v1", "engine that serves alerts for every rule outside the rollout: v1, or v2 once G6 has passed")
+	fs.BoolVar(&f.shadow, "shadow", false, "also evaluate every event with the other engine and write its verdict topic (no alerts)")
 	fs.StringVar(&f.rollout, "rollout", "", "file holding the percentage of rules v2 serves alerts for; implies -shadow")
 	fs.DurationVar(&f.rolloutPoll, "rollout-poll", defaultRolloutPoll, "how often the -rollout file is reread")
 	fs.IntVar(&f.ruleEvalEvery, "rule-eval-every", 100, "time every rule on events whose seq is a multiple of this, for signalman_rule_eval_seconds; 0 disables")
@@ -111,6 +121,15 @@ func parseFlags(args []string) (flags, error) {
 	}
 	if f.rules == "" {
 		return f, errors.New("-rules is required")
+	}
+	switch f.serve {
+	case "v1":
+	case "v2":
+		if f.rollout != "" {
+			return f, errors.New("-rollout with -serve v2: v2 already serves every rule, and a rollout would hand rules back to v1")
+		}
+	default:
+		return f, fmt.Errorf("-serve %q, want v1 or v2", f.serve)
 	}
 	if f.rollout != "" {
 		f.shadow = true
@@ -211,8 +230,8 @@ func run(f flags, log *slog.Logger) error {
 		}
 	}
 
-	slot := pipe.NewSlot(pipe.V1(rs), m)
-	if err := install(slot, rs, f.shadow); err != nil {
+	slot := pipe.NewSlot(primaryEngine(f.serve, rs), m)
+	if err := install(slot, rs, f.serve, f.shadow); err != nil {
 		return err
 	}
 	if f.rollout != "" {
@@ -226,7 +245,7 @@ func run(f flags, log *slog.Logger) error {
 	// The audit snapshots its starting point before the pipeline produces
 	// anything, so it must be built first.
 	if f.auditInterval > 0 {
-		a, err := pipe.NewAuditor(ctx, b, pipe.AuditConfig{Group: f.group, Window: f.auditWindow}, slot.RuleCount, m, log)
+		a, err := pipe.NewAuditor(ctx, b, pipe.AuditConfig{Group: f.group, VerdictTopic: servingTopic(f.serve), Window: f.auditWindow}, slot.RuleCount, m, log)
 		if err != nil {
 			return err
 		}
@@ -248,7 +267,7 @@ func run(f flags, log *slog.Logger) error {
 	if f.canaryInterval > 0 {
 		go pipe.NewCanary(b, m, time.Now, log).Run(ctx, f.canaryInterval)
 	}
-	log.Info("signalmand started", "version", version, "commit", commit, "brokers", f.brokers, "group", f.group)
+	log.Info("signalmand started", "version", version, "commit", commit, "brokers", f.brokers, "group", f.group, "serve", f.serve, "shadow", f.shadow)
 	return p.Run(ctx)
 }
 
@@ -279,7 +298,7 @@ func reloadOnHUP(ctx context.Context, f flags, tax *sigma.Taxonomy, slot *pipe.S
 				log.Error("reload refused; keeping the active rule set", "err", err)
 				continue
 			}
-			if err := install(slot, rs, f.shadow); err != nil {
+			if err := install(slot, rs, f.serve, f.shadow); err != nil {
 				log.Error("reload refused; keeping the active rule set", "err", err)
 				continue
 			}
@@ -288,15 +307,38 @@ func reloadOnHUP(ctx context.Context, f flags, tax *sigma.Taxonomy, slot *pipe.S
 	}
 }
 
-// install makes rs active from the next batch: v1 alone, or v1 with v2
-// compiled from the same rule set beside it. The pair is stored as one
-// value, so no batch sees v1 and v2 under different RuleSetV.
-func install(slot *pipe.Slot, rs *sigma.RuleSet, shadow bool) error {
+// install makes rs active from the next batch: the serving engine alone, or
+// with the other engine compiled from the same rule set beside it as the
+// shadow. The pair is stored as one value, so no batch sees v1 and v2 under
+// different RuleSetV. With serve v2 the shadow is v1, the oracle, which the
+// slot never lets serve an alert.
+func install(slot *pipe.Slot, rs *sigma.RuleSet, serve string, shadow bool) error {
+	primary := primaryEngine(serve, rs)
 	if !shadow {
-		slot.Store(pipe.V1(rs))
+		slot.Store(primary)
 		return nil
 	}
-	return slot.StoreWithShadow(pipe.V1(rs), pipe.V2(rs))
+	if serve == v2.Name {
+		return slot.StoreWithShadow(primary, pipe.V1(rs))
+	}
+	return slot.StoreWithShadow(primary, pipe.V2(rs))
+}
+
+// primaryEngine is the serving engine for rs.
+func primaryEngine(serve string, rs *sigma.RuleSet) pipe.Engine {
+	if serve == v2.Name {
+		return pipe.V2(rs)
+	}
+	return pipe.V1(rs)
+}
+
+// servingTopic is the serving engine's verdict topic, which the invariant 1
+// audit checks.
+func servingTopic(serve string) string {
+	if serve == v2.Name {
+		return pipe.TopicVerdictsV2
+	}
+	return pipe.TopicVerdictsV1
 }
 
 // parseRollout reads a rollout file; see pipe.ParseRollout.

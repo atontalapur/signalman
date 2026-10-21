@@ -31,6 +31,11 @@ type Config struct {
 	// RetryBackoff is the first wait after a failed produce or poll. Waits
 	// double up to 5s. Default 100ms.
 	RetryBackoff time.Duration
+	// Primary is the serving engine, whose records name the shadow they
+	// were evaluated beside and so drive the join: "v1" (the default) while
+	// v1 serves, "v2" once v2 serves and v1 shadows as the oracle.
+	// Divergence classes stay relative to v1 either way.
+	Primary string
 }
 
 // Metrics is what the differ exports. The cutover gates read Counted:
@@ -88,8 +93,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 // are the whole buffer, so memory is bounded by Queue and the poll size,
 // not by how far one side falls behind.
 //
-// A v1 record names the shadow it was evaluated alongside. A v1 record
-// with no shadow owes no v2 record and is passed over without waiting.
+// A primary record names the shadow it was evaluated alongside. A primary
+// record with no shadow owes no shadow record and is passed over without
+// waiting. The primary is v1 unless Config.Primary says v2.
 //
 // Divergence records are produced before the offsets that cover them are
 // committed, so a restart repeats work rather than skipping it. The
@@ -110,6 +116,13 @@ func New(cfg Config, b broker.Broker, m *Metrics, log *slog.Logger) (*Differ, er
 	}
 	if cfg.Queue < 0 {
 		return nil, fmt.Errorf("differ: queue %d", cfg.Queue)
+	}
+	switch cfg.Primary {
+	case "":
+		cfg.Primary = v1.Name
+	case v1.Name, v2.Name:
+	default:
+		return nil, fmt.Errorf("differ: primary %q, want %s or %s", cfg.Primary, v1.Name, v2.Name)
 	}
 	if cfg.Queue == 0 {
 		cfg.Queue = 256
@@ -161,7 +174,7 @@ func (d *Differ) Run(ctx context.Context) error {
 	for p := range n {
 		a := make(chan record, d.cfg.Queue)
 		b := make(chan record, d.cfg.Queue)
-		j := &joiner{d: d, part: p,
+		j := &joiner{d: d, part: p, primary: primaryIndex(d.cfg.Primary),
 			sides: [2]*sideState{
 				{ch: a, tp: broker.TopicPartition{Topic: pipe.TopicVerdictsV1, Partition: p}, next: start[pipe.TopicVerdictsV1][p]},
 				{ch: b, tp: broker.TopicPartition{Topic: pipe.TopicVerdictsV2, Partition: p}, next: start[pipe.TopicVerdictsV2][p]},
@@ -255,14 +268,32 @@ type sideState struct {
 type joiner struct {
 	d     *Differ
 	part  int32
-	sides [2]*sideState
-	tick  *time.Ticker
+	sides [2]*sideState // v1, v2
+	// primary indexes the side whose records drive the join.
+	primary int
+	tick    *time.Ticker
+}
+
+func primaryIndex(name string) int {
+	if name == v2.Name {
+		return 1
+	}
+	return 0
+}
+
+// compare classifies one event from the primary's and the shadow's record,
+// either of which may be nil, in Compare's v1, v2 order.
+func (j *joiner) compare(p, sh *pipe.EventVerdicts) []Divergence {
+	if j.primary == 1 {
+		return Compare(sh, p)
+	}
+	return Compare(p, sh)
 }
 
 func (j *joiner) run(ctx context.Context) error {
 	j.tick = time.NewTicker(j.d.cfg.CommitInterval)
 	defer j.tick.Stop()
-	a, b := j.sides[0], j.sides[1]
+	a, b := j.sides[j.primary], j.sides[1-j.primary]
 	for {
 		if err := j.pull(ctx, a); err != nil {
 			return err
@@ -277,19 +308,19 @@ func (j *joiner) run(ctx context.Context) error {
 		h1, h2 := &a.head.ev, &b.head.ev
 		switch {
 		case h1.Seq == h2.Seq:
-			err := j.emit(ctx, Compare(h1, h2))
+			err := j.emit(ctx, j.compare(h1, h2))
 			if err != nil {
 				return err
 			}
 			j.consume(a)
 			j.consume(b)
 		case h1.Seq < h2.Seq:
-			if err := j.emit(ctx, Compare(h1, nil)); err != nil {
+			if err := j.emit(ctx, j.compare(h1, nil)); err != nil {
 				return err
 			}
 			j.consume(a)
 		default:
-			if err := j.emit(ctx, Compare(nil, h2)); err != nil {
+			if err := j.emit(ctx, j.compare(nil, h2)); err != nil {
 				return err
 			}
 			j.consume(b)
