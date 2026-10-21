@@ -90,6 +90,10 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   POST failed. The comment copy now drops table rows too, keeping failures
   and warnings first, says how many it left out, and the job summary gets
   the full report it points to.
+- Two rules whose ids differed only in hex case both loaded, matched the
+  same events, and wrote alerts to one `(partition, seq, rule_id)` row, so
+  one alert disappeared on merge. The loader now lowers the id, so the rule
+  set and `gates --set` reject the second as `duplicate-id`.
 
 ## [0.11.0] - 2026-10-21
 
@@ -164,6 +168,16 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 - A batch in flight during a rebalance could commit for a partition this
   member had lost and move the group offset backwards. Those commits are
   dropped.
+- A `source` header that was not valid UTF-8 panicked ingest through its
+  Prometheus label, and redelivery panicked it again. The header was also an
+  unbounded label. Labels now map to `auditd`, `cloudtrail`, `sysmon`,
+  `unknown`, or `other`, and a source outside that set is an
+  `unknown-source` drop.
+- A matched event whose alert record would be over the output limit was
+  dropped as `output-too-large` with its verdicts, so escape-heavy fields
+  could suppress a detection. The alert now leaves `fields` empty and sets
+  the new optional `fields_omitted`; `output-too-large` covers only
+  `events.norm`.
 
 ## [0.9.0] - 2026-10-21
 
@@ -231,6 +245,10 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   silently ignoring the second document's cases.
 - One rule file named both relative and absolute loads once instead of
   reporting a false duplicate id.
+- RuleSetV now covers each rule's logsource test and its renamed fields, and
+  hashes predicate values quoted. A rule with and without
+  `service: security` used to share a RuleSetV while giving different
+  verdicts. Every RuleSetV value changes.
 
 ## [0.7.1] - 2026-10-01
 
