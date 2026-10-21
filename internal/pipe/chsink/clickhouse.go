@@ -3,6 +3,7 @@ package chsink
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -45,6 +46,44 @@ func Decode(r broker.Record) (pipe.Alert, error) {
 	return a, nil
 }
 
+// ErrPermanent is wrapped by an Insert error that will fail again on retry:
+// a row the server refuses by type or value, a missing table or column, a
+// refused login. Retrying it holds every partition behind the batch, so the
+// sink stops instead. The same idea as broker.ErrPermanent on the produce
+// side.
+var ErrPermanent = errors.New("permanent insert error")
+
+// permanentCodes are ClickHouse exception codes an identical insert hits
+// again. Anything else (network, memory, timeouts, too many parts while
+// merges catch up) is treated as an outage and retried.
+var permanentCodes = map[int32]bool{
+	6: true, 7: true, 8: true, 15: true, 16: true, 19: true, 20: true, // parse, column count, missing column
+	25: true, 26: true, 27: true, 36: true, 38: true, 41: true, // parse, bad arguments
+	43: true, 47: true, 53: true, 60: true, 62: true, 69: true, 70: true, 72: true, // types, unknown table, syntax
+	81: true, 115: true, 117: true, 131: true, 164: true, // unknown database or setting, incorrect data, readonly
+	192: true, 193: true, 321: true, 349: true, 376: true, 467: true, // auth, out of range, NULL, UUID, bool
+	497: true, 516: true, 565: true, 691: true, // access denied, auth failed, too many partitions, enum element
+}
+
+// codeTooManyParts covers two cases. "Too many parts" while merges lag is
+// an outage that clears; "too many partitions for single INSERT block" is
+// the batch itself and fails every time, so only that message is permanent.
+const codeTooManyParts = 252
+
+// classify wraps err in ErrPermanent when retrying the same insert cannot
+// succeed.
+func classify(err error) error {
+	var ex *clickhouse.Exception
+	if !errors.As(err, &ex) {
+		return err
+	}
+	if permanentCodes[ex.Code] ||
+		(ex.Code == codeTooManyParts && strings.Contains(strings.ToLower(ex.Message), "partitions for single insert block")) {
+		return fmt.Errorf("%w: %w", ErrPermanent, err)
+	}
+	return err
+}
+
 // ClickHouse inserts into the alerts table over clickhouse-go.
 type ClickHouse struct {
 	conn  driver.Conn
@@ -81,11 +120,12 @@ func insertQuery(table string) string {
 func (c *ClickHouse) Conn() driver.Conn { return c.conn }
 
 // Insert sends rows as one INSERT. ClickHouse writes one block as one part,
-// so the rows of a successful Insert are all stored.
+// so the rows of a successful Insert are all stored. An error that would
+// recur on retry wraps ErrPermanent; a row the client cannot encode is one.
 func (c *ClickHouse) Insert(ctx context.Context, rows []pipe.Alert) error {
 	batch, err := c.conn.PrepareBatch(ctx, c.query)
 	if err != nil {
-		return err
+		return classify(err)
 	}
 	defer func() { _ = batch.Close() }()
 	for _, a := range rows {
@@ -95,10 +135,10 @@ func (c *ClickHouse) Insert(ctx context.Context, rows []pipe.Alert) error {
 		}
 		if err := batch.Append(a.Partition, a.Seq, a.RuleID, a.RuleTitle, a.Severity,
 			a.EventTime, a.IngestTime, a.HostID, a.Source, fields, a.Raw); err != nil {
-			return fmt.Errorf("append partition %d seq %d rule %s: %w", a.Partition, a.Seq, a.RuleID, err)
+			return fmt.Errorf("%w: append partition %d seq %d rule %s: %w", ErrPermanent, a.Partition, a.Seq, a.RuleID, err)
 		}
 	}
-	return batch.Send()
+	return classify(batch.Send())
 }
 
 // Close closes the connection.

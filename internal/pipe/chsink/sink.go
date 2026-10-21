@@ -11,11 +11,15 @@
 package chsink
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/atontalapur/signalman/internal/broker"
@@ -25,7 +29,8 @@ import (
 
 // Inserter writes rows to the alerts table. Insert returns nil only once
 // every row is stored. On error any subset may have been stored, so the
-// caller retries the whole slice, which the table absorbs.
+// caller retries the whole slice, which the table absorbs. An error that
+// wraps ErrPermanent will not succeed on retry, and the caller stops.
 type Inserter interface {
 	Insert(ctx context.Context, rows []pipe.Alert) error
 }
@@ -109,15 +114,20 @@ func (s *Sink) Run(ctx context.Context) error {
 
 	var (
 		buf      []pipe.Alert
+		first    = map[broker.TopicPartition]int64{}
 		next     = map[broker.TopicPartition]int64{}
 		deadline time.Time
 	)
 	flush := func() error {
 		if err := s.insert(ctx, buf); err != nil {
+			if errors.Is(err, ErrPermanent) {
+				return fmt.Errorf("insert of %d rows (%s) cannot succeed; nothing from this batch was committed: %w",
+					len(buf), span(first, next), err)
+			}
 			return err
 		}
 		s.commit(ctx, cons, next)
-		buf, next = nil, map[broker.TopicPartition]int64{}
+		buf, first, next = nil, map[broker.TopicPartition]int64{}, map[broker.TopicPartition]int64{}
 		return nil
 	}
 	for {
@@ -156,6 +166,9 @@ func (s *Sink) Run(ctx context.Context) error {
 			}
 			buf = append(buf, a)
 			tp := broker.TopicPartition{Topic: r.Topic, Partition: r.Partition}
+			if _, ok := first[tp]; !ok {
+				first[tp] = r.Offset
+			}
 			next[tp] = max(next[tp], r.Offset+1)
 		}
 		if len(buf) >= s.cfg.BatchRows || (len(buf) > 0 && !time.Now().Before(deadline)) {
@@ -167,7 +180,8 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 // insert retries until the rows are stored or ctx ends. An unreachable
-// ClickHouse is lag, so this never gives up on its own.
+// ClickHouse is lag, so this never gives up on its own. A permanent error
+// is returned at once: it would fail the same way forever.
 func (s *Sink) insert(ctx context.Context, rows []pipe.Alert) error {
 	wait := s.cfg.RetryBackoff
 	for {
@@ -177,6 +191,9 @@ func (s *Sink) insert(ctx context.Context, rows []pipe.Alert) error {
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(err, ErrPermanent) {
+			return err
 		}
 		s.log.Warn("insert failed, retrying the batch; not polling until it lands", "rows", len(rows), "err", err)
 		if !sleep(ctx, wait) {
@@ -229,6 +246,19 @@ func (s *Sink) setLag(tp broker.TopicPartition) {
 		return
 	}
 	s.m.ConsumerLag.WithLabelValues(tp.Topic, strconv.Itoa(int(tp.Partition))).Set(float64(max(0, hw-s.committed[tp])))
+}
+
+// span names the offsets a batch holds, per partition in order, such as
+// "alerts/0 offsets 4-9, alerts/2 offsets 0-3".
+func span(first, next map[broker.TopicPartition]int64) string {
+	tps := slices.SortedFunc(maps.Keys(first), func(a, b broker.TopicPartition) int {
+		return cmp.Or(cmp.Compare(a.Topic, b.Topic), cmp.Compare(a.Partition, b.Partition))
+	})
+	parts := make([]string, len(tps))
+	for i, tp := range tps {
+		parts[i] = fmt.Sprintf("%s/%d offsets %d-%d", tp.Topic, tp.Partition, first[tp], next[tp]-1)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {
