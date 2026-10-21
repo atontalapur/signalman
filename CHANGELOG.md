@@ -46,6 +46,11 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   `CI=true` without a DSN.
 - The merge property test is named and documented as a check of a model,
   not of ClickHouse.
+- An `event_time` from 2262-04-12 to 2299 passed the range check, was
+  stored as a time in the 1600s or 1700s by the driver's `UnixNano`
+  encoding, and had its offset committed. `event_time` is now bounded at
+  2262-04-11, and `ingest_time` to 1970 through 2105-11-09 so the TTL
+  cannot overflow DateTime. Both are dead-lettered outside that.
 
 ## [0.12.0] - 2026-10-21
 

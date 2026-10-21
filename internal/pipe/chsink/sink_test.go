@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/pipe"
@@ -509,41 +511,111 @@ func TestConfigRejectsZeroSizes(t *testing.T) {
 	}
 }
 
-// DateTime64(3) holds 1900-01-01 to 2299-12-31. A time outside it would be
-// stored as something else or refused, so Decode refuses it with a reason.
+// Decode refuses a time the insert would store as a different time. For
+// event_time that is the DateTime64(3) range cut at 2262-04-11, where the
+// driver's UnixNano encoding overflows. ingest_time also feeds the TTL
+// toDateTime(ingest_time) + INTERVAL 90 DAY, so it must stay in DateTime's
+// 1970 to 2106 range with 90 days to spare.
 func TestDecodeRejectsTimesOutsideDateTime64(t *testing.T) {
-	ok := []time.Time{
-		time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
-		time.Date(2299, 12, 31, 23, 59, 59, 999e6, time.UTC),
+	cases := []struct {
+		field   string
+		ok, bad []time.Time
+	}{
+		{"event_time",
+			[]time.Time{
+				time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Unix(0, math.MaxInt64).UTC(),
+			},
+			[]time.Time{
+				{},
+				time.Date(1899, 12, 31, 23, 59, 59, 0, time.UTC),
+				time.Unix(0, math.MaxInt64).Add(time.Nanosecond),
+				time.Date(2262, 4, 12, 0, 0, 0, 0, time.UTC),
+				time.Date(2290, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Date(2299, 12, 31, 23, 59, 59, 999e6, time.UTC),
+				time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC),
+			}},
+		{"ingest_time",
+			[]time.Time{
+				time.Unix(0, 0).UTC(),
+				time.Date(2105, 11, 9, 6, 28, 15, 999e6, time.UTC),
+			},
+			[]time.Time{
+				{},
+				time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+				time.Unix(0, -1).UTC(),
+				time.Date(2105, 11, 9, 6, 28, 16, 0, time.UTC),
+				time.Date(2106, 2, 7, 6, 28, 15, 0, time.UTC),
+				time.Date(2262, 4, 12, 0, 0, 0, 0, time.UTC),
+				time.Date(2290, 1, 1, 0, 0, 0, 0, time.UTC),
+			}},
 	}
-	bad := []time.Time{
-		{},
-		time.Date(1899, 12, 31, 23, 59, 59, 0, time.UTC),
-		time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
-	for _, field := range []string{"event_time", "ingest_time"} {
+	for _, c := range cases {
 		set := func(a *pipe.Alert, ts time.Time) {
-			if field == "event_time" {
+			if c.field == "event_time" {
 				a.EventTime = ts
 			} else {
 				a.IngestTime = ts
 			}
 		}
-		for _, ts := range ok {
+		for _, ts := range c.ok {
 			a := genAlert(0, 1, 0)
 			set(&a, ts)
 			if _, err := Decode(alertRecord(t, a)); err != nil {
-				t.Errorf("%s %v rejected: %v", field, ts, err)
+				t.Errorf("%s %v rejected: %v", c.field, ts, err)
 			}
 		}
-		for _, ts := range bad {
+		for _, ts := range c.bad {
 			a := genAlert(0, 1, 0)
 			set(&a, ts)
 			_, err := Decode(alertRecord(t, a))
-			if err == nil || !strings.Contains(err.Error(), field) {
-				t.Errorf("%s %v: got %v, want an error naming %s", field, ts, err, field)
+			if err == nil || !strings.Contains(err.Error(), c.field) {
+				t.Errorf("%s %v: got %v, want an error naming %s", c.field, ts, err, c.field)
 			}
 		}
+	}
+}
+
+// The bounds Decode accepts are times the driver encodes exactly. This
+// appends them through clickhouse-go's own DateTime64(3) column, the path
+// Insert takes, and reads them back.
+func TestAcceptedTimeBoundsRoundTripThroughTheDriver(t *testing.T) {
+	col, err := column.Type("DateTime64(3)").Column("event_time", &column.ServerContext{Timezone: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first two bound event_time, the last two ingest_time.
+	want := []time.Time{
+		time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Unix(0, math.MaxInt64).UTC().Truncate(time.Millisecond),
+		time.Unix(0, 0).UTC(),
+		time.Date(2105, 11, 9, 6, 28, 15, 999e6, time.UTC),
+	}
+	for i, ts := range want {
+		a := genAlert(0, 1, 0)
+		if i < 2 {
+			a.EventTime = ts
+		} else {
+			a.IngestTime = ts
+		}
+		if _, err := Decode(alertRecord(t, a)); err != nil {
+			t.Fatalf("%v rejected: %v", ts, err)
+		}
+		if err := col.AppendRow(ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, ts := range want {
+		if got := col.Row(i, false).(time.Time); !got.Equal(ts) {
+			t.Errorf("%v stored as %v", ts, got)
+		}
+	}
+	// The case the old 2299 bound let through: stored as a time in 1705.
+	if err := col.AppendRow(time.Date(2290, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if got := col.Row(len(want), false).(time.Time); got.Year() == 2290 {
+		t.Errorf("2290 encoded as %v; the driver no longer overflows, so the bound can widen", got)
 	}
 }
 

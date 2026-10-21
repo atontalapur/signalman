@@ -168,10 +168,14 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   comes from the source: an alert for an event older than 90 days would be
   TTL-deleted on insert, after its offset was committed, which is loss; and
   a batch with skewed times could touch more than the 100 partitions one
-  INSERT may. Queries still filter on `event_time`. A record whose
-  `event_time` or `ingest_time` is outside the DateTime64(3) range
-  (1900-01-01 to 2299-12-31) is refused by the sink, since the normalizer
-  has no drop reason for it at this layer.
+  INSERT may. Queries still filter on `event_time`. The sink refuses a
+  record whose times it cannot store exactly, since the normalizer has no
+  drop reason for them at this layer. `event_time` must be from 1900-01-01
+  to 2262-04-11T23:47:16.854775807Z: DateTime64(3) goes to 2299, but
+  clickhouse-go encodes through `UnixNano`, which overflows after that and
+  would store 2290 as 1705. `ingest_time` must be from 1970-01-01 to
+  2105-11-09T06:28:15Z, so `toDateTime(ingest_time) + INTERVAL 90 DAY` in
+  the TTL stays inside DateTime's range.
 - **Outage.** A failed insert is retried with the same rows, backing off
   from 100ms to 5s, and nothing is polled meanwhile. The outage surfaces as
   `signalman_consumer_lag_records{topic="alerts"}` on the sink's `/metrics`
