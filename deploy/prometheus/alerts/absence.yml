@@ -1,0 +1,64 @@
+# Alerting on absence (spec phase 06). The canary pages; the silence
+# detector files a ticket. Keep the paging tier this small.
+groups:
+  - name: signalman-absence
+    rules:
+      # The spec writes this as `> 120` with `for: 2m`. That pages three to
+      # four and a half minutes after a consumer dies, which misses the
+      # story's and the Plan E gate's two minutes. The budget, worst case,
+      # from the last canary alert before the kill:
+      #
+      #   threshold                50s  age crosses it
+      #   + scrape interval        15s  Prometheus sees it
+      #   + evaluation interval    15s  the rule goes pending
+      #   + for                    30s  the rule fires
+      #   = 110s
+      #
+      # A healthy partition's age stays under the 30s canary interval plus
+      # the pipeline's own latency, so 50s leaves 20s of headroom. Under
+      # overload the canary is delayed like every other detection, and the
+      # page is correct: detections are late.
+      # internal/pipe TestCanaryStallPagesWithinTwoMinutes reads these
+      # numbers from this file and from prometheus.yml.
+      - alert: SignalmanCanaryStalled
+        expr: signalman_canary_age_seconds > 50
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "No canary alert on partition {{ $labels.partition }} for 2m"
+          runbook: "Pipeline is not producing detections. Check staleness, then
+            the taxonomy version, then broker health. Assume detections
+            are being missed until proven otherwise."
+
+      # The canary gauge lives in signalmand. When the process is gone, so
+      # is the gauge, and the rule above has nothing to compare. A failed
+      # scrape marks the series stale at once, so absent() turns true on
+      # the next evaluation.
+      - alert: SignalmanCanaryAbsent
+        expr: absent(signalman_canary_age_seconds)
+        for: 30s
+        labels:
+          severity: page
+        annotations:
+          summary: "signalmand exports no canary age: the daemon is down or the canary is off"
+          runbook: "Pipeline is not producing detections, or nothing is checking.
+            Check that signalmand is running and that -canary-interval is not 0."
+
+      # As in the spec. A ticket, not a page: legitimately quiet rules are
+      # common, and a paging tier that cries wolf gets muted along with the
+      # canary. It depends on signalmand exporting every loaded rule's
+      # series at zero (internal/pipe Slot.exportRules): after the restart
+      # a taxonomy change needs, a rule that never matches again would
+      # otherwise have no series in the 24h window, and this would compare
+      # nothing.
+      - alert: SignalmanRuleWentSilent
+        expr: |
+          increase(signalman_rule_matches_total[24h]) == 0
+            and
+          increase(signalman_rule_matches_total[30d]) > 0
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Rule {{ $labels.rule_id }} matched in the last 30d but not today"

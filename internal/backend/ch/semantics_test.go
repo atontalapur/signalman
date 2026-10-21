@@ -367,3 +367,26 @@ func FuzzInts(f *testing.F) {
 		}
 	})
 }
+
+// TTL and partitioning read ingest_time, which the pipeline sets. event_time
+// comes from the source: an old or skewed value would be TTL-deleted on
+// arrival, and a batch spread over more than 100 days would be refused.
+func TestCreateTableKeysRetentionOnIngestTime(t *testing.T) {
+	ddl, err := CreateTableSQL(DefaultTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"PARTITION BY toYYYYMMDD(ingest_time)",
+		"TTL toDateTime(ingest_time) + INTERVAL 90 DAY",
+	} {
+		if !strings.Contains(ddl, want) {
+			t.Errorf("DDL lacks %q:\n%s", want, ddl)
+		}
+	}
+	for _, line := range strings.Split(ddl, "\n") {
+		if (strings.HasPrefix(line, "PARTITION BY") || strings.HasPrefix(line, "TTL")) && strings.Contains(line, "event_time") {
+			t.Errorf("retention reads event_time: %s", line)
+		}
+	}
+}

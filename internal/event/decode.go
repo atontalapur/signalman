@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 )
@@ -18,15 +19,24 @@ import (
 // Any other number keeps its JSON text as a String. Nested objects are
 // flattened into dotted field names. A list holds scalars only; a list of
 // lists or of objects is an error rather than a value that can never match.
+//
+// A key given twice in one object is an error: encoding/json would keep the
+// last one silently, and which copy a rule sees should not be a decoder
+// accident. An empty object has no leaves, so it contributes no fields: a
+// rule that tests {"a": {}} sees a as absent.
 func DecodeJSON(b []byte) (*Event, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
-	var m map[string]any
-	if err := dec.Decode(&m); err != nil {
+	tok, err := dec.Token()
+	if err != nil {
 		return nil, err
 	}
-	if m == nil {
+	if tok != json.Delim('{') {
 		return nil, errors.New("event is not a JSON object")
+	}
+	m, err := decodeObject(dec, "")
+	if err != nil {
+		return nil, err
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("trailing data after the event object")
@@ -37,6 +47,63 @@ func DecodeJSON(b []byte) (*Event, error) {
 	}
 	ev.Raw = append([]byte(nil), b...)
 	return ev, nil
+}
+
+// decodeObject reads the members of an object whose opening brace has been
+// consumed, through its closing brace. prefix is the dotted path, for errors.
+func decodeObject(dec *json.Decoder, prefix string) (map[string]any, error) {
+	m := map[string]any{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		k, ok := tok.(string)
+		if !ok {
+			return nil, fmt.Errorf("object key is %T, not a string", tok)
+		}
+		name := k
+		if prefix != "" {
+			name = prefix + "." + k
+		}
+		if _, dup := m[k]; dup {
+			return nil, fmt.Errorf("field %q is given twice in one object", name)
+		}
+		v, err := decodeValue(dec, name)
+		if err != nil {
+			return nil, err
+		}
+		m[k] = v
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func decodeValue(dec *json.Decoder, name string) (any, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	switch tok {
+	case json.Delim('{'):
+		return decodeObject(dec, name)
+	case json.Delim('['):
+		list := []any{}
+		for dec.More() {
+			v, err := decodeValue(dec, name)
+			if err != nil {
+				return nil, err
+			}
+			list = append(list, v)
+		}
+		if _, err := dec.Token(); err != nil {
+			return nil, err
+		}
+		return list, nil
+	}
+	return tok, nil
 }
 
 // FromMap builds an Event from a decoded map, as produced by encoding/json
@@ -116,11 +183,18 @@ func scalar(x any) (Value, error) {
 	case int64:
 		return Int(v), nil
 	case uint64:
+		// Above MaxInt64 there is no Int for it; keep the exact digits as
+		// text, as DecodeJSON does for an out-of-range JSON integer.
+		if v > math.MaxInt64 {
+			return String(strconv.FormatUint(v, 10)), nil
+		}
 		return Int(int64(v)), nil
 	case float64:
 		// YAML has no way to write 1 that differs from 1.0, so an integral
-		// float is an integer, matching the rule loader's reading.
-		if v == float64(int64(v)) {
+		// float is an integer, matching the rule loader's reading. Only
+		// inside [-2^63, 2^63): converting a float outside int64's range is
+		// implementation-defined in Go and differs between platforms.
+		if v >= -(1<<63) && v < 1<<63 && v == math.Trunc(v) {
 			return Int(int64(v)), nil
 		}
 		return String(strconv.FormatFloat(v, 'g', -1, 64)), nil

@@ -166,6 +166,7 @@ to show; they are not real traffic.
 |---|---|---|---|---|---|
 | `internal/sigma/testdata` | 2 | 83 | 166 | 42 | 4 of 4 partitions |
 | `internal/engine/v1/testdata` | 3 | 123 | 369 | 78 | 4 of 4 |
+| shipped `rules/` | 20 | 803 | 16,060 | 405 | 4 of 4 |
 | SigmaHQ `rules` tree | 1,236 | 1,239 | 1,531,404 | 1,163 | 4 of 4 |
 | SigmaHQ `rules`, `SIGNALMAN_EQUIV_PER_RULE=20` | 1,236 | 24,723 | 30,557,628 | 22,952 | 4 of 4 |
 | All four live trees merged | 1,478 | 1,481 | 2,188,918 | 1,461 | 4 of 4 |

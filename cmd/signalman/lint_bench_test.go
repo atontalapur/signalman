@@ -14,7 +14,7 @@ func TestLintPassesTheShippedRules(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("code %d\n%s%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "20 rules, 20 loaded, 0 rejected") {
+	if !strings.Contains(stdout, "21 rules, 21 loaded, 0 rejected") {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
 }
@@ -29,7 +29,9 @@ func TestLintPrintsEveryLoadErrorStructured(t *testing.T) {
 		"[modifier]",
 		"[yaml]",
 		"[condition]",
-		"5 rules, 0 loaded, 5 rejected",
+		"[invalid-id]",
+		"[level]",
+		"8 rules, 0 loaded, 8 rejected",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, stdout)
@@ -51,8 +53,8 @@ func TestLintJSONIsOneObjectPerError(t *testing.T) {
 		t.Fatalf("code %d", code)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("want 5 lines, got:\n%s", stdout)
+	if len(lines) != 8 {
+		t.Fatalf("want 8 lines, got:\n%s", stdout)
 	}
 	var e struct {
 		Path, RuleID, Code, Reason string
@@ -74,7 +76,7 @@ func TestBenchReportsP99PerRule(t *testing.T) {
 	if !strings.Contains(stdout, "p99") || !strings.Contains(stdout, "rules/proc_dump.yml") {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "20 rules, 0 over the 1h0m0s p99 budget, 56 events") {
+	if !strings.Contains(stdout, "21 rules, 0 over the 1h0m0s p99 budget, 60 events") {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
 }

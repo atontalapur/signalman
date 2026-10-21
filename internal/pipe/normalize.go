@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/sigma"
@@ -24,6 +25,10 @@ type NormalizeConfig struct {
 	MaxValueLen int
 	// MaxDepth caps object nesting. Default 8.
 	MaxDepth int
+	// MaxRecordBytes caps key, value, and headers together. Default
+	// DefaultMaxRecordBytes, which is also the most it may be: above it a
+	// drop entry may not fit MaxOutputRecordBytes.
+	MaxRecordBytes int
 }
 
 func (c NormalizeConfig) withDefaults() NormalizeConfig {
@@ -35,6 +40,9 @@ func (c NormalizeConfig) withDefaults() NormalizeConfig {
 	}
 	if c.MaxDepth == 0 {
 		c.MaxDepth = 8
+	}
+	if c.MaxRecordBytes == 0 {
+		c.MaxRecordBytes = DefaultMaxRecordBytes
 	}
 	return c
 }
@@ -70,6 +78,9 @@ func (n *Normalizer) SetFault(f func(raw []byte)) { n.fault = f }
 // NewNormalizer builds a normalizer for tax.
 func NewNormalizer(tax *sigma.Taxonomy, cfg NormalizeConfig, m *obs.Metrics) *Normalizer {
 	n := &Normalizer{cfg: cfg.withDefaults(), canon: map[string]string{}, m: m}
+	if n.cfg.MaxRecordBytes > DefaultMaxRecordBytes {
+		panic(fmt.Sprintf("pipe: MaxRecordBytes %d is over %d; drop entries would not fit the output limit", n.cfg.MaxRecordBytes, DefaultMaxRecordBytes))
+	}
 	for _, name := range tax.FieldNames() {
 		// Two taxonomy names differing only in case would make the mapping
 		// ambiguous. The first in sorted order wins, which is at least
@@ -92,6 +103,10 @@ func (n *Normalizer) Normalize(it *Item) {
 			n.drop(it, ReasonPanic, fmt.Sprint(r))
 		}
 	}()
+	if sz := broker.RecordSize(it.Rec); sz > n.cfg.MaxRecordBytes {
+		n.drop(it, ReasonRecordTooLarge, fmt.Sprintf("%d bytes, limit %d", sz, n.cfg.MaxRecordBytes))
+		return
+	}
 	if it.Event.Source == "" {
 		n.drop(it, ReasonMissingSource, "no "+HeaderSource+" header")
 		return

@@ -305,6 +305,7 @@ func TestOracleEvalRestartsOnTimeout(t *testing.T) {
 
 	rule := `title: evil regex
 id: 00000000-0000-4000-8000-0000000000ff
+level: low
 logsource:
   product: windows
   category: process_creation

@@ -26,9 +26,12 @@ level: high
 budget: 50
 ```
 
-This is ordinary Sigma. The parts Signalman reads are `id`, `logsource`,
-`detection`, and the optional `budget:`. The rest (title, tags, level,
-description) is carried along for people.
+This is ordinary Sigma. The parts Signalman reads are `id`, `level`,
+`logsource`, `detection`, and the optional `budget:`. The id must be a UUID
+and the level one of `informational`, `low`, `medium`, `high`, `critical`:
+alerts are stored with both as typed columns, so the loader rejects a rule
+without them. The rest (title, tags, description) is carried along for
+people.
 
 ## The supported subset
 
@@ -76,6 +79,8 @@ rules/x.yml:1 [modifier] rule 3f0d7c2e-6a61-4c39-9f5e-4b1f5d3a9e10: selection "s
 |---|---|
 | `yaml` | Fix the YAML. A bad `budget:` lands here too. |
 | `missing-id` | Add an `id`. Verdicts are keyed on it. |
+| `invalid-id` | The `id` is not a UUID such as `3f0d7c2e-6a61-4c39-9f5e-4b1f5d3a9e10`. Generate one with `uuidgen`. |
+| `level` | Add `level:` with one of `informational`, `low`, `medium`, `high`, `critical`, in lower case. |
 | `duplicate-id` | Another rule already has this id. Generate a new UUID. |
 | `no-taxonomy` | The logsource is not mapped. Map it, or use a mapped one. |
 | `condition` | The condition is empty, malformed, or names a selection that does not exist. |
@@ -205,8 +210,15 @@ worth avoiding for the same reason, though the gate does not flag it.
 
 A PR that touches `rules/` runs `.github/workflows/rules.yml`. It finds the
 changed rules (a changed fixture counts as its rule), runs
-`signalman gates` on them, and posts the report as one PR comment that later
-pushes update in place.
+`signalman gates` on them, writes the full report to the job summary, and
+posts it as one PR comment that later pushes update in place.
+
+A PR comment holds 65,536 characters, so the comment copy (`--comment FILE`)
+is cut to 60,000 bytes: the per-rule details go first, then table rows, with
+failures, warnings, and files not checked kept ahead of passes. The comment
+says how many rules it left out. The job summary has the full report unless
+that is over the summary's 1 MiB limit, in which case it gets the cut copy
+too. Locally `signalman gates` prints the full report to stdout.
 
 | Gate | Fails when |
 |---|---|
@@ -216,8 +228,16 @@ pushes update in place.
 | Latency | p99 is over 50µs |
 | Prefilter | Never. Landing in Always is a warning |
 
-The job fails only on a failed gate. Run the same thing locally before
-pushing:
+The job fails on a failed gate, and on a PR that changes rules together
+with anything the gates are built from or read: `cmd/`, `internal/`,
+`config/taxonomy/`, `go.mod`, `go.sum`, the noise corpus, or the workflow
+itself. The gates run the PR's own code, so such a PR would be judging its
+rules with code it brings; it fails without running them, and the comment
+says so. Put rule changes in their own PR. A PR that edits the workflow
+runs its own copy of it, so that edge is held by CODEOWNERS review, not by
+the check.
+
+Run the same thing locally before pushing:
 
 ```
 signalman gates --set rules rules/my_rule.yml

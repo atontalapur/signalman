@@ -21,8 +21,11 @@ type Memory struct {
 	mu      sync.Mutex
 	topics  map[string][][]Record
 	groups  map[string]map[TopicPartition]int64
+	meta    map[string]map[TopicPartition]string // CommitCheckpoints metadata
+	start   map[TopicPartition]int64             // log start, moved by Trim
 	notify  chan struct{}
 	maxPoll int
+	maxRec  int
 	now     func() time.Time
 }
 
@@ -32,6 +35,10 @@ type MemoryOption func(*Memory)
 // WithMaxPoll caps how many records one Poll returns. The default is 500.
 func WithMaxPoll(n int) MemoryOption { return func(m *Memory) { m.maxPoll = n } }
 
+// WithMaxRecordBytes caps RecordSize for a produced record, standing in for
+// max.message.bytes. The default is MaxMessageBytes.
+func WithMaxRecordBytes(n int) MemoryOption { return func(m *Memory) { m.maxRec = n } }
+
 // WithClock sets the source of record timestamps.
 func WithClock(now func() time.Time) MemoryOption { return func(m *Memory) { m.now = now } }
 
@@ -40,8 +47,11 @@ func NewMemory(topics map[string]int32, opts ...MemoryOption) *Memory {
 	m := &Memory{
 		topics:  make(map[string][][]Record, len(topics)),
 		groups:  map[string]map[TopicPartition]int64{},
+		meta:    map[string]map[TopicPartition]string{},
+		start:   map[TopicPartition]int64{},
 		notify:  make(chan struct{}),
 		maxPoll: 500,
+		maxRec:  MaxMessageBytes,
 		now:     time.Now,
 	}
 	for t, n := range topics {
@@ -63,7 +73,8 @@ func keyPartition(key []byte, n int) int32 {
 }
 
 // Produce appends recs. It validates the whole slice before writing any of
-// it, so a bad record fails the call without a partial write.
+// it, so a bad record fails the call without a partial write. Every
+// validation failure wraps ErrPermanent, as it would fail again.
 func (m *Memory) Produce(ctx context.Context, recs []Record) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -74,14 +85,17 @@ func (m *Memory) Produce(ctx context.Context, recs []Record) error {
 	for i, r := range recs {
 		ps, ok := m.topics[r.Topic]
 		if !ok {
-			return fmt.Errorf("produce: unknown topic %q", r.Topic)
+			return fmt.Errorf("%w: produce: unknown topic %q", ErrPermanent, r.Topic)
 		}
 		p := r.Partition
 		if p == AnyPartition {
 			p = keyPartition(r.Key, len(ps))
 		}
 		if p < 0 || int(p) >= len(ps) {
-			return fmt.Errorf("produce: topic %q has no partition %d", r.Topic, r.Partition)
+			return fmt.Errorf("%w: produce: topic %q has no partition %d", ErrPermanent, r.Topic, r.Partition)
+		}
+		if n := RecordSize(r); n > m.maxRec {
+			return fmt.Errorf("%w: produce: %s record of %d bytes is over the %d byte limit", ErrPermanent, r.Topic, n, m.maxRec)
 		}
 		parts[i] = p
 	}
@@ -159,6 +173,31 @@ func (m *Memory) EndOffsets(ctx context.Context, topic string) (map[int32]int64,
 	return out, nil
 }
 
+// StartOffsets reports the log start of every partition of topic.
+func (m *Memory) StartOffsets(ctx context.Context, topic string) (map[int32]int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ps, ok := m.topics[topic]
+	if !ok {
+		return nil, fmt.Errorf("start offsets: unknown topic %q", topic)
+	}
+	out := make(map[int32]int64, len(ps))
+	for p := range ps {
+		out[int32(p)] = m.start[TopicPartition{topic, int32(p)}]
+	}
+	return out, nil
+}
+
+// Trim moves the log start of tp forward to before, the way retention or
+// DeleteRecords would. Offsets keep their numbers; readers positioned below
+// the new start resume at it.
+func (m *Memory) Trim(tp TopicPartition, before int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	end := int64(len(m.topics[tp.Topic][tp.Partition]))
+	m.start[tp] = max(m.start[tp], min(before, end))
+}
+
 func (m *Memory) CommittedOffsets(ctx context.Context, group, topic string) (map[int32]int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -172,6 +211,49 @@ func (m *Memory) CommittedOffsets(ctx context.Context, group, topic string) (map
 		}
 	}
 	return out, nil
+}
+
+func (m *Memory) Checkpoints(ctx context.Context, group, topic string) (map[int32]Checkpoint, error) {
+	c, err := m.CommittedOffsets(ctx, group, topic)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[int32]Checkpoint, len(c))
+	for p, next := range c {
+		out[p] = Checkpoint{Next: next, Meta: m.meta[group][TopicPartition{topic, p}]}
+	}
+	return out, nil
+}
+
+func (m *Memory) CommitCheckpoints(ctx context.Context, group string, cps map[TopicPartition]Checkpoint) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tp := range cps {
+		ps, ok := m.topics[tp.Topic]
+		if !ok || tp.Partition < 0 || int(tp.Partition) >= len(ps) {
+			return fmt.Errorf("commit: no partition %s/%d", tp.Topic, tp.Partition)
+		}
+	}
+	g := m.groups[group]
+	if g == nil {
+		g = map[TopicPartition]int64{}
+		m.groups[group] = g
+	}
+	meta := m.meta[group]
+	if meta == nil {
+		meta = map[TopicPartition]string{}
+		m.meta[group] = meta
+	}
+	for tp, cp := range cps {
+		g[tp] = cp.Next
+		meta[tp] = cp.Meta
+	}
+	return nil
 }
 
 func (m *Memory) Close() {}
@@ -217,6 +299,8 @@ func (c *memConsumer) take() Fetch {
 		tp := c.order[(c.cursor+i)%n]
 		log := c.m.topics[tp.Topic][tp.Partition]
 		f.HighWatermarks[tp] = int64(len(log))
+		// Below the log start: reset to it, as auto.offset.reset=earliest.
+		c.pos[tp] = max(c.pos[tp], c.m.start[tp])
 		for c.pos[tp] < int64(len(log)) && len(f.Records) < c.m.maxPoll {
 			f.Records = append(f.Records, log[c.pos[tp]])
 			c.pos[tp]++
@@ -244,6 +328,7 @@ func (c *memConsumer) Commit(ctx context.Context, next map[TopicPartition]int64)
 	}
 	for tp, off := range next {
 		g[tp] = off
+		delete(c.m.meta[c.group], tp) // a commit without metadata clears it, as in Kafka
 	}
 	return nil
 }

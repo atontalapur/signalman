@@ -13,6 +13,7 @@ import (
 
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/sigma"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // tamper wraps a broker and rewrites what the sink produces, standing in
@@ -78,9 +79,17 @@ func TestAuditIsGreenWhenEveryEventIsAccountedFor(t *testing.T) {
 	if ingested != 210 || dropped != 30 || evaluated != 180 || verdicts != 180*int64(len(r.rs.Rules)) {
 		t.Fatalf("ingested %d = evaluated %d + dropped %d, verdicts %d", ingested, evaluated, dropped, verdicts)
 	}
+	// The windows closed are counted, so the cutover gates can tell an
+	// audit that ran and found nothing from one that never ran.
+	if got := testutil.ToFloat64(r.m.AuditWindows); got != float64(len(reports)) || got == 0 {
+		t.Fatalf("signalman_audit_windows_total = %v for %d windows", got, len(reports))
+	}
 	again, err := a.Step(context.Background())
 	if err != nil || len(again) != 0 {
 		t.Fatalf("a second step with nothing new committed audits nothing: %v %v", again, err)
+	}
+	if got := testutil.ToFloat64(r.m.AuditWindows); got != float64(len(reports)) {
+		t.Fatalf("an empty step counted windows: %v", got)
 	}
 }
 
@@ -316,4 +325,28 @@ func TestEndToEndUnderGeneratedLoad(t *testing.T) {
 	}
 	t.Logf("%v of generated load: %d events, %d evaluated, %d dropped, %d audit windows, all green",
 		dur, produced, evaluated, dropped, len(reports))
+}
+
+func TestAuditStartsAtTheLogStartOfAnUncommittedPartition(t *testing.T) {
+	mem := newMemory(broker.WithMaxPoll(8))
+	produceRaw(t, mem, 0, 120)
+	// Retention trimmed the head of every partition before the group ever
+	// committed. Those offsets were never admitted, so they are not missing.
+	end, _ := mem.EndOffsets(context.Background(), TopicEventsRaw)
+	for p, e := range end {
+		mem.Trim(broker.TopicPartition{Topic: TopicEventsRaw, Partition: p}, e/2)
+	}
+	r, slot, a := auditRig(t, mem, mem)
+	reports, err := runAndAudit(t, r, slot, a, mem)
+	if err != nil {
+		t.Fatalf("audit over a trimmed log: %v", err)
+	}
+	for _, w := range reports {
+		if w.From < end[w.Partition]/2 {
+			t.Fatalf("window %+v starts below the log start %d", w, end[w.Partition]/2)
+		}
+	}
+	if len(reports) == 0 {
+		t.Fatal("nothing audited")
+	}
 }

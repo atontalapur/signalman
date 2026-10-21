@@ -1,0 +1,690 @@
+{
+  "uid": "signalman-pipeline",
+  "title": "Signalman pipeline",
+  "tags": [
+    "signalman"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "utc",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Detection is alive",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Canary age",
+      "id": 2,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "Seconds since the last canary alert reached the sink. SignalmanCanaryStalled pages above 50s for 30s.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "signalman_canary_age_seconds",
+          "legendFormat": "partition {{partition}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Canary injected",
+      "id": 3,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "Canary records the generator wrote. Flat here with a climbing canary age means the generator stopped, not the pipeline.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (partition) (increase(signalman_canary_injected_total[5m]))",
+          "legendFormat": "partition {{partition}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Event staleness",
+      "id": 4,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "now() - max(event_time) among processed events, canaries excluded. Rising staleness with zero lag means the upstream stopped producing.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "signalman_event_staleness_seconds",
+          "legendFormat": "partition {{partition}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumer lag",
+      "id": 5,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "Log end offset minus committed offset. Lag is records not yet consumed; it is not staleness.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "signalman_consumer_lag_records",
+          "legendFormat": "{{topic}}/{{partition}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Stage queue depth",
+      "id": 6,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "Occupancy of each bounded stage channel. A full sink queue backs up into match, normalize, and then the consumer.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "signalman_stage_queue_depth",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Throughput",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 7,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Events ingested",
+      "id": 8,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (partition) (rate(signalman_events_ingested_total[1m]))",
+          "legendFormat": "partition {{partition}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Events dropped",
+      "id": 9,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "Drop ledger entries by reason. Every reason but output-too-large is a decode failure; overload never drops.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (reason) (rate(signalman_events_dropped_total[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Verdicts",
+      "id": 10,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (engine, matched) (rate(signalman_verdicts_total[1m]))",
+          "legendFormat": "{{engine}} matched={{matched}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Rules",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "id": 11,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Top rule matches (1h)",
+      "id": 12,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "topk(15, increase(signalman_rule_matches_total[1h]))",
+          "legendFormat": "{{rule_id}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rule eval p99, slowest 15",
+      "id": 13,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "Sampled per-rule condition walk time. signalman bench flags p99 over 50us.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5e-05
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "topk(15, histogram_quantile(0.99, sum by (rule_id, le) (rate(signalman_rule_eval_seconds_bucket[5m]))))",
+          "legendFormat": "{{rule_id}}"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Rules gone silent",
+      "id": 14,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "Rules that matched in the last 30d and not in the last 24h: SignalmanRuleWentSilent's expression. Usually a taxonomy rename, not a quiet network.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "increase(signalman_rule_matches_total[24h]) == 0 and increase(signalman_rule_matches_total[30d]) > 0",
+          "legendFormat": "{{rule_id}}",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Versions and audit",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "id": 15,
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Active rule set",
+      "id": 16,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "signalman_ruleset_version_info == 1",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Audit violations (1h)",
+      "id": 17,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "signalman-prom"
+      },
+      "description": "Invariant 1 audit. Any increase is a P1.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "signalman-prom"
+          },
+          "refId": "A",
+          "expr": "sum by (partition) (increase(signalman_audit_violations_total[1h]))",
+          "legendFormat": "partition {{partition}}"
+        }
+      ]
+    }
+  ]
+}

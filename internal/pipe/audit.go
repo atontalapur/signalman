@@ -86,6 +86,9 @@ type seen struct {
 //   - events.raw is a plain topic: offsets below the committed offset are
 //     dense, so To - From is the ingested count. A transactional or
 //     compacted events.raw would make the audit report missing seqs.
+//   - Offsets below the log start of events.raw at construction were never
+//     admitted (retention removed them), so the audit starts at
+//     max(committed, log start) per partition.
 //   - The auditor starts before any pipeline it audits produces, in the
 //     same process as signalmand. It reads outputs from the end offsets at
 //     construction and audits from the committed offset at construction;
@@ -143,7 +146,22 @@ func NewAuditor(ctx context.Context, b broker.Broker, cfg AuditConfig, counts fu
 	if err != nil {
 		return nil, err
 	}
+	// The floor is the committed offset, or the log start if that is later:
+	// offsets retention removed were never admitted, so they cannot be
+	// missing. A partition with no commit starts at its log start, not 0.
+	logStart, err := b.StartOffsets(ctx, TopicEventsRaw)
+	if err != nil {
+		return nil, err
+	}
+	for p, off := range logStart {
+		a.floor[p] = off
+	}
 	for p, off := range c {
+		if off < a.floor[p] {
+			log.Warn("audit: committed offset is below the log start; records were removed before the pipeline read them",
+				"partition", p, "committed", off, "log_start", a.floor[p])
+			continue
+		}
 		a.floor[p] = off
 	}
 	start := make(map[broker.TopicPartition]int64, len(a.pos))
@@ -188,6 +206,7 @@ func (a *Auditor) Step(ctx context.Context) ([]WindowReport, error) {
 			hi := min(committed[p], lo+a.cfg.Window)
 			w := a.close(p, lo, hi)
 			reports = append(reports, w)
+			a.m.AuditWindows.Inc()
 			if !w.OK() {
 				failed = append(failed, w.String())
 				a.m.AuditViolations.WithLabelValues(strconv.Itoa(int(p))).Add(float64(w.Missing + w.Both + w.Short))
