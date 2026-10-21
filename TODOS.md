@@ -30,9 +30,17 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P2
 **Depends on:** Plan C
 
+### Rename fieldref targets through the taxonomy
+**What:** `rename` in `internal/sigma/rule.go` maps `Pred.Field` through the taxonomy but leaves the `fieldref` target, which lives in the rule value, under its Sigma name.
+**Why:** Found while writing the ClickHouse backend (SIG-32). Under `Image: NewProcessName`, `ParentImage|fieldref: Image` compares against a field the event never has, so the rule silently never matches. v1 and the SQL backend agree on this, so no differ catches it.
+**Context:** Fix in the loader by rewriting the value through the same mapping, then let `ch` and v1 both pick it up. Changes RuleSetV for any rule using fieldref under a renaming entry. See `docs/backend-ch.md`, "Found in the frontend".
+**Effort:** S
+**Priority:** P2
+**Depends on:** nothing
+
 ### Add integration test entrypoint when compose lands
 **What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.
-**Why:** The job is wired now so Plan C only has to add the compose file and tagged tests.
+**Why:** The job is wired now so Plan C only has to add the compose file and tagged tests. The job must also export `SIGNALMAN_CLICKHOUSE_DSN`, or `internal/backend/ch`'s retro-hunt test skips and the Plan D gate reads green without running.
 **Context:** See `.github/workflows/ci.yml` `integration` job and `Makefile` `integration` target.
 **Effort:** S
 **Priority:** P2

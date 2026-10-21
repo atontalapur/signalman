@@ -40,12 +40,22 @@ and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
 
+`internal/backend/ch` is the second execution target. It compiles a loaded
+rule into a ClickHouse WHERE clause over an events table, and `RetroHunt`
+runs it over a time window through `database/sql`. Every node type and
+modifier the frontend accepts compiles, and every rule the corpus loads
+compiles. Where ClickHouse disagrees with Go (case folding, regex dot and
+Unicode tables, NULL, number and address parsing, invalid UTF-8), the event
+is stored with the value v1 would compute, so the SQL only compares.
+`docs/backend-ch.md` lists each leak. The retro-hunt-equals-replay test is
+written but has not yet run against a server.
+
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | in progress: v1 evaluator and verdict digest done; gate property green |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
-| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
+| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler and retro-hunt done, integration gate not yet run; sink not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | not started |
@@ -93,7 +103,7 @@ internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
 internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
 internal/engine/v1/     reference evaluator, permanent oracle (no index, no cache)
 internal/engine/v2/     compiled evaluator
-internal/backend/ch/    AST to ClickHouse SQL
+internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
 internal/pipe/          stages, bounded queues, drop ledger
 internal/obs/           metrics, canary
 internal/verdict/       verdict digest, one rolling hash per partition
@@ -106,6 +116,7 @@ docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 evaluator and how verdict streams are compared
+docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
@@ -123,6 +134,8 @@ that needs them.
 - `make check` before every commit: gofmt, vet, `go mod tidy` diff, build,
   race tests, staticcheck, govulncheck. CI runs the same target.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`.
+  The retro-hunt test reads a clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`
+  and skips without it.
 - `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
   one. Nightly CI runs them for 10 minutes each and uploads any crashers.
 - `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer

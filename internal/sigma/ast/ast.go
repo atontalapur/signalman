@@ -39,10 +39,21 @@ type Matcher interface {
 }
 
 // Pred is a leaf. Desc is the human-readable form used by explain output.
+//
+// Mods and Vals are the detection entry M was built from: the modifier
+// chain as written (field name stripped) and the rule values, in order.
+// Keyword marks a bare keyword, which has no field and searches every
+// field value on the event. M is a pure function of (Keyword, Mods, Vals),
+// which is what lets a compiled engine intern equal leaves and derive
+// prefilter literals without reverse engineering a closure. None of these
+// three is part of Canonical: Desc already carries them for hashing.
 type Pred struct {
-	Field string
-	Desc  string
-	M     Matcher
+	Field   string
+	Desc    string
+	M       Matcher
+	Mods    []string
+	Vals    []event.Value
+	Keyword bool
 }
 
 func (*And) node()   {}
