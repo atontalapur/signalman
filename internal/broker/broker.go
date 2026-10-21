@@ -116,6 +116,9 @@ type Broker interface {
 	// EndOffsets returns, per partition, the offset the next produced
 	// record will get.
 	EndOffsets(ctx context.Context, topic string) (map[int32]int64, error)
+	// StartOffsets returns, per partition, the oldest offset still in the
+	// log. Retention moves it forward; offsets below it are gone.
+	StartOffsets(ctx context.Context, topic string) (map[int32]int64, error)
 	// CommittedOffsets returns the group's committed next offset per
 	// partition. A partition with no commit is absent.
 	CommittedOffsets(ctx context.Context, group, topic string) (map[int32]int64, error)

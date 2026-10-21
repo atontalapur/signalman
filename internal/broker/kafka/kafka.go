@@ -221,6 +221,19 @@ func (b *Broker) EndOffsets(ctx context.Context, topic string) (map[int32]int64,
 	return out, nil
 }
 
+func (b *Broker) StartOffsets(ctx context.Context, topic string) (map[int32]int64, error) {
+	l, err := b.admin.ListStartOffsets(ctx, topic)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.Error(); err != nil {
+		return nil, err
+	}
+	out := map[int32]int64{}
+	l.Each(func(o kadm.ListedOffset) { out[o.Partition] = o.Offset })
+	return out, nil
+}
+
 func (b *Broker) CommittedOffsets(ctx context.Context, group, topic string) (map[int32]int64, error) {
 	rs, err := b.admin.FetchOffsetsForTopics(ctx, group, topic)
 	if err != nil {

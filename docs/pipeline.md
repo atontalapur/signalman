@@ -146,6 +146,12 @@ offset. Windows slide forward with the committed offset, at most
 names the partition and seqs, and increments
 `signalman_audit_violations_total{partition}`; any increase is a P1.
 
+Each partition's audit starts at the later of the group's committed offset
+and the log start of `events.raw`, so offsets retention removed before the
+group ever committed are not reported missing. A committed offset below the
+log start is logged as a warning: those records were removed before the
+pipeline read them.
+
 It assumes `events.raw` is a plain topic with dense offsets, and that it
 starts in the same `signalmand` process before the pipeline produces. Two
 instances on one group would break the second assumption.

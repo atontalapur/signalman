@@ -21,6 +21,7 @@ type Memory struct {
 	mu      sync.Mutex
 	topics  map[string][][]Record
 	groups  map[string]map[TopicPartition]int64
+	start   map[TopicPartition]int64 // log start, moved by Trim
 	notify  chan struct{}
 	maxPoll int
 	maxRec  int
@@ -45,6 +46,7 @@ func NewMemory(topics map[string]int32, opts ...MemoryOption) *Memory {
 	m := &Memory{
 		topics:  make(map[string][][]Record, len(topics)),
 		groups:  map[string]map[TopicPartition]int64{},
+		start:   map[TopicPartition]int64{},
 		notify:  make(chan struct{}),
 		maxPoll: 500,
 		maxRec:  MaxMessageBytes,
@@ -169,6 +171,31 @@ func (m *Memory) EndOffsets(ctx context.Context, topic string) (map[int32]int64,
 	return out, nil
 }
 
+// StartOffsets reports the log start of every partition of topic.
+func (m *Memory) StartOffsets(ctx context.Context, topic string) (map[int32]int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ps, ok := m.topics[topic]
+	if !ok {
+		return nil, fmt.Errorf("start offsets: unknown topic %q", topic)
+	}
+	out := make(map[int32]int64, len(ps))
+	for p := range ps {
+		out[int32(p)] = m.start[TopicPartition{topic, int32(p)}]
+	}
+	return out, nil
+}
+
+// Trim moves the log start of tp forward to before, the way retention or
+// DeleteRecords would. Offsets keep their numbers; readers positioned below
+// the new start resume at it.
+func (m *Memory) Trim(tp TopicPartition, before int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	end := int64(len(m.topics[tp.Topic][tp.Partition]))
+	m.start[tp] = max(m.start[tp], min(before, end))
+}
+
 func (m *Memory) CommittedOffsets(ctx context.Context, group, topic string) (map[int32]int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -227,6 +254,8 @@ func (c *memConsumer) take() Fetch {
 		tp := c.order[(c.cursor+i)%n]
 		log := c.m.topics[tp.Topic][tp.Partition]
 		f.HighWatermarks[tp] = int64(len(log))
+		// Below the log start: reset to it, as auto.offset.reset=earliest.
+		c.pos[tp] = max(c.pos[tp], c.m.start[tp])
 		for c.pos[tp] < int64(len(log)) && len(f.Records) < c.m.maxPoll {
 			f.Records = append(f.Records, log[c.pos[tp]])
 			c.pos[tp]++
