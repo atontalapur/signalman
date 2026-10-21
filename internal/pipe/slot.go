@@ -131,17 +131,32 @@ func (s *Slot) store(e, shadow Engine) {
 // rule removed on purpose loses its series, so it is not reported as gone
 // silent. A batch still in flight under the old set can bring a dropped
 // rule's series back with its last matches; it then stays until restart.
+//
+// alerts_total gets the same treatment, per rule and per engine stored,
+// and shadow_failures_total a zero for the shadow. increase() never counts
+// a series' first sample, so without the zeros a rule's first alert from an
+// engine, or the shadow's first failure, would read as no increase: G4's
+// v1-serves-none and the gates' shadow-failures would pass over it.
 // Caller holds s.mu.
 func (s *Slot) exportRules(a *active) {
 	if s.shown != nil {
 		for id := range s.shown.rules {
 			if _, kept := a.rules[id]; !kept {
 				s.m.RuleMatches.DeleteLabelValues(id)
+				s.m.Alerts.DeletePartialMatch(prometheus.Labels{"rule_id": id})
 			}
 		}
 	}
+	engines := []string{a.eng.Name()}
+	if a.shadow != nil {
+		engines = append(engines, a.shadow.Name())
+		s.m.ShadowFailures.WithLabelValues(a.shadow.Name())
+	}
 	for id := range a.rules {
 		s.m.RuleMatches.WithLabelValues(id)
+		for _, eng := range engines {
+			s.m.Alerts.WithLabelValues(eng, id)
+		}
 	}
 }
 

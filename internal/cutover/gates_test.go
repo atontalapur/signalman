@@ -218,12 +218,17 @@ func TestG4(t *testing.T) {
 	f := newFake()
 	healthy(f, "48h", 100)
 	attest := map[string]string{"flag-only": "deploy diff empty"}
+	// signalmand exports every rule's v1 alerts series at zero while v1
+	// is stored, so no series is not zero alerts: increase() would also
+	// read a series made by its first alert as no increase.
 	r := eval(t, Config{Gate: "G4", Source: f, Drill: stepDrill(100, 0, 9), Attest: attest})
+	if c := statusOf(t, r, "v1-serves-none"); c.Status != Unchecked || r.Passed() {
+		t.Fatalf("v1 alerts with no series: %+v", c)
+	}
+	f.instant[`sum(increase(signalman_alerts_total{engine="v1"}[48h]))`] = 0
+	r = eval(t, Config{Gate: "G4", Source: f, Drill: stepDrill(100, 0, 9), Attest: attest})
 	if !r.Passed() {
 		t.Fatalf("G4: %+v", r.Checks)
-	}
-	if c := statusOf(t, r, "v1-serves-none"); c.Status != Pass {
-		t.Fatalf("v1 alerts with no series is zero: %+v", c)
 	}
 	// A rollback exercised at 1% does not show it still works at 100%.
 	r = eval(t, Config{Gate: "G4", Source: f, Drill: stepDrill(1, 0, 9), Attest: attest})
@@ -310,9 +315,32 @@ const ladderDoc = `# Equivalence and cutover
 Nothing recorded. No gate has been checked against production traffic.
 `
 
-// auditRan fills G6's audit query: windows closed at every 5m step.
+// auditRan fills G6's audit queries: windows closed at every 5m step, and
+// the violations series the auditor exports at zero from its start.
 func auditRan(f *fakeSource, steps float64) {
 	f.instant[`count_over_time((sum(rate(signalman_audit_windows_total[5m])) > 0)[336h:5m])`] = steps
+	f.instant[`sum(increase(signalman_audit_violations_total[336h]))`] = 0
+}
+
+// The auditor exports each partition's violations series at zero when it
+// starts, so a violation is an increase and no series is no audit.
+func TestG6AuditViolations(t *testing.T) {
+	f := newFake()
+	healthy(f, "336h", 100)
+	auditRan(f, 4032)
+	q := `sum(increase(signalman_audit_violations_total[336h]))`
+	cfg := Config{Gate: "G6", Source: f}
+	if c := statusOf(t, eval(t, cfg), "audit-violations"); c.Status != Pass {
+		t.Fatalf("zero violations: %+v", c)
+	}
+	f.instant[q] = 5
+	if c := statusOf(t, eval(t, cfg), "audit-violations"); c.Status != Fail {
+		t.Fatalf("five missing verdicts: %+v", c)
+	}
+	delete(f.instant, q)
+	if c := statusOf(t, eval(t, cfg), "audit-violations"); c.Status != Unchecked {
+		t.Fatalf("no violations series: %+v", c)
+	}
 }
 
 func TestG6(t *testing.T) {

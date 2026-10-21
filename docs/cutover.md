@@ -296,7 +296,10 @@ A criterion nothing here can check is `unchecked` until an operator states
 the evidence with `-attest key=evidence`, which is recorded as `attested`
 next to the machine checks. A failed check cannot be attested. A query that
 fails, or a metric with no series where one must exist (an unscraped
-differ), is `unchecked`, never zero. `deploy/prometheus/prometheus.yml`
+differ), is `unchecked`, never zero. Every counter a gate needs flat is
+exported at zero before it can count (violations per partition, alerts per
+rule and engine, shadow failures per shadow), because `increase()` never
+counts a series' first sample; so no series is `unchecked` too. `deploy/prometheus/prometheus.yml`
 scrapes the differ on `:9466` for this.
 
 ## Game day

@@ -281,6 +281,10 @@ names the partition and seqs, and increments
 Every closed window, passing or failing, increments
 `signalman_audit_windows_total`, so a flat violations counter can be told
 apart from an audit that is not running (`-audit-interval 0`, or stuck).
+The auditor exports every events.raw partition's violations series at 0
+when it starts, and a partition added later at the next step:
+`increase()` never counts a series' first sample, so a series made by its
+first violation would read as no increase.
 
 Each partition's audit starts at the later of the group's committed offset
 and the log start of `events.raw`, so offsets retention removed before the
@@ -323,11 +327,11 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_event_staleness_seconds` | gauge | partition | now minus the newest durable event time, at scrape |
 | `signalman_canary_age_seconds` | gauge | partition | seconds since the last canary alert was durable, at scrape |
 | `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
-| `signalman_audit_violations_total` | counter | partition | the audit; not in the spec table |
+| `signalman_audit_violations_total` | counter | partition | the audit; 0 for every events.raw partition from its start; not in the spec table |
 | `signalman_audit_windows_total` | counter | none | the audit, per window closed; not in the spec table; G6 requires it rising |
 | `signalman_canary_injected_total` | counter | partition | the canary generator, per record written; not in the spec table |
-| `signalman_shadow_failures_total` | counter | engine | sink, per event the shadow failed on; not in the spec table |
-| `signalman_alerts_total` | counter | engine, rule_id | sink, per durable alert, by the serving engine; not in the spec table |
+| `signalman_shadow_failures_total` | counter | engine | sink, per event the shadow failed on; 0 for the shadow from when it is stored; not in the spec table |
+| `signalman_alerts_total` | counter | engine, rule_id | sink, per durable alert, by the serving engine; 0 per rule for each stored engine, removed with the rule on reload; not in the spec table |
 | `signalman_rollout_percent` | gauge | | the slot, on every rollout change; not in the spec table |
 | `signalman_event_time_future_total` | counter | partition | sink, per durable event whose event time is ahead of the clock; not in the spec table |
 | `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |

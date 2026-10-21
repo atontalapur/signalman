@@ -47,6 +47,11 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   `-rollback-only` used to leave production at the rollback target; it now
   writes `-from` back and checks the gauge, or exits non-zero.
 - `-record` dated a gate with earlier gates undated. It now refuses.
+- G6 audit-violations, G4 v1-serves-none and shadow-failures missed a
+  counter's first count: those series were made by it, and `increase()`
+  ignores a series' first sample. signalmand now exports them at zero (per
+  partition from the auditor's start, per rule and engine and per shadow
+  when engines are stored), and the gates treat no series as unchecked.
 
 ## [0.15.0] - 2026-10-21
 

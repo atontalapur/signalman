@@ -297,3 +297,53 @@ func TestTaxonomyRenameSilencesTheAffectedRule(t *testing.T) {
 	}
 	t.Logf("silenced by the rename: %v", silenced)
 }
+
+// increase() never counts a series' first sample, so an alerts or shadow
+// failures series made by its first Add hides that first count. G4 reads
+// signalman_alerts_total{engine="v1"} at 100% and G1 to G4 read
+// signalman_shadow_failures_total; both must exist at zero, per rule and
+// engine, as soon as the engines are stored.
+func TestAlertsAndShadowFailuresExportZeroForEveryEngine(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := obs.New(reg)
+	rs := loadRules(t)
+	slot := NewSlot(V1(rs), m)
+	if got := testutil.CollectAndCount(m.Alerts); got != len(rs.Rules) {
+		t.Fatalf("%d alerts series for %d rules and one engine", got, len(rs.Rules))
+	}
+	if err := slot.StoreWithShadow(V2(rs), V1(rs)); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.CollectAndCount(m.Alerts); got != 2*len(rs.Rules) {
+		t.Fatalf("%d alerts series for %d rules and two engines", got, len(rs.Rules))
+	}
+	for _, r := range rs.Rules {
+		for _, eng := range []string{"v1", "v2"} {
+			if v := testutil.ToFloat64(m.Alerts.WithLabelValues(eng, r.ID)); v != 0 {
+				t.Fatalf("alerts{%s, %s} starts at %v", eng, r.ID, v)
+			}
+		}
+	}
+	if got := testutil.CollectAndCount(m.ShadowFailures); got != 1 {
+		t.Fatalf("%d shadow failures series with v1 shadowing", got)
+	}
+	if v := testutil.ToFloat64(m.ShadowFailures.WithLabelValues("v1")); v != 0 {
+		t.Fatalf("shadow failures{v1} starts at %v", v)
+	}
+
+	// A reload that drops a rule drops its alerts series for every engine,
+	// as it does for rule_matches_total; a kept rule keeps its count.
+	m.Alerts.WithLabelValues("v1", rs.Rules[1].ID).Add(2)
+	smaller := *rs
+	smaller.Rules = rs.Rules[1:]
+	smaller.Version = "smaller"
+	if err := slot.StoreWithShadow(V2(&smaller), V1(&smaller)); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.CollectAndCount(m.Alerts); got != 2*len(smaller.Rules) {
+		t.Fatalf("%d alerts series after dropping a rule, want %d", got, 2*len(smaller.Rules))
+	}
+	if v := testutil.ToFloat64(m.Alerts.WithLabelValues("v1", rs.Rules[1].ID)); v != 2 {
+		t.Fatalf("reload reset a kept rule's alert count to %v", v)
+	}
+}
