@@ -20,12 +20,12 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 
 | Topic | Key | Body |
 |---|---|---|
-| `events.raw` | host_id | the untouched source record; header `source` names the source |
+| `events.raw` | host_id | the untouched source record; header `source` names the source, one of `pipe.Sources` |
 | `events.norm` | host_id | `NormEvent`: seq, partition, host_id, source, event_time, ingest_at, typed fields, raw |
 | `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions; `shadow` names the shadow engine when there is one |
 | `verdicts.v2` | partition, pinned | `EventVerdicts` from the shadow engine, written only with `-shadow` |
 | `divergences` | partition, pinned | `differ.Divergence`: one per `(partition, seq, rule_id)` the engines disagree on (`docs/cutover.md`) |
-| `alerts` | rule_id | `Alert`: one per match by the engine serving the rule, shaped like the spec's ClickHouse alert table plus `engine` |
+| `alerts` | rule_id | `Alert`: one per match by the engine serving the rule, shaped like the spec's ClickHouse alert table plus `engine`, and `fields_omitted` when `fields` was left empty to fit the output limit |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
 | `alerts.dead` | the alert's key | an `alerts` record the ClickHouse table cannot hold, written by `signalman-sink`; not in the spec |
 
@@ -67,10 +67,11 @@ property of the record's bytes; overload never drops.
 | `nested-value` | a list holding a list or object, or objects nested deeper than 8 |
 | `duplicate-field` | a key appears twice, literally or after taxonomy renaming |
 | `missing-source` | no `source` header |
+| `unknown-source` | the `source` header is not `auditd`, `cloudtrail`, or `sysmon` (`pipe.Sources`), including one that is not valid UTF-8; the detail quotes its first 64 bytes |
 | `event-time` | event time absent or unparseable |
 | `panic` | the normalizer panicked on this record; the partition moves on |
 | `record-too-large` | key, value, and headers together over 128 KiB; the entry keeps a 16 KiB prefix of the raw bytes (`truncated: true`, `raw_bytes` is the full length) |
-| `output-too-large` | the record fit, but its `events.norm` or an alert record would be over the output limit (long flattened names can do this); decided in the sink before anything for the event is written |
+| `output-too-large` | the record fit, but its `events.norm` record would be over the output limit (long flattened names can do this); decided in the sink before anything for the event is written. It depends on the event alone: an alert never causes a drop |
 
 ### Size limits
 
@@ -88,7 +89,19 @@ restart. The limits make every output fit:
 JSON escapes one byte to at most six, and a drop entry carries the host id
 twice (field and key), the source, a detail cut to 1 KiB, and the raw bytes
 in base64, so the entry for a record under 128 KiB stays under seven times
-that, inside the output limit. A verdict record grows with the rule count
+that, inside the output limit.
+
+An alert repeats the event's fields beside its raw bytes, each escaped
+again, so an escape-heavy event under 128 KiB can have an alert over the
+limit even though its `events.norm` fits. Dropping it would let an event's
+own fields suppress its detection, and would make the drop depend on the
+rule set. Instead the alert leaves `fields` empty and sets
+`fields_omitted: true`; `raw` stays whole, and `events.norm` at the same
+partition and seq has every field. Without fields an alert holds the host
+id and raw bytes once each, at most 6 x 128 KiB = 768 KiB, which leaves
+more than 200 KiB for the rule's ID, title, and level. A rule whose
+metadata does not fit even then stops the pipeline with an error naming
+the rule. A verdict record grows with the rule count
 (about 60 bytes a rule), so a rule set of more than roughly 16,000 rules
 stops the pipeline with an error naming the rule set.
 
@@ -178,10 +191,14 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   comes from the source: an alert for an event older than 90 days would be
   TTL-deleted on insert, after its offset was committed, which is loss; and
   a batch with skewed times could touch more than the 100 partitions one
-  INSERT may. Queries still filter on `event_time`. A record whose
-  `event_time` or `ingest_time` is outside the DateTime64(3) range
-  (1900-01-01 to 2299-12-31) is refused by the sink, since the normalizer
-  has no drop reason for it at this layer.
+  INSERT may. Queries still filter on `event_time`. The sink refuses a
+  record whose times it cannot store exactly, since the normalizer has no
+  drop reason for them at this layer. `event_time` must be from 1900-01-01
+  to 2262-04-11T23:47:16.854775807Z: DateTime64(3) goes to 2299, but
+  clickhouse-go encodes through `UnixNano`, which overflows after that and
+  would store 2290 as 1705. `ingest_time` must be from 1970-01-01 to
+  2105-11-09T06:28:15Z, so `toDateTime(ingest_time) + INTERVAL 90 DAY` in
+  the TTL stays inside DateTime's range.
 - **Outage.** A failed insert is retried with the same rows, backing off
   from 100ms to 5s, and nothing is polled meanwhile. The outage surfaces as
   `signalman_consumer_lag_records{topic="alerts"}` on the sink's `/metrics`
@@ -325,7 +342,7 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_stage_queue_depth` | gauge | stage (normalize, match, sink, batches) | sampled every second |
 | `signalman_consumer_lag_records` | gauge | topic, partition | log end offset minus committed offset |
 | `signalman_event_staleness_seconds` | gauge | partition | now minus the newest durable event time, at scrape |
-| `signalman_canary_age_seconds` | gauge | partition | seconds since the last canary alert was durable, at scrape |
+| `signalman_canary_age_seconds` | gauge | partition | signalmand: seconds since the last canary alert was durable on `alerts`, at scrape |
 | `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | counter | partition | the audit; 0 for every events.raw partition from its start; not in the spec table |
 | `signalman_audit_windows_total` | counter | none | the audit, per window closed; not in the spec table; G6 requires it rising |
@@ -334,7 +351,13 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_alerts_total` | counter | engine, rule_id | sink, per durable alert, by the serving engine; 0 per rule for each stored engine, removed with the rule on reload; not in the spec table |
 | `signalman_rollout_percent` | gauge | | the slot, on every rollout change; not in the spec table |
 | `signalman_event_time_future_total` | counter | partition | sink, per durable event whose event time is ahead of the clock; not in the spec table |
+| `signalman_sink_canary_age_seconds` | gauge | partition | signalman-sink: seconds since the last canary alert was stored in ClickHouse, at scrape; not in the spec table |
 | `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
+
+A `source` label is never the raw header: it is the header when it is one of
+`pipe.Sources`, `unknown` when the header is missing, and `other` otherwise.
+The header is producer-controlled, and as a label a non-UTF-8 value panics
+the Prometheus client and any value adds a series.
 
 `signalman_rule_eval_seconds` is sampled: on events whose Seq is a multiple
 of `-rule-eval-every` (default 100, 0 turns it off), a match worker times
@@ -362,12 +385,30 @@ every `-canary-interval` (default 30s; 0 turns it off), pinned to the
 partition, keyed `signalman-canary`, source `sysmon`. The event matches one
 rule, `rules/signalman_canary.yml`, and nothing else in `rules/`. The rule
 loads and is evaluated like any other, so the canary takes the same path as
-a real detection: normalize, the engine slot, the sink. When a batch holding
-a canary alert is durable, the sink resets that partition's
-`signalman_canary_age_seconds`. The alert is the one served: under a rollout
-that hands the canary rule to v2, a v2 that wrongly says false for it writes
-no canary alert, and the age climbs and pages. When no alert arrives, the gauge climbs,
-because it is computed at scrape time from the last reset.
+a real detection: normalize, the engine slot, the sink, signalman-sink,
+ClickHouse. Two gauges read it, one at each end of the alert path, and
+both climb when no alert arrives, because they are computed at scrape time
+from the last reset:
+
+- `signalman_canary_age_seconds`, in signalmand, resets when a batch
+  holding the partition's canary alert is durable on the `alerts` topic.
+  It covers ingest through the alerts produce.
+- `signalman_sink_canary_age_seconds`, in signalman-sink, resets when the
+  insert holding the partition's canary alert has returned, so the alert
+  is in the table. It covers the whole path, including signalman-sink and
+  ClickHouse, which is where the spec says the canary lands. signalman-sink
+  tracks every `events.raw` partition from startup (it refuses to start
+  without the topic), so one whose canary never lands climbs; partitions
+  added later are tracked after a restart.
+
+Both read the alert that was served: under a rollout that hands the canary
+rule to v2, a v2 that wrongly says false for it writes no canary alert, and
+both ages climb and page.
+
+The spec has one canary age, read at the sink. signalmand's half stays
+because it localizes the fault: only the sink age climbing means detection
+works and alert storage does not; both climbing means start with the
+pipeline.
 
 The generator starts a partition's age the first time it injects there, so
 a consumer that never comes up pages too. signalmand refuses to start, or
@@ -380,13 +421,18 @@ verdicts stay a pure function of the event and the rule set. The generator
 only produces; it buffers nothing, and a failed injection is logged and
 left for the next tick.
 
-`deploy/prometheus/alerts/absence.yml` pages on two conditions.
+`deploy/prometheus/alerts/absence.yml` pages on four conditions.
 `SignalmanCanaryStalled` fires when a partition's age is over 50s for 30s.
 The spec writes it as `> 120` for `2m`, which pages three to four and a
 half minutes after a consumer dies and misses the two-minute target; the
 file has the budget (50s + one scrape + one evaluation + 30s = 110s worst
 case). `SignalmanCanaryAbsent` covers the case the age cannot: when
 signalmand itself is gone, the gauge goes with it.
+`SignalmanSinkCanaryStalled` and `SignalmanSinkCanaryAbsent` are the same
+two rules on `signalman_sink_canary_age_seconds`, with the same threshold
+and `for` (a test holds them equal); the sink adds its 1s flush interval to
+the path. Prometheus scrapes signalmand on `:9464` and signalman-sink on
+`:9465`; a test fails if either is missing from `prometheus.yml`.
 `TestCanaryStallPagesWithinTwoMinutes` runs the pipeline and the generator
 on the in-memory broker with a fake clock, kills the consumer, and evaluates
 the rule as written in the file against the gauge every scrape interval.

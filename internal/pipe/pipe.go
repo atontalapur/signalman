@@ -9,6 +9,8 @@
 package pipe
 
 import (
+	"slices"
+
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/event"
 )
@@ -33,8 +35,40 @@ const TopicAlertsDead = "alerts.dead"
 // the untouched source record.
 const HeaderSource = "source"
 
-// SourceUnknown is the metric label for a record with no source header.
-const SourceUnknown = "unknown"
+// Sources is the closed set of source header values the pipeline accepts,
+// from the spec's Event.Source. A record naming any other source is a drop
+// with ReasonUnknownSource.
+var Sources = []string{"auditd", "cloudtrail", "sysmon"}
+
+// Source metric labels for a record outside Sources. The header is
+// producer-controlled bytes: used as a label, a value that is not UTF-8
+// panics client_golang, and any value at all grows a new series.
+const (
+	// SourceUnknown is the label for a record with no source header.
+	SourceUnknown = "unknown"
+	// SourceOther is the label for a header that is not in Sources,
+	// including one that is not valid UTF-8.
+	SourceOther = "other"
+)
+
+// knownSource reports whether src is one of Sources.
+func knownSource(src string) bool {
+	return slices.Contains(Sources, src)
+}
+
+// sourceLabel is the metric label for a source header: the header itself
+// when it is in Sources, otherwise SourceUnknown or SourceOther. Every label
+// derived from a record goes through here.
+func sourceLabel(src string) string {
+	switch {
+	case src == "":
+		return SourceUnknown
+	case knownSource(src):
+		return src
+	default:
+		return SourceOther
+	}
+}
 
 // Item is one record's trip through the pipeline. Ingest creates it with the
 // event's identity; normalize fills in the fields or a drop; match fills in

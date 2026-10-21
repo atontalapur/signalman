@@ -12,6 +12,7 @@ import (
 
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/event"
+	"github.com/atontalapur/signalman/internal/sigma"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -214,5 +215,117 @@ func TestShadowVerdictRecordOverTheLimitIsPermanent(t *testing.T) {
 	_, err := p.outputs(&batch{act: a, items: []*Item{it}})
 	if !errors.Is(err, broker.ErrPermanent) || !strings.Contains(err.Error(), TopicVerdictsV2) {
 		t.Fatalf("err = %v; a verdicts.v2 record over the output limit stops the pipeline", err)
+	}
+}
+
+// escapeHeavy is a raw record that matches the dump rule and carries two
+// string fields of '<', which JSON escapes to six bytes each. host is its
+// key; pad is the length of each '<' field.
+func escapeHeavy(host string, pad int) broker.Record {
+	lt := strings.Repeat("<", pad)
+	body := `{"Channel":"Microsoft-Windows-Sysmon/Operational","event_id":1,` +
+		`"Image":"C:\\Windows\\System32\\rundll32.exe",` +
+		`"CommandLine":"rundll32.exe comsvcs.dll, MiniDump 624 C:\\t.dmp full",` +
+		`"event_time":1790000000000,"a":"` + lt + `","b":"` + lt + `"}`
+	return rawRecord(host, "sysmon", body)
+}
+
+func TestPipelineMatchedEventWithEscapeHeavyFieldsIsAlertedNotDropped(t *testing.T) {
+	mem := newMemory(broker.WithMaxPoll(10))
+	r := newRig(t, mem, mem)
+	// About 123 KB, under the admit cap. Its alert with every field escaped
+	// a second time would be over the output limit; its events.norm is not.
+	big := escapeHeavy("host-big", 60<<10)
+	if size(big) > DefaultMaxRecordBytes {
+		t.Fatalf("test record is %d bytes, over the admit cap", size(big))
+	}
+	if err := mem.Produce(context.Background(), []broker.Record{big}); err != nil {
+		t.Fatal(err)
+	}
+	produceRaw(t, mem, 0, 20)
+	runUntilCommitted(t, newPipeline(t, r, testConfig()), mem)
+
+	var part int32 = -1
+	for _, rec := range readAll(t, mem, TopicEventsRaw) {
+		if string(rec.Key) == "host-big" {
+			part = rec.Partition
+		}
+	}
+	o := outcomes(t, mem)[part][0]
+	if o == nil || o.verdicts != 1 || o.drops != 0 {
+		t.Fatalf("outcome %+v; a matched event is evaluated, never dropped for its alert", o)
+	}
+	for _, rec := range readAll(t, mem, TopicDrops) {
+		var d DropEntry
+		if err := json.Unmarshal(rec.Value, &d); err != nil {
+			t.Fatal(err)
+		}
+		if d.Reason == ReasonOutputTooLarge {
+			t.Fatalf("output-too-large drop %+v", d)
+		}
+	}
+	found := false
+	for _, rec := range readAll(t, mem, TopicAlerts) {
+		if size(rec) > MaxOutputRecordBytes {
+			t.Fatalf("alert record of %d bytes written", size(rec))
+		}
+		var a Alert
+		if err := json.Unmarshal(rec.Value, &a); err != nil {
+			t.Fatal(err)
+		}
+		if a.Seq == 0 && a.Partition == part && a.HostID == "host-big" {
+			found = true
+			if !a.FieldsOmitted || len(a.Fields) != 0 || a.Raw != string(big.Value) {
+				t.Fatalf("bounded alert: fields_omitted %v, %d fields, raw intact %v", a.FieldsOmitted, len(a.Fields), a.Raw == string(big.Value))
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the matched event raised no alert")
+	}
+}
+
+func TestEveryAlertFitsTheOutputLimit(t *testing.T) {
+	limit := DefaultMaxRecordBytes
+	rs := loadRules(t)
+	var rule *sigma.Rule
+	for i := range rs.Rules {
+		if rs.Rules[i].ID == dumpRuleID {
+			rule = &rs.Rules[i]
+		}
+	}
+	// The record uses all of the admit cap, split between the key and two
+	// '<' fields, so both the raw and the fields escape at six times.
+	cases := map[string]broker.Record{
+		"raw at the cap": escapeHeavy("h", (limit-400)/2),
+		"key at the cap": escapeHeavy(strings.Repeat("<", limit/2), (limit/2-400)/2),
+		"short fields":   escapeHeavy("h", 10),
+	}
+	for name, r := range cases {
+		t.Run(name, func(t *testing.T) {
+			n, _ := newNormalizer(t)
+			it := NewIngest(n.m).Admit(r)
+			n.Normalize(it)
+			if it.Drop != nil {
+				if it.Drop.Reason == ReasonRecordTooLarge && size(r) > limit {
+					t.Skipf("record is %d bytes; not admitted", size(r))
+				}
+				t.Fatalf("dropped: %+v", it.Drop)
+			}
+			rec := AlertRecord(rule, it, "v1")
+			if s := size(rec); s > MaxOutputRecordBytes {
+				t.Fatalf("alert record is %d bytes, over the %d output limit", s, MaxOutputRecordBytes)
+			}
+			var a Alert
+			if err := json.Unmarshal(rec.Value, &a); err != nil {
+				t.Fatal(err)
+			}
+			if a.Raw != string(r.Value) {
+				t.Fatal("an alert keeps the raw record whole")
+			}
+			if a.FieldsOmitted == (len(a.Fields) > 0) {
+				t.Fatalf("fields_omitted %v with %d fields", a.FieldsOmitted, len(a.Fields))
+			}
+		})
 	}
 }

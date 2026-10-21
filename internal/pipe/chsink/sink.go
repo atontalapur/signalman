@@ -120,6 +120,9 @@ func (s *Sink) Run(ctx context.Context) error {
 	if parts, err := s.b.EndOffsets(ctx, pipe.TopicAlertsDead); err != nil || len(parts) == 0 {
 		return fmt.Errorf("dead-letter topic %s is required and was not found: %v", pipe.TopicAlertsDead, err)
 	}
+	if err := s.startCanary(ctx); err != nil {
+		return err
+	}
 
 	var (
 		buf      []pipe.Alert
@@ -139,6 +142,7 @@ func (s *Sink) Run(ctx context.Context) error {
 				}
 				return err
 			}
+			s.canary(buf)
 		}
 		s.commit(ctx, cons, next)
 		buf, first, next = nil, map[broker.TopicPartition]int64{}, map[broker.TopicPartition]int64{}
@@ -215,6 +219,43 @@ func (s *Sink) insert(ctx context.Context, rows []pipe.Alert) error {
 			return ctx.Err()
 		}
 		wait = min(2*wait, s.cfg.MaxBackoff)
+	}
+}
+
+// startCanary tracks signalman_sink_canary_age_seconds for every events.raw
+// partition from now. A partition whose canary alert never reaches the
+// table climbs from the moment the sink started, which is what makes a
+// ClickHouse that died before the first canary visible. The partitions are
+// listed once: one gauge per partition, and a partition added later is
+// tracked from the next restart.
+func (s *Sink) startCanary(ctx context.Context) error {
+	if s.m == nil {
+		return nil
+	}
+	parts, err := s.b.EndOffsets(ctx, pipe.TopicEventsRaw)
+	if err != nil || len(parts) == 0 {
+		return fmt.Errorf("topic %s is required for the canary age and was not found: %v", pipe.TopicEventsRaw, err)
+	}
+	for p := range parts {
+		s.m.SinkCanaryAge.Start(p)
+	}
+	return nil
+}
+
+// canary resets the canary age of every partition with a canary alert in
+// rows, which are stored. A partition not tracked at startup is skipped, so
+// the gauge never grows past the partitions events.raw had.
+func (s *Sink) canary(rows []pipe.Alert) {
+	if s.m == nil {
+		return
+	}
+	for _, a := range rows {
+		if a.RuleID != pipe.CanaryRuleID {
+			continue
+		}
+		if _, ok := s.m.SinkCanaryAge.Age(a.Partition); ok {
+			s.m.SinkCanaryAge.Reset(a.Partition)
+		}
 	}
 }
 

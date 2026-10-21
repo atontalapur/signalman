@@ -294,3 +294,53 @@ func TestConfigWorkerPoolsAreConfiguredNotComputed(t *testing.T) {
 		}
 	}
 }
+
+func TestPipelineUnknownOrInvalidSourceIsOneDropEach(t *testing.T) {
+	mem := newMemory(broker.WithMaxPoll(10))
+	r := newRig(t, mem, mem)
+	body := `{"event_time":1}`
+	// A source header that is not UTF-8 used to reach a Prometheus label,
+	// which panics the ingest goroutine on every redelivery.
+	bad := []broker.Record{
+		rawRecord("host-1", "sys\xffmon", body),
+		rawRecord("host-1", "never-seen-before", body),
+	}
+	if err := mem.Produce(context.Background(), bad); err != nil {
+		t.Fatal(err)
+	}
+	produceRaw(t, mem, 0, 20)
+	runUntilCommitted(t, newPipeline(t, r, testConfig()), mem)
+
+	outs := outcomes(t, mem)
+	for _, rec := range readAll(t, mem, TopicEventsRaw) {
+		o := outs[rec.Partition][uint64(rec.Offset)]
+		if o == nil || (o.verdicts == 0) == (o.drops == 0) {
+			t.Fatalf("partition %d seq %d: %+v; exactly one outcome is allowed", rec.Partition, rec.Offset, o)
+		}
+	}
+	got := 0
+	for _, rec := range readAll(t, mem, TopicDrops) {
+		var d DropEntry
+		if err := json.Unmarshal(rec.Value, &d); err != nil {
+			t.Fatal(err)
+		}
+		if d.Reason == ReasonUnknownSource {
+			got++
+		}
+	}
+	if got != 2 {
+		t.Fatalf("%d unknown-source drops, want 2", got)
+	}
+	if v := testutil.ToFloat64(r.m.EventsDropped.WithLabelValues(ReasonUnknownSource, SourceOther)); v != 2 {
+		t.Fatalf("dropped{reason=%s,source=%s} = %v", ReasonUnknownSource, SourceOther, v)
+	}
+	part := strconv.Itoa(int(readAll(t, mem, TopicEventsRaw)[0].Partition))
+	for _, rec := range readAll(t, mem, TopicEventsRaw) {
+		if string(rec.Key) == "host-1" {
+			part = strconv.Itoa(int(rec.Partition))
+		}
+	}
+	if v := testutil.ToFloat64(r.m.EventsIngested.WithLabelValues(SourceOther, part)); v != 2 {
+		t.Fatalf("ingested{source=%s} = %v; a header outside the known set is not a label", SourceOther, v)
+	}
+}
