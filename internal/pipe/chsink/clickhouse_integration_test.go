@@ -17,9 +17,16 @@ import (
 // rows are the rows a single insert left. It applies the DDL from
 // deploy/clickhouse (idempotent) and writes under a partition number no
 // pipeline produces, so it can share the table with other runs.
+//
+// SIGNALMAN_CLICKHOUSE_DSN is set by `make integration` and the CI
+// integration job. Without it the test skips locally and fails under
+// CI=true, where a skip would read green without running.
 func TestReingestCollapsesInClickHouse(t *testing.T) {
 	dsn := os.Getenv("SIGNALMAN_CLICKHOUSE_DSN")
 	if dsn == "" {
+		if os.Getenv("CI") == "true" {
+			t.Fatal("SIGNALMAN_CLICKHOUSE_DSN is not set")
+		}
 		t.Skip("SIGNALMAN_CLICKHOUSE_DSN is not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

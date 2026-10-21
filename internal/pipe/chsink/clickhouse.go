@@ -43,10 +43,13 @@ func checkDateTime64(name string, t time.Time) error {
 
 // Decode reads an alerts topic record and checks it fits the table. A
 // record that does not would fail every insert of its batch, so it is
-// refused here, with a reason, rather than retried forever.
+// refused here, with a reason, rather than retried forever; the sink
+// dead-letters it.
 //
-// The rule loader does not require a UUID id or a level, so a rule that
-// lacks either loads, matches, and produces alerts the table cannot hold.
+// The rule loader rejects a non-UUID id and a missing or unknown level
+// (codes invalid-id and level), so a loaded rule cannot produce such an
+// alert. These checks stay as a backstop for records from elsewhere: an
+// older rule set, a hand-written record, or a bug.
 func Decode(r broker.Record) (pipe.Alert, error) {
 	var a pipe.Alert
 	if err := json.Unmarshal(r.Value, &a); err != nil {

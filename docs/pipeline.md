@@ -202,14 +202,26 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   including "too many parts" while merges catch up, is retried as an
   outage.
 
-Idempotence is tested twice. `TestReingestingABatchChangesNoRow` models the
-merge (last insert wins per sorting key, within a day partition) and checks
-over 500 random histories that inserting a batch again, whole or as a
-prefix, changes no row of `FINAL` or of the merged table.
+Idempotence is checked twice, once against a model and once for real.
+`TestModelReingestChangesNoRow` runs over `replacingTable`, a model of the
+merge written for the test (last insert wins per sorting key, within a day
+partition), and checks over 500 random histories that inserting a batch
+again, whole or as a prefix, changes no row of `FINAL` or of the merged
+table. That shows the sink's redelivery pattern is safe if ClickHouse merges
+the way the model does; it proves nothing about ClickHouse.
 `TestReingestCollapsesInClickHouse` (build tag `integration`, needs
-`SIGNALMAN_CLICKHOUSE_DSN`) does the same against a real ClickHouse with
-`SELECT ... FINAL` and `OPTIMIZE TABLE ... FINAL`. It has not been run yet:
-there is no Docker on the development machine.
+`SIGNALMAN_CLICKHOUSE_DSN`, fails instead of skipping under `CI=true`) is
+the proof: the same check against a real ClickHouse with `SELECT ... FINAL`
+and `OPTIMIZE TABLE ... FINAL`. It has not been run yet: there is no Docker
+on the development machine.
+
+**Reset Redpanda and ClickHouse together.** `seq` is the `events.raw`
+offset, and `(partition, seq, rule_id)` is the table's dedup key. Recreating
+`events.raw` (or wiping the Redpanda volume) restarts offsets at 0, so new
+alerts reuse keys already in the table, and the ReplacingMergeTree collapses
+distinct alerts into one, silently. Wipe both volumes at once
+(`docker compose -f deploy/docker-compose.yml down -v`), or drop the
+`alerts` table when the topic is recreated.
 
 ## Rule set reload
 

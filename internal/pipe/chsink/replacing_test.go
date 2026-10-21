@@ -126,9 +126,13 @@ func genBatch(r *rand.Rand) []pipe.Alert {
 	return out
 }
 
-// TestReingestingABatchChangesNoRow is the S-40 property: inserting an
-// identical batch again, whole or in part, changes no row after merge.
-func TestReingestingABatchChangesNoRow(t *testing.T) {
+// TestModelReingestChangesNoRow checks the S-40 property against
+// replacingTable, a model of the merge written for this test: inserting an
+// identical batch again, whole or in part, changes no row after merge. It
+// shows the sink's redelivery pattern is safe if ClickHouse merges the way
+// the model does; it is not evidence that it does.
+// TestReingestCollapsesInClickHouse (integration) is that evidence.
+func TestModelReingestChangesNoRow(t *testing.T) {
 	for seed := range uint64(500) {
 		r := rand.New(rand.NewPCG(seed, 40))
 		tbl := &replacingTable{}
