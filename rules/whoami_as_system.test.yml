@@ -1,0 +1,28 @@
+rule: whoami_as_system.yml
+cases:
+  - name:   system account
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\whoami.exe
+      CommandLine: whoami
+      User:        NT AUTHORITY\SYSTEM
+
+  - name:   localized system account
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\whoami.exe
+      CommandLine: whoami
+      User:        AUTORITE NT\Systeme
+
+  - name:   ordinary user
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\whoami.exe
+      CommandLine: whoami
+      User:        CORP\alice

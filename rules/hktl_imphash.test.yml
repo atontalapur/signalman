@@ -1,0 +1,24 @@
+rule: hktl_imphash.yml
+cases:
+  - name:   known imphash, lower case
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:  C:\Users\Public\tool.exe
+      Hashes: SHA256=0D5F8D6C9D3A8C0E0A7B2B1C3D4E5F60718293A4B5C6D7E8F9012345678ABCDE,IMPHASH=1b1a3f43bf37b5bfe60751f2ee2f326e
+
+  - name:   other imphash
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:  C:\Windows\System32\notepad.exe
+      Hashes: SHA256=AA5F8D6C9D3A8C0E0A7B2B1C3D4E5F60718293A4B5C6D7E8F9012345678ABCDE,IMPHASH=00000000000000000000000000000000
+
+  - name:   no hashes logged
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image: C:\Users\Public\tool.exe

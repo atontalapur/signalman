@@ -1,0 +1,19 @@
+rule: psexec_service_child.yml
+cases:
+  - name:   cmd under psexesvc
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      ParentImage: C:\Windows\PSEXESVC.exe
+      Image:       C:\Windows\System32\cmd.exe
+      CommandLine: cmd.exe
+
+  - name:   psexec client on the source host
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      ParentImage: C:\Windows\System32\cmd.exe
+      Image:       C:\Tools\PsExec.exe
+      CommandLine: PsExec.exe \\host01 cmd.exe

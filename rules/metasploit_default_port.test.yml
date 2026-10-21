@@ -1,0 +1,28 @@
+rule: metasploit_default_port.yml
+cases:
+  - name:   rundll32 calling 4444
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    3
+      Image:           C:\Windows\System32\rundll32.exe
+      DestinationIp:   198.51.100.7
+      DestinationPort: 4444
+
+  - name:   browser on 8443
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    3
+      Image:           C:\Program Files\Google\Chrome\Application\chrome.exe
+      DestinationIp:   198.51.100.9
+      DestinationPort: 8443
+
+  - name:   ordinary https
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    3
+      Image:           C:\Windows\System32\svchost.exe
+      DestinationIp:   198.51.100.9
+      DestinationPort: 443

@@ -1,0 +1,23 @@
+title: PowerShell Encoded Command
+id: 296fa1ad-7ca6-47c3-9cc7-94ca537de8f9
+status: test
+description: PowerShell started with an encoded command line, which hides the script from command line logging.
+author: signalman
+tags:
+  - attack.execution
+  - attack.t1059.001
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_img:
+    Image|endswith:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  selection_cli:
+    CommandLine|windash|contains:
+      - ' -enc '
+      - ' -encodedcommand '
+      - ' -ec '
+  condition: selection_img and selection_cli
+level: medium

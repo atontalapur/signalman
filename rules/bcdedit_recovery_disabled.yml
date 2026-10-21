@@ -1,0 +1,24 @@
+title: Boot Recovery Disabled With Bcdedit
+id: aad57149-4ecc-4a95-ab46-b4675f5151df
+status: test
+description: bcdedit turning off Windows recovery or ignoring boot failures, so a damaged system cannot repair itself.
+author: signalman
+tags:
+  - attack.impact
+  - attack.t1490
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_img:
+    Image|endswith: '\bcdedit.exe'
+  selection_opt_recovery:
+    CommandLine|contains|all:
+      - 'recoveryenabled'
+      - 'no'
+  selection_opt_ignore:
+    CommandLine|contains|all:
+      - 'bootstatuspolicy'
+      - 'ignoreallfailures'
+  condition: selection_img and 1 of selection_opt_*
+level: high

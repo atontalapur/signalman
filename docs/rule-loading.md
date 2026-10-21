@@ -73,7 +73,10 @@ count shows up in the acceptance report.
 ## RuleSetV
 
 `LoadRuleSet(dir, tax)` walks the directory, loads each file, sorts the
-loaded rules by id, and hashes:
+loaded rules by id, and hashes the result. `<rule>.test.yml` fixture files
+sit beside their rules and are skipped by the walk (`sigma.IsFixture`).
+`LoadRuleFiles(paths, tax)` does the same for an explicit list of files,
+which is what the `signalman` CLI hands it. The hash covers:
 
 - each rule's id, and
 - `ast.Canonical` of its bound tree, and

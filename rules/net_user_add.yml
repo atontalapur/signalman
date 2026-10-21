@@ -1,0 +1,23 @@
+title: Local User Created With Net
+id: 6fabacc5-9485-4763-80c1-08118494c6b1
+status: test
+description: net or net1 adding a user account from the command line.
+author: signalman
+tags:
+  - attack.persistence
+  - attack.t1136.001
+logsource:
+  product: windows
+  service: security
+  category: process_creation
+detection:
+  selection_img:
+    Image|endswith:
+      - '\net.exe'
+      - '\net1.exe'
+  selection_cli:
+    CommandLine|contains|all:
+      - 'user'
+      - '/add'
+  condition: selection_img and selection_cli
+level: medium

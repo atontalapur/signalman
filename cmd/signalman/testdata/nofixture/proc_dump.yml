@@ -1,0 +1,17 @@
+title: LSASS Memory Dump via comsvcs
+id: 1f1a1f1a-0001-4000-8000-000000000001
+status: test
+level: high
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_img:
+    Image|endswith: '\rundll32.exe'
+  selection_cli:
+    CommandLine|contains:
+      - 'comsvcs.dll'
+      - 'MiniDump'
+  filter_backup:
+    ParentImage|endswith: '\veeam.exe'
+  condition: selection_img and selection_cli and not filter_backup
