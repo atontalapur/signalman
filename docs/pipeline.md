@@ -275,6 +275,9 @@ offset. Windows slide forward with the committed offset, at most
 `-audit-window` seqs at a time. A failing window is logged at error level,
 names the partition and seqs, and increments
 `signalman_audit_violations_total{partition}`; any increase is a P1.
+Every closed window, passing or failing, increments
+`signalman_audit_windows_total`, so a flat violations counter can be told
+apart from an audit that is not running (`-audit-interval 0`, or stuck).
 
 Each partition's audit starts at the later of the group's committed offset
 and the log start of `events.raw`, so offsets retention removed before the
@@ -318,6 +321,7 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_canary_age_seconds` | gauge | partition | seconds since the last canary alert was durable, at scrape |
 | `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | counter | partition | the audit; not in the spec table |
+| `signalman_audit_windows_total` | counter | none | the audit, per window closed; not in the spec table; G6 requires it rising |
 | `signalman_canary_injected_total` | counter | partition | the canary generator, per record written; not in the spec table |
 | `signalman_shadow_failures_total` | counter | engine | sink, per event the shadow failed on; not in the spec table |
 | `signalman_alerts_total` | counter | engine, rule_id | sink, per durable alert, by the serving engine; not in the spec table |

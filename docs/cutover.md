@@ -202,7 +202,9 @@ only when every item holds:
    and the count is zero outside one. Skew at steady state means the reload
    is not atomic, and that is fixed before retirement.
 5. Over those 14 days, `signalman_shadow_failures_total` and
-   `signalman_audit_violations_total` do not increase.
+   `signalman_audit_violations_total` do not increase, and
+   `signalman_audit_windows_total` rises at every 5m step: a flat
+   violations counter is also what an audit that never ran exports.
 6. v2 p99 match latency is within the spec target (under 400 µs) under
    production load for the whole period.
 7. Alert volume per rule while v2 serves matches the volume while v1 served,
@@ -287,7 +289,7 @@ Where each criterion comes from:
 | G2, G3 | Over 48 h: rollout held at 1, 10 or 50 on every instance, the G1 checks, alert volume per rule against the 48 h before within `-noise-sigma` (Poisson, default 3), and a rollback in `-drill` under 30 s | |
 | G4 | The G2 checks at 100 apart from alert volume, `signalman_alerts_total{engine="v1"}` flat, and a rollback from 100 in `-drill` | `flag-only`: no configuration change other than the rollout file |
 | G5 | `-drill` from `cutover gameday`: 100 to 0 and 0 to 100, each under 30 s; started on a weekday inside `-business-hours` in `-tz`; ingest rate at the rollback at least `-full-traffic` (0.8) of the 7 day mean | |
-| G6 | Over 14 days: rollout at 100, the G1 checks, audit violations flat, zero `version_skew`, alert volume against `-baseline-at` (a window when v1 served everything), the G5 drill, G0 to G5 dated here, no open divergence log entry | `v2-p99`; `skew-in-reloads` when there was any skew |
+| G6 | Over 14 days: rollout at 100, the G1 checks, the audit closing windows at every 5m step and its violations flat, zero `version_skew`, alert volume against `-baseline-at` (a window when v1 served everything), the G5 drill, G0 to G5 dated here, no open divergence log entry | `v2-p99`; `skew-in-reloads` when there was any skew |
 
 A criterion nothing here can check is `unchecked` until an operator states
 the evidence with `-attest key=evidence`, which is recorded as `attested`

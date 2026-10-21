@@ -206,6 +206,7 @@ func (a *Auditor) Step(ctx context.Context) ([]WindowReport, error) {
 			hi := min(committed[p], lo+a.cfg.Window)
 			w := a.close(p, lo, hi)
 			reports = append(reports, w)
+			a.m.AuditWindows.Inc()
 			if !w.OK() {
 				failed = append(failed, w.String())
 				a.m.AuditViolations.WithLabelValues(strconv.Itoa(int(p))).Add(float64(w.Missing + w.Both + w.Short))

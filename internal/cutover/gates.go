@@ -683,9 +683,15 @@ func (e *evaluator) g5() {
 
 func (e *evaluator) g6() {
 	e.live(100)
+	// A flat violations counter is also what an audit that never ran
+	// exports, so the audit must have closed windows at every step.
+	key, crit := "audit-running", "the invariant 1 audit closed windows at every 5m step of the window"
+	if got, st, ok := e.everyStep(key, crit, "audit windows", "sum(rate(signalman_audit_windows_total[5m]))"); ok {
+		e.add(key, crit, st, "%s", got)
+	}
 	e.zero("audit-violations", "the invariant 1 audit found nothing", "signalman_audit_violations_total", true)
 
-	key, crit := "skew-in-reloads", "every version_skew divergence falls inside a reload"
+	key, crit = "skew-in-reloads", "every version_skew divergence falls inside a reload"
 	query := fmt.Sprintf(`sum(increase(signalman_divergences_total{class="version_skew"}[%s]))`, e.w())
 	if v, _, ok := e.q(key, crit, query, e.c.At); ok {
 		if v == 0 {

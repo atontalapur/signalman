@@ -310,9 +310,15 @@ const ladderDoc = `# Equivalence and cutover
 Nothing recorded. No gate has been checked against production traffic.
 `
 
+// auditRan fills G6's audit query: windows closed at every 5m step.
+func auditRan(f *fakeSource, steps float64) {
+	f.instant[`count_over_time((sum(rate(signalman_audit_windows_total[5m])) > 0)[336h:5m])`] = steps
+}
+
 func TestG6(t *testing.T) {
 	f := newFake()
 	healthy(f, "336h", 100)
+	auditRan(f, 4032)
 	tue := time.Date(2026, 9, 15, 14, 0, 0, 0, time.UTC)
 	base := checkAt.Add(-60 * 24 * time.Hour)
 	q := `sum by (rule_id) (increase(signalman_alerts_total[336h]))`
@@ -481,5 +487,30 @@ func TestAlertVolumeBaselineNeedsCoverage(t *testing.T) {
 	r := eval(t, Config{Gate: "G2", Source: f, Drill: stepDrill(1, 0, 6)})
 	if c := statusOf(t, r, "coverage-baseline"); c.Status != Fail || r.Passed() {
 		t.Fatalf("coverage-baseline %+v", c)
+	}
+}
+
+// No audit violations means nothing only if the audit ran: a signalmand
+// with -audit-interval 0 exports a flat violations counter too.
+func TestG6NeedsTheAuditToHaveRun(t *testing.T) {
+	f := newFake()
+	healthy(f, "336h", 100)
+	tue := time.Date(2026, 9, 15, 14, 0, 0, 0, time.UTC)
+	base := checkAt.Add(-60 * 24 * time.Hour)
+	q := `sum by (rule_id) (increase(signalman_alerts_total[336h]))`
+	f.vectors[at(q, checkAt)] = []Sample{{Labels: map[string]string{"rule_id": "a"}, Value: 7000}}
+	f.vectors[at(q, base)] = []Sample{{Labels: map[string]string{"rule_id": "a"}, Value: 7000}}
+	cfg := Config{Gate: "G6", Source: f, Drill: gameDay(tue, 8, 11), Doc: ladderDoc, BaselineAt: base,
+		Attest: map[string]string{"v2-p99": "load run"}}
+	if r := eval(t, cfg); statusOf(t, r, "audit-running").Status != Fail || r.Passed() {
+		t.Fatalf("G6 with no audit windows: %+v", statusOf(t, r, "audit-running"))
+	}
+	auditRan(f, 4000)
+	if r := eval(t, cfg); statusOf(t, r, "audit-running").Status != Fail {
+		t.Fatal("an audit that stopped for part of the window passed")
+	}
+	auditRan(f, 4032)
+	if r := eval(t, cfg); !r.Passed() {
+		t.Fatalf("G6: %+v", r.Checks)
 	}
 }

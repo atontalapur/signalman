@@ -55,6 +55,10 @@ type Metrics struct {
 	// of the rule count. Not in the spec's table; it is the audit's output,
 	// and any increase is a P1. Labels: partition.
 	AuditViolations *prometheus.CounterVec
+	// AuditWindows counts the windows the invariant 1 audit closed. Not in
+	// the spec's table; a flat AuditViolations means nothing unless this
+	// rose over the same window, and G6 requires it to.
+	AuditWindows prometheus.Counter
 	// ShadowFailures counts events on which the shadow engine panicked or
 	// broke the verdict contract, so it wrote no verdicts for them. Not in
 	// the spec's table; the differ reports each as missing verdicts, and
@@ -134,6 +138,10 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 			Name: "signalman_audit_violations_total",
 			Help: "Committed events with no verdicts and no drop, with both, or with too few verdicts.",
 		}, []string{"partition"}),
+		AuditWindows: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "signalman_audit_windows_total",
+			Help: "Seq windows the invariant 1 audit closed, passing or failing.",
+		}),
 		ShadowFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "signalman_shadow_failures_total",
 			Help: "Events the shadow engine panicked on or returned a malformed verdict list for.",
@@ -158,6 +166,6 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 // Collectors is every collector New registers.
 func (m *Metrics) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
-		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.EventTimeFuture, m.CanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations,
+		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.EventTimeFuture, m.CanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations, m.AuditWindows,
 		m.SinkDeadLetters, m.ShadowFailures, m.Alerts, m.RolloutPercent}
 }
