@@ -5,7 +5,7 @@ GO_PKGS := ./...
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.1
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
-.PHONY: check fmt vet test build lint tidy-check fuzz fuzz-differential check-backlog check-python integration
+.PHONY: check fmt vet test build lint tidy-check fuzz fuzz-differential check-backlog check-python check-alerts integration
 
 ## check: everything a PR must pass. Same as the ci workflow's go job.
 check: fmt tidy-check vet build test lint
@@ -32,6 +32,18 @@ test:
 lint:
 	go run $(STATICCHECK) $(GO_PKGS)
 	go run $(GOVULNCHECK) $(GO_PKGS)
+
+## check-alerts: validate the Prometheus config and alert rules and run their
+## promtool unit tests. Needs promtool on PATH (it ships in the Prometheus
+## release archive); without it, say so rather than pass silently.
+check-alerts:
+	@if command -v promtool >/dev/null; then \
+	  promtool check config --syntax-only deploy/prometheus/prometheus.yml && \
+	  promtool check rules deploy/prometheus/alerts/*.yml && \
+	  cd deploy/prometheus && promtool test rules alerts_test.yml; \
+	else \
+	  echo "note: promtool not on PATH, alert rules were not checked"; \
+	fi
 
 ## integration: needs Redpanda and ClickHouse up (deploy/docker-compose.yml).
 integration:

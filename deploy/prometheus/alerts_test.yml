@@ -1,0 +1,31 @@
+# promtool unit tests for the alert rules:
+#
+#   promtool test rules deploy/prometheus/alerts_test.yml
+#
+# `make check-alerts` runs this when promtool is on PATH.
+rule_files:
+  - alerts/pipeline.yml
+
+evaluation_interval: 15s
+
+tests:
+  # One violation on partition 2 pages; partition 0 stays quiet.
+  - interval: 15s
+    input_series:
+      - series: 'signalman_audit_violations_total{partition="2"}'
+        values: '0x10 1x20'
+      - series: 'signalman_audit_violations_total{partition="0"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: SignalmanAuditViolation
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: SignalmanAuditViolation
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              partition: "2"
+            exp_annotations:
+              summary: "Invariant 1 audit failed on partition 2"
+              runbook: "An admitted event has no verdicts and no drop, both, or too few verdicts. Find the window in signalmand's error log; assume detections were missed on that partition until proven otherwise."

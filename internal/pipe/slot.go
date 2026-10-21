@@ -6,6 +6,7 @@ import (
 
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/sigma"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Slot holds the engine new batches are evaluated with. Store swaps it
@@ -26,6 +27,23 @@ type Slot struct {
 type active struct {
 	eng   Engine
 	rules map[string]*sigma.Rule
+
+	// evalObs is the rule_eval_seconds child per rule, in RuleSet order,
+	// made on first use so a pipeline that never samples exports none.
+	evalOnce sync.Once
+	evalObs  []prometheus.Observer
+}
+
+// observers returns the rule_eval_seconds child for every rule.
+func (a *active) observers(m *obs.Metrics) []prometheus.Observer {
+	a.evalOnce.Do(func() {
+		rs := a.eng.RuleSet()
+		a.evalObs = make([]prometheus.Observer, len(rs.Rules))
+		for i := range rs.Rules {
+			a.evalObs[i] = m.RuleEval.WithLabelValues(rs.Rules[i].ID)
+		}
+	})
+	return a.evalObs
 }
 
 // NewSlot starts with e active.

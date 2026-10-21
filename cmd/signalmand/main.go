@@ -53,6 +53,7 @@ type flags struct {
 	partitions       int
 	auditInterval    time.Duration
 	auditWindow      int64
+	ruleEvalEvery    int
 }
 
 func parseFlags(args []string) (flags, error) {
@@ -76,6 +77,7 @@ func parseFlags(args []string) (flags, error) {
 	fs.IntVar(&f.partitions, "partitions", 8, "partitions per topic for -create-topics")
 	fs.DurationVar(&f.auditInterval, "audit-interval", 10*time.Second, "how often the invariant 1 audit runs; 0 disables it")
 	fs.Int64Var(&f.auditWindow, "audit-window", 10000, "widest seq range the audit checks at once")
+	fs.IntVar(&f.ruleEvalEvery, "rule-eval-every", 100, "time every rule on events whose seq is a multiple of this, for signalman_rule_eval_seconds; 0 disables")
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}
@@ -181,6 +183,7 @@ func run(f flags, log *slog.Logger) error {
 		MatchWorkers:       f.matchWorkers,
 		QueueSize:          f.queue,
 		MaxInflightBatches: f.inflight,
+		RuleEvalEvery:      f.ruleEvalEvery,
 	}, b, pipe.NewNormalizer(tax, pipe.NormalizeConfig{}, m), slot, m, log)
 	if err != nil {
 		return err

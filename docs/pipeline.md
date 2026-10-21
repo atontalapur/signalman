@@ -136,18 +136,38 @@ belongs on Redpanda.
 ## Metrics
 
 Names from the spec's core metrics table, in `internal/obs`.
+`internal/obs/metrics_test.go` parses that table out of the spec and fails if
+the registered set, types, or labels differ from it.
 
-| Metric | Labels | Set by |
-|---|---|---|
-| `signalman_events_ingested_total` | source, partition | ingest, per admitted record |
-| `signalman_events_dropped_total` | reason, source | normalizer, per drop |
-| `signalman_verdicts_total` | engine, matched | sink, once durable |
-| `signalman_rule_matches_total` | rule_id | sink, once durable |
-| `signalman_stage_queue_depth` | stage (normalize, match, sink, batches) | sampled every second |
-| `signalman_consumer_lag_records` | topic, partition | log end offset minus committed offset |
-| `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
-| `signalman_audit_violations_total` | partition | the audit; not in the spec table |
+| Metric | Type | Labels | Set by |
+|---|---|---|---|
+| `signalman_events_ingested_total` | counter | source, partition | ingest, per admitted record |
+| `signalman_events_dropped_total` | counter | reason, source | normalizer, per drop |
+| `signalman_verdicts_total` | counter | engine, matched | sink, once durable |
+| `signalman_rule_matches_total` | counter | rule_id | sink, once durable |
+| `signalman_rule_eval_seconds` | histogram | rule_id | match workers, sampled (`-rule-eval-every`) |
+| `signalman_stage_queue_depth` | gauge | stage (normalize, match, sink, batches) | sampled every second |
+| `signalman_consumer_lag_records` | gauge | topic, partition | log end offset minus committed offset |
+| `signalman_event_staleness_seconds` | gauge | partition | now minus the newest durable event time, at scrape |
+| `signalman_canary_age_seconds` | gauge | partition | seconds since the last canary alert was durable, at scrape |
+| `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
+| `signalman_audit_violations_total` | counter | partition | the audit; not in the spec table |
 
-Not yet exported: `signalman_rule_eval_seconds`,
-`signalman_event_staleness_seconds`, `signalman_canary_age_seconds`. Those are
-Plan E.
+`signalman_rule_eval_seconds` is sampled: on events whose Seq is a multiple
+of `-rule-eval-every` (default 100, 0 turns it off), a match worker times
+each rule's logsource test and condition walk, the same work v1 does per
+rule, and throws the result away. The verdicts come from the engine as
+always, so sampling costs time and cannot change one. Buckets run from
+100ns to about 26ms by factors of four; exemplars are off.
+
+Lag and staleness are separate. Lag is records in `events.raw` not yet
+committed. Staleness is `now() - max(event_time)` over events whose batch is
+durable, per partition, computed when Prometheus scrapes, so it keeps rising
+while nothing arrives. An upstream that stops producing leaves lag at zero
+and staleness climbing; only staleness sees it. The wall clock is read only
+by the metric, never by anything a verdict depends on.
+
+`deploy/prometheus/` holds the scrape config and alert rules, with promtool
+unit tests in `alerts_test.yml` (`make check-alerts`).
+`deploy/grafana/dashboards/signalman.json` is the dashboard, provisioned
+into the compose stack's Grafana at `localhost:3000`.

@@ -12,6 +12,7 @@ import (
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/obs"
+	"github.com/atontalapur/signalman/internal/sigma/ast"
 )
 
 // Stage labels for signalman_stage_queue_depth. Each names the bounded
@@ -44,10 +45,18 @@ type Config struct {
 	RetryBackoff time.Duration
 	// SampleInterval is how often queue depth is sampled. Default 1s.
 	SampleInterval time.Duration
+	// RuleEvalEvery times every rule on events whose Seq is a multiple of
+	// it, for signalman_rule_eval_seconds. 0 turns timing off. The timed
+	// walk is separate from the verdicts and its result is discarded, so
+	// sampling costs time and never changes a verdict.
+	RuleEvalEvery int
 }
 
 func (c Config) validate() error {
 	var errs []error
+	if c.RuleEvalEvery < 0 {
+		errs = append(errs, fmt.Errorf("RuleEvalEvery must not be negative, got %d", c.RuleEvalEvery))
+	}
 	if c.Group == "" {
 		errs = append(errs, errors.New("group is required"))
 	}
@@ -174,6 +183,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		for w := range matchCh {
 			if w.it.Drop == nil {
 				p.match(w.b.act.eng, w.it)
+				p.timeRules(w.b.act, w.it.Event)
 			}
 			if !send(ctx, sinkCh, w) {
 				return
@@ -251,6 +261,26 @@ func (p *Pipeline) match(eng Engine, it *Item) {
 	}
 }
 
+// timeRules observes signalman_rule_eval_seconds for every rule on a
+// sampled event. Each sample is the rule's logsource test and, when it
+// covers the event, its condition walk: what v1 does per rule. The result
+// is thrown away; the verdicts were already made by the engine.
+func (p *Pipeline) timeRules(a *active, ev *event.Event) {
+	if p.cfg.RuleEvalEvery == 0 || ev.Seq%uint64(p.cfg.RuleEvalEvery) != 0 {
+		return
+	}
+	rules := a.eng.RuleSet().Rules
+	obsv := a.observers(p.m)
+	for i := range rules {
+		r := &rules[i]
+		start := time.Now()
+		if r.LogSource.Matches(ev) {
+			_ = ast.Eval(r.Cond, ev)
+		}
+		obsv[i].Observe(time.Since(start).Seconds())
+	}
+}
+
 // sink completes batches in poll order: wait for every item, write the
 // outputs, wait until they are durable, commit.
 func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-chan *batch, sinkCh <-chan work) error {
@@ -280,6 +310,7 @@ func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-cha
 			return err
 		}
 		p.count(b)
+		p.stale(b)
 		p.commit(ctx, cons, b)
 	}
 }
@@ -329,6 +360,20 @@ func (p *Pipeline) count(b *batch) {
 	p.m.Verdicts.WithLabelValues(name, "false").Add(unmatched)
 	for id, n := range perRule {
 		p.m.RuleMatches.WithLabelValues(id).Add(n)
+	}
+}
+
+// stale advances event staleness to the newest event time in a batch that
+// is now durable. Drops carry no trustworthy event time and are skipped.
+func (p *Pipeline) stale(b *batch) {
+	newest := map[int32]time.Time{}
+	for _, it := range b.items {
+		if it.Drop == nil && it.Event.EventTime.After(newest[it.Event.Partition]) {
+			newest[it.Event.Partition] = it.Event.EventTime
+		}
+	}
+	for part, t := range newest {
+		p.m.Staleness.Advance(part, t)
 	}
 }
 
