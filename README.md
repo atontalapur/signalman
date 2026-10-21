@@ -71,11 +71,23 @@ A corpus is a directory of `.ndjson` or `.jsonl` files, one JSON event per
 line, with field names as they appear after the taxonomy. A rule may
 declare `budget:` in matches per 100k events; noise exits 1 above it.
 
+Plan C's code has landed. `cmd/signalmand` consumes `events.raw`, assigns Seq
+from the offset, normalizes through the taxonomy, evaluates with v1, and
+writes `events.norm`, `verdicts.v1`, `alerts`, and `drops`, committing
+offsets only after a batch's outputs are durable. Stages are joined by
+bounded channels, rule set reloads land between batches, and an in-process
+audit checks invariant 1 against the output topics. `internal/broker` puts
+Redpanda (franz-go) and an in-memory broker behind one interface, so the
+delivery logic is unit tested without Docker. `docs/pipeline.md` covers
+topics, record formats, drop reasons, delivery, and the audit. The gate is
+not passed: the audit is green over generated load in test mode, but the
+one-hour soak against Redpanda has not been run.
+
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
-| C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | not started |
+| C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
@@ -128,18 +140,20 @@ internal/explain/       explain walker and renderer, held equal to v1 by test
 internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
 internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL
-internal/pipe/          stages, bounded queues, drop ledger
-internal/obs/           metrics, canary
+internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit
+internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
+internal/obs/           metrics (canary is Plan E)
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
 test/replay/            corpus replay, digest comparison
-deploy/                 Dockerfile; docker compose for Redpanda and ClickHouse
+deploy/                 Dockerfile; docker compose for Redpanda, topic setup, and ClickHouse
 docs/spec/              the spec (signalman-v1.html)
 docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
+docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
@@ -157,7 +171,19 @@ that needs them.
 - Go 1.27, module `github.com/atontalapur/signalman`.
 - `make check` before every commit: gofmt, vet, `go mod tidy` diff, build,
   race tests, staticcheck, govulncheck. CI runs the same target.
-- `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`.
+- `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`:
+  `docker compose -f deploy/docker-compose.yml up -d --wait`. Integration tests
+  carry the `integration` build tag and reach Redpanda at `localhost:19092`
+  (override with `SIGNALMAN_BROKERS`).
+- Run the daemon against the compose stack:
+  `go run ./cmd/signalmand -rules <dir> -taxonomy config/taxonomy`. It
+  serves `/metrics` on `:9464`, reloads rules on `SIGHUP`, and by default
+  refuses a rule directory with any rejection (`-strict=false` loads what it
+  can). Worker pools, queue size, in-flight batches, and batch size are flags
+  with fixed defaults, not derived from the machine.
+- `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
+  run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
+  lengthens it, memory permitting.
 - `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
   one. Nightly CI runs them for 10 minutes each and uploads any crashers.
 - `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer

@@ -191,3 +191,27 @@ func TestTaxonomyRejectsAnEntryWithNoLogSource(t *testing.T) {
 		t.Fatal("an entry with no logsource at all must be an error")
 	}
 }
+
+func TestTaxonomyFieldNamesAreTheConcreteNamesSorted(t *testing.T) {
+	tax := loadTax(t)
+	names := tax.FieldNames()
+	for i := 1; i < len(names); i++ {
+		if names[i-1] >= names[i] {
+			t.Fatalf("not sorted and unique: %v", names)
+		}
+	}
+	has := map[string]bool{}
+	for _, n := range names {
+		has[n] = true
+	}
+	// Match keys and the right-hand side of field mappings are what an
+	// event carries. The rule-side names are not.
+	for _, want := range []string{"channel", "event_id", "Image", "NewProcessName"} {
+		if !has[want] {
+			t.Fatalf("%s missing from %v", want, names)
+		}
+	}
+	if has["ParentImage"] && !has["ParentProcessName"] {
+		t.Fatal("every mapped name is listed")
+	}
+}
