@@ -498,6 +498,7 @@ func ruleSetFrom(t *testing.T, tax *Taxonomy, srcs ...string) *RuleSet {
 
 const vssRule = `title: t
 id: 00000000-0000-4000-8000-0000000000aa
+level: low
 logsource:
   product: windows
   category: process_creation
@@ -547,6 +548,7 @@ func TestRuleSetVersionDoesNotCollideOnValueLists(t *testing.T) {
 	tax := loadTax(t)
 	src := `title: t
 id: 00000000-0000-4000-8000-0000000000ab
+level: low
 logsource:
   product: windows
   category: process_creation
