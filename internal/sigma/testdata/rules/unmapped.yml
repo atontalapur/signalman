@@ -1,5 +1,6 @@
 title: Something on an unmapped source
 id: 1f1a1f1a-0003-4000-8000-000000000003
+level: low
 logsource:
   product: macos
   category: process_creation

@@ -34,14 +34,14 @@ func (t *replacingTable) Insert(_ context.Context, rows []pipe.Alert) error {
 }
 
 type sortKey struct {
-	day       string // toYYYYMMDD(event_time)
+	day       string // toYYYYMMDD(ingest_time)
 	partition int32
 	seq       uint64
 	ruleID    string
 }
 
 func keyOf(a pipe.Alert) sortKey {
-	return sortKey{a.EventTime.UTC().Format("20060102"), a.Partition, a.Seq, a.RuleID}
+	return sortKey{a.IngestTime.UTC().Format("20060102"), a.Partition, a.Seq, a.RuleID}
 }
 
 // final returns the merged rows in (day, ORDER BY) order without merging
@@ -127,9 +127,13 @@ func genBatch(r *rand.Rand) []pipe.Alert {
 	return out
 }
 
-// TestReingestingABatchChangesNoRow is the S-40 property: inserting an
-// identical batch again, whole or in part, changes no row after merge.
-func TestReingestingABatchChangesNoRow(t *testing.T) {
+// TestModelReingestChangesNoRow checks the S-40 property against
+// replacingTable, a model of the merge written for this test: inserting an
+// identical batch again, whole or in part, changes no row after merge. It
+// shows the sink's redelivery pattern is safe if ClickHouse merges the way
+// the model does; it is not evidence that it does.
+// TestReingestCollapsesInClickHouse (integration) is that evidence.
+func TestModelReingestChangesNoRow(t *testing.T) {
 	for seed := range uint64(500) {
 		r := rand.New(rand.NewPCG(seed, 40))
 		tbl := &replacingTable{}
@@ -179,7 +183,7 @@ func TestReplacingModelCollapsesOnKeyOnly(t *testing.T) {
 	}
 	// The same key on another day sits in another PARTITION BY partition.
 	other := a
-	other.EventTime = a.EventTime.Add(24 * time.Hour)
+	other.IngestTime = a.IngestTime.Add(24 * time.Hour)
 	_ = tbl.Insert(ctx, []pipe.Alert{other})
 	if got := len(tbl.final()); got != 5 {
 		t.Fatalf("%d rows; a different day is a different partition", got)

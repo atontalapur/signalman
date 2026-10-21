@@ -136,16 +136,20 @@ func TestKafkaPinnedPartitionAndReadFrom(t *testing.T) {
 	}
 }
 
-func TestKafkaCommitOffsetsOutsideTheGroup(t *testing.T) {
+func TestKafkaCommitCheckpointsOutsideTheGroup(t *testing.T) {
 	b := dial(t)
 	name := topic(t, b, 2)
 	ctx := context.Background()
 	group := "it-commit-" + name
-	if err := b.CommitOffsets(ctx, group, map[broker.TopicPartition]int64{{Topic: name, Partition: 1}: 0}); err != nil {
+	if err := b.CommitCheckpoints(ctx, group, map[broker.TopicPartition]broker.Checkpoint{{Topic: name, Partition: 1}: {Next: 0, Meta: `{"v":1}`}}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := b.CommittedOffsets(ctx, group, name)
 	if err != nil || c[1] != 0 {
 		t.Fatalf("committed %v %v", c, err)
+	}
+	cp, err := b.Checkpoints(ctx, group, name)
+	if err != nil || len(cp) != 1 || cp[1] != (broker.Checkpoint{Next: 0, Meta: `{"v":1}`}) {
+		t.Fatalf("checkpoints %v %v", cp, err)
 	}
 }

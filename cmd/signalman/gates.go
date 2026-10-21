@@ -21,9 +21,10 @@ import (
 // earlier comment by it and edits that comment instead of adding another.
 const reportMarker = "<!-- signalman-gates -->"
 
-// maxReport keeps the report under GitHub's 65,536 character comment limit
-// with room to spare. Past it the details are dropped and the table kept.
-const maxReport = 60000
+// maxComment keeps the --comment report under GitHub's 65,536 character
+// comment limit with room to spare. Past it the details go first, then the
+// table rows that passed; failures and warnings are listed before them.
+const maxComment = 60000
 
 type gateStatus int
 
@@ -95,6 +96,7 @@ func cmdGates(args []string, stdout, stderr io.Writer) int {
 	changed := fs.String("changed", "", "file of changed paths, NUL or newline separated, as git diff writes them")
 	samples := fs.Int("samples", 10000, "timed evaluations per rule for the latency gate")
 	threshold := fs.Duration("threshold", 50*time.Microsecond, "p99 latency budget per rule")
+	comment := fs.String("comment", "", "also write the report, cut to fit one PR comment, to this file")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return exitUsage
@@ -166,9 +168,20 @@ func cmdGates(args []string, stdout, stderr io.Writer) int {
 
 	hdr := reportHeader{TaxonomyV: tax.Version, Corpus: *corpus, Events: len(corpusEvents),
 		Threshold: *threshold, Samples: *samples}
-	if err := renderReport(stdout, hdr, report, missing); err != nil {
+	if err := renderReport(stdout, hdr, report, missing, 0); err != nil {
 		fmt.Fprintf(stderr, "signalman: %v\n", err)
 		return exitUsage
+	}
+	if *comment != "" {
+		var b bytes.Buffer
+		if err := renderReport(&b, hdr, report, missing, maxComment); err != nil {
+			fmt.Fprintf(stderr, "signalman: %v\n", err)
+			return exitUsage
+		}
+		if err := os.WriteFile(*comment, b.Bytes(), 0o644); err != nil {
+			fmt.Fprintf(stderr, "signalman: --comment: %v\n", err)
+			return exitUsage
+		}
 	}
 	if failed {
 		return exitFail
@@ -380,13 +393,23 @@ func absPath(p string) string {
 // rule and one cell per gate, then a details section for each rule with
 // anything to say. Everything taken from a rule or an event goes inside a
 // code span or a fenced block.
-func renderReport(w io.Writer, h reportHeader, rules []ruleGates, missing []string) error {
-	var head strings.Builder
-	fmt.Fprintln(&head, reportMarker)
-	fmt.Fprintln(&head, "## Rule gates")
-	fmt.Fprintln(&head)
+//
+// limit 0 writes everything. Otherwise the report is cut to at most limit
+// bytes: details go first, then table rows and not-checked lines, keeping
+// failures, then warnings, then passes, each in path order. The report says
+// what it left out.
+func renderReport(w io.Writer, h reportHeader, rules []ruleGates, missing []string, limit int) error {
+	var pre strings.Builder
+	fmt.Fprintln(&pre, reportMarker)
+	fmt.Fprintln(&pre, "## Rule gates")
+	fmt.Fprintln(&pre)
+	type line struct {
+		text string
+		rank int // 0 failed, 1 warned, 2 not checked, 3 passed
+	}
+	var lines []line
 	if len(rules) == 0 {
-		fmt.Fprintln(&head, "No rule files changed.")
+		fmt.Fprintln(&pre, "No rule files changed.")
 	} else {
 		failed, warned := 0, 0
 		for i := range rules {
@@ -401,16 +424,16 @@ func renderReport(w io.Writer, h reportHeader, rules []ruleGates, missing []stri
 		if len(rules) == 1 {
 			noun = "rule"
 		}
-		fmt.Fprintf(&head, "%d %s checked: %d failed, %d with warnings, %d passed.\n\n",
+		fmt.Fprintf(&pre, "%d %s checked: %d failed, %d with warnings, %d passed.\n\n",
 			len(rules), noun, failed, warned, len(rules)-failed-warned)
 		corpus := "no corpus given, so the noise gate is skipped"
 		if h.Corpus != "" {
 			corpus = fmt.Sprintf("corpus %s, %d events", mdCode(h.Corpus), h.Events)
 		}
-		fmt.Fprintf(&head, "Taxonomy %s; %s; latency budget %s p99 over %d samples.\n\n",
+		fmt.Fprintf(&pre, "Taxonomy %s; %s; latency budget %s p99 over %d samples.\n\n",
 			mdCode(h.TaxonomyV), corpus, h.Threshold, h.Samples)
-		fmt.Fprintln(&head, "| Rule | Parse | Fixtures | Noise | Latency | Prefilter |")
-		fmt.Fprintln(&head, "|---|---|---|---|---|---|")
+		fmt.Fprintln(&pre, "| Rule | Parse | Fixtures | Noise | Latency | Prefilter |")
+		fmt.Fprint(&pre, "|---|---|---|---|---|---|\n")
 		for i := range rules {
 			rg := &rules[i]
 			cells := make([]string, 0, numGates+1)
@@ -418,28 +441,89 @@ func renderReport(w io.Writer, h reportHeader, rules []ruleGates, missing []stri
 			for _, g := range rg.Gates {
 				cells = append(cells, cellText(statusCell(g)))
 			}
-			fmt.Fprintf(&head, "| %s |\n", strings.Join(cells, " | "))
+			rank := 3
+			switch rg.worst() {
+			case gateFail:
+				rank = 0
+			case gateWarn:
+				rank = 1
+			}
+			lines = append(lines, line{fmt.Sprintf("| %s |\n", strings.Join(cells, " | ")), rank})
 		}
 	}
-	if len(missing) > 0 {
-		fmt.Fprintln(&head)
-		fmt.Fprintln(&head, "Not checked:")
-		fmt.Fprintln(&head)
-		for _, p := range missing {
-			fmt.Fprintf(&head, "- %s: not present in this revision (a fixture changed for a deleted rule?)\n", mdCode(p))
-		}
+	nRows := len(lines)
+	for _, p := range missing {
+		lines = append(lines, line{fmt.Sprintf("- %s: not present in this revision (a fixture changed for a deleted rule?)\n", mdCode(p)), 2})
 	}
+	const missingHead = "\nNot checked:\n\n"
 
 	var details strings.Builder
 	for i := range rules {
 		writeDetails(&details, &rules[i])
 	}
 
-	out := head.String()
-	if len(out)+len(details.String()) <= maxReport {
-		out += details.String()
-	} else {
-		out += "\nDetails were cut to fit a PR comment. Run `signalman gates` locally, or read the job summary, for the full report.\n"
+	// assemble writes the chosen lines in their original order, the table
+	// rows first and the not-checked list after.
+	assemble := func(keep []bool, tail string) string {
+		var b strings.Builder
+		b.WriteString(pre.String())
+		for i := 0; i < nRows; i++ {
+			if keep[i] {
+				b.WriteString(lines[i].text)
+			}
+		}
+		head := false
+		for i := nRows; i < len(lines); i++ {
+			if keep[i] {
+				if !head {
+					b.WriteString(missingHead)
+					head = true
+				}
+				b.WriteString(lines[i].text)
+			}
+		}
+		b.WriteString(tail)
+		return b.String()
+	}
+	all := make([]bool, len(lines))
+	for i := range all {
+		all[i] = true
+	}
+	out := assemble(all, details.String())
+	if limit > 0 && len(out) > limit {
+		out = assemble(all, "\nDetails were cut to fit a PR comment. The job summary has the full report, "+
+			"and `signalman gates` run locally prints it.\n")
+	}
+	if limit > 0 && len(out) > limit {
+		// Rows go in rank order while they fit, with room for the note.
+		order := make([]int, len(lines))
+		for i := range order {
+			order[i] = i
+		}
+		sort.SliceStable(order, func(a, b int) bool { return lines[order[a]].rank < lines[order[b]].rank })
+		const noteRoom = 400
+		size := pre.Len() + len(missingHead)
+		keep := make([]bool, len(lines))
+		kept, keptMissing := 0, 0
+		for _, i := range order {
+			if size+len(lines[i].text) > limit-noteRoom {
+				break
+			}
+			size += len(lines[i].text)
+			keep[i] = true
+			if i < nRows {
+				kept++
+			} else {
+				keptMissing++
+			}
+		}
+		note := fmt.Sprintf("\n%d of %d rules are not listed", nRows-kept, nRows)
+		if n := len(missing) - keptMissing; n > 0 {
+			note += fmt.Sprintf(", nor %d of %d files not checked", n, len(missing))
+		}
+		note += ", and details were cut, to fit a PR comment. Failures, warnings, and files not checked are listed first. " +
+			"The job summary has the full report, and `signalman gates` run locally prints it.\n"
+		out = assemble(keep, note)
 	}
 	_, err := io.WriteString(w, out)
 	return err

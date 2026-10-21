@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/atontalapur/signalman/internal/broker"
@@ -54,6 +55,9 @@ func Dial(ctx context.Context, cfg Config) (*Broker, error) {
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(partitioner{keyed: kgo.StickyKeyPartitioner(nil)}),
 		kgo.ProducerLinger(5*time.Millisecond),
+		// The same limit as max.message.bytes on the topics, so a record
+		// too large for the broker fails here, fast, as MessageTooLarge.
+		kgo.ProducerBatchMaxBytes(broker.MaxMessageBytes),
 	)
 	if err != nil {
 		return nil, err
@@ -126,17 +130,50 @@ func (b *Broker) Produce(ctx context.Context, recs []broker.Record) error {
 	for i, r := range recs {
 		krs[i] = toKgo(r)
 	}
-	return b.prod.ProduceSync(ctx, krs...).FirstErr()
+	return classify(b.prod.ProduceSync(ctx, krs...).FirstErr())
+}
+
+// permanent are the produce errors franz-go hands back that a retry cannot
+// fix. franz-go has already retried what is retriable (an unknown topic a
+// few times, for metadata to catch up), so these are final.
+var permanent = []error{
+	kerr.MessageTooLarge,
+	kerr.RecordListTooLarge,
+	kerr.InvalidRecord,
+	kerr.UnknownTopicOrPartition,
+	kerr.InvalidTopicException,
+	kerr.TopicAuthorizationFailed,
+	kerr.ClusterAuthorizationFailed,
+}
+
+// classify wraps a permanent produce error in broker.ErrPermanent. A pinned
+// partition the topic does not have fails inside franz-go with a plain
+// error and no code, so it is matched on its text.
+func classify(err error) error {
+	if err == nil {
+		return nil
+	}
+	for _, p := range permanent {
+		if errors.Is(err, p) {
+			return fmt.Errorf("%w: %w", broker.ErrPermanent, err)
+		}
+	}
+	if strings.Contains(err.Error(), "invalid record partitioning choice") {
+		return fmt.Errorf("%w: %w", broker.ErrPermanent, err)
+	}
+	return err
 }
 
 // Consume joins group. Offsets are never committed automatically: the
 // pipeline commits a batch only after its outputs are durable.
 //
 // On a rebalance, a batch in flight for a partition this member lost may
-// still commit afterwards. That commit covers only records this member fully
-// processed, so the worst case is redelivery to the new owner, which is the
-// at-least-once duplicate the sink absorbs, not a gap.
+// finish afterwards. Its commit is dropped (see ownership), so it cannot
+// move the new owner's group offset backwards; the new owner redelivers
+// from its own position, which is the at-least-once duplicate the sink
+// absorbs, not a gap.
 func (b *Broker) Consume(group string, topics []string) (broker.Consumer, error) {
+	own := &ownership{}
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(b.cfg.Brokers...),
 		kgo.ClientID(b.cfg.ClientID),
@@ -145,11 +182,14 @@ func (b *Broker) Consume(group string, topics []string) (broker.Consumer, error)
 		kgo.DisableAutoCommit(),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(500*time.Millisecond),
+		kgo.OnPartitionsAssigned(func(_ context.Context, _ *kgo.Client, m map[string][]int32) { own.assign(m) }),
+		kgo.OnPartitionsRevoked(func(_ context.Context, _ *kgo.Client, m map[string][]int32) { own.revoke(m) }),
+		kgo.OnPartitionsLost(func(context.Context, *kgo.Client, map[string][]int32) { own.lose() }),
 	)
 	if err != nil {
 		return nil, err
 	}
-	return &consumer{cl: cl, max: b.cfg.MaxPollRecords, group: true}, nil
+	return &consumer{cl: cl, max: b.cfg.MaxPollRecords, own: own}, nil
 }
 
 // ReadFrom consumes exact partitions from exact offsets with no group.
@@ -186,6 +226,19 @@ func (b *Broker) EndOffsets(ctx context.Context, topic string) (map[int32]int64,
 	return out, nil
 }
 
+func (b *Broker) StartOffsets(ctx context.Context, topic string) (map[int32]int64, error) {
+	l, err := b.admin.ListStartOffsets(ctx, topic)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.Error(); err != nil {
+		return nil, err
+	}
+	out := map[int32]int64{}
+	l.Each(func(o kadm.ListedOffset) { out[o.Partition] = o.Offset })
+	return out, nil
+}
+
 func (b *Broker) CommittedOffsets(ctx context.Context, group, topic string) (map[int32]int64, error) {
 	rs, err := b.admin.FetchOffsetsForTopics(ctx, group, topic)
 	if err != nil {
@@ -204,12 +257,32 @@ func (b *Broker) CommittedOffsets(ctx context.Context, group, topic string) (map
 	return out, ferr
 }
 
-// CommitOffsets commits next for group through the admin client, outside
-// any group membership. Kafka accepts it only while the group is empty.
-func (b *Broker) CommitOffsets(ctx context.Context, group string, next map[broker.TopicPartition]int64) error {
+// Checkpoints is CommittedOffsets with the metadata of each commit.
+func (b *Broker) Checkpoints(ctx context.Context, group, topic string) (map[int32]broker.Checkpoint, error) {
+	rs, err := b.admin.FetchOffsetsForTopics(ctx, group, topic)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int32]broker.Checkpoint{}
+	var ferr error
+	rs.Each(func(o kadm.OffsetResponse) {
+		if o.Err != nil && ferr == nil {
+			ferr = o.Err
+		}
+		if o.Topic == topic && o.At >= 0 {
+			out[o.Partition] = broker.Checkpoint{Next: o.At, Meta: o.Metadata}
+		}
+	})
+	return out, ferr
+}
+
+// CommitCheckpoints commits cps for group through the admin client,
+// outside any group membership. Kafka accepts it only while the group is
+// empty.
+func (b *Broker) CommitCheckpoints(ctx context.Context, group string, cps map[broker.TopicPartition]broker.Checkpoint) error {
 	os := kadm.Offsets{}
-	for tp, off := range next {
-		os.Add(kadm.Offset{Topic: tp.Topic, Partition: tp.Partition, At: off, LeaderEpoch: -1})
+	for tp, cp := range cps {
+		os.Add(kadm.Offset{Topic: tp.Topic, Partition: tp.Partition, At: cp.Next, LeaderEpoch: -1, Metadata: cp.Meta})
 	}
 	return b.admin.CommitAllOffsets(ctx, group, os)
 }
@@ -244,9 +317,9 @@ func (b *Broker) EnsureTopics(ctx context.Context, specs []TopicSpec) error {
 func (b *Broker) Close() { b.prod.Close() }
 
 type consumer struct {
-	cl    *kgo.Client
-	max   int
-	group bool
+	cl  *kgo.Client
+	max int
+	own *ownership // nil for a positioned reader
 }
 
 var errClosed = errors.New("kafka: consumer closed")
@@ -266,7 +339,11 @@ func (c *consumer) Poll(ctx context.Context) (broker.Fetch, error) {
 				}
 				return
 			}
-			f.HighWatermarks[broker.TopicPartition{Topic: p.Topic, Partition: p.Partition}] = p.HighWatermark
+			tp := broker.TopicPartition{Topic: p.Topic, Partition: p.Partition}
+			f.HighWatermarks[tp] = p.HighWatermark
+			if c.own != nil && len(p.Records) > 0 {
+				c.own.polled(tp, p.Records[0].Offset)
+			}
 			for _, r := range p.Records {
 				f.Records = append(f.Records, fromKgo(r))
 			}
@@ -284,8 +361,14 @@ func (c *consumer) Poll(ctx context.Context) (broker.Fetch, error) {
 }
 
 func (c *consumer) Commit(ctx context.Context, next map[broker.TopicPartition]int64) error {
-	if !c.group {
+	if c.own == nil {
 		return errors.New("kafka: a positioned reader has no group")
+	}
+	c.own.mu.Lock()
+	defer c.own.mu.Unlock()
+	next = c.own.filterLocked(next)
+	if len(next) == 0 {
+		return nil
 	}
 	offs := map[string]map[int32]kgo.EpochOffset{}
 	for tp, off := range next {
@@ -308,6 +391,9 @@ func (c *consumer) Commit(ctx context.Context, next map[broker.TopicPartition]in
 			}
 		}
 	})
+	if cerr == nil {
+		c.own.committedLocked(next)
+	}
 	return cerr
 }
 

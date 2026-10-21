@@ -14,7 +14,13 @@ driver; the integration test brings `clickhouse-go`.
 
 The spec fixes the `alerts` table, not an events table, so the schema is
 defined here (`ch.CreateTableSQL`). It keeps the alert table's key,
-partitioning, and TTL. The alert table's `fields Map(String, String)` is
+`(partition, seq)`, and its 90 day retention, but partitions by day and
+expires on `ingest_time`, not `event_time`. `event_time` comes from the
+source: an old or skewed value would be deleted by the TTL as it arrives,
+and one insert spread over more than 100 days of `event_time` would be
+refused for touching too many partitions. `ingest_time` is set by the
+pipeline and stays near now. `event_time` appears only in the hunt's WHERE
+clause. The alert table's `fields Map(String, String)` is
 replaced by one column per comparison family, each holding what v1 would
 compute at match time, computed once in Go by `ch.Encode`:
 
@@ -209,7 +215,9 @@ event once, before and after a merge.
 
 A `windash` value at the five-dash limit expands to 3125 patterns. Two of
 them exceed ClickHouse's default 256 KiB `max_query_size`, so the compiler
-rejects with `too-large` rather than fail at run time.
+rejects with `too-large` rather than fail at run time. The limit covers the
+whole statement, so `HuntQuery` checks the full SELECT as well: a WHERE
+clause just under the limit can still be rejected once wrapped.
 
 ### Event time precision
 
@@ -230,7 +238,8 @@ because v1 is the oracle; the fix belongs in the rule loader. Recorded in
 
 The integration test (`-tags integration`, `SIGNALMAN_CLICKHOUSE_DSN`) has
 not been run against a server: there was no ClickHouse available when it was
-written. Until it is, these are assumptions, each exercised by its fixture:
+written. CI now sets the DSN to the compose server and fails the test if it
+is missing, so the first CI integration run is the first real one. Until it is, these are assumptions, each exercised by its fixture:
 
 - RE2 and Go agree on the emitted subset (`\x{...}`, classes, `\A`, `\z`,
   `(?m:^)`, `\b`, repeats).

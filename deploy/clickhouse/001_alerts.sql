@@ -7,8 +7,15 @@
 -- copy with the same (partition, seq, rule_id), so a redelivered batch
 -- collapses into the rows already there. Until a merge runs the copies are
 -- visible; read with FINAL to see the collapsed table. Collapsing happens
--- within a PARTITION BY partition only; a copy has the same event_time, so
--- it lands in the same one.
+-- within a PARTITION BY partition only; a copy has the same ingest_time
+-- (the events.raw record timestamp, which a replay reproduces), so it lands
+-- in the same one.
+--
+-- PARTITION BY and TTL read ingest_time, not event_time as the spec has it.
+-- event_time comes from the source: an old one would be TTL-deleted on
+-- insert, after the offset is committed, and a batch with skewed times
+-- would span more than the 100 partitions one insert may touch.
+-- docs/pipeline.md records the deviation.
 --
 -- engine is not in the spec's table. It is the engine that served the
 -- alert (v1, or v2 for a rule inside the rollout), so alert volume per rule
@@ -33,5 +40,5 @@ CREATE TABLE IF NOT EXISTS signalman.alerts (
   engine      LowCardinality(String)
 ) ENGINE = ReplacingMergeTree
 ORDER BY (partition, seq, rule_id)
-PARTITION BY toYYYYMMDD(event_time)
-TTL toDateTime(event_time) + INTERVAL 90 DAY;
+PARTITION BY toYYYYMMDD(ingest_time)
+TTL toDateTime(ingest_time) + INTERVAL 90 DAY;

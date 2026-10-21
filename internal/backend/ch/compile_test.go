@@ -252,6 +252,30 @@ func TestRejectsAQueryOverTheSizeLimit(t *testing.T) {
 	}
 }
 
+// A WHERE clause just under the limit passes CompileRule, but the SELECT
+// around it pushes the statement over. HuntQuery must reject it, since the
+// server checks the whole query, not the WHERE clause.
+func TestHuntQueryRejectsAStatementOverTheSizeLimit(t *testing.T) {
+	tax := testTaxonomy(t)
+	sized := func(n int) *sigma.Rule {
+		return loadDetection(t, tax, "s:\n  A: '"+strings.Repeat("a", n)+"'\ncondition: s")
+	}
+	where, err := CompileRule(sized(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := MaxQueryBytes - (len(where) - 1) - 4
+	r := sized(n)
+	if where, err = CompileRule(r); err != nil || len(where) > MaxQueryBytes {
+		t.Fatalf("setup: WHERE is %d bytes, err %v; want just under %d", len(where), err, MaxQueryBytes)
+	}
+	_, err = HuntQuery(DefaultTable, r, Window{From: msTime(1000), To: msTime(2000)})
+	var rj *Rejection
+	if !errors.As(err, &rj) || rj.Code != CodeTooLarge || rj.RuleID != r.ID {
+		t.Fatalf("err = %v, want %s carrying the rule id", err, CodeTooLarge)
+	}
+}
+
 func TestRE2PatternRejectsWhatGoCannotParse(t *testing.T) {
 	if _, err := re2Pattern("("); err == nil {
 		t.Fatal("an unparseable pattern must fail")

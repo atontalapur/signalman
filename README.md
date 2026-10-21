@@ -94,7 +94,9 @@ signalman gates   --set rules rules/proc_dump.yml    # the five PR gates as a ma
 Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
 are 0 for pass, 1 for a failed check, 2 when the command could not run.
 A corpus is a directory of `.ndjson` or `.jsonl` files, one JSON event per
-line, with field names as they appear after the taxonomy. A rule may
+line, with field names as they appear after the taxonomy. An event with a
+key given twice in one object is rejected, and an empty object `{}` adds no
+fields. A fixture file is one YAML document. A rule may
 declare `budget:` in matches per 100k events; noise exits 1 above it.
 
 Plan C's code has landed. `cmd/signalmand` consumes `events.raw`, assigns Seq
@@ -122,8 +124,10 @@ written but has not yet run against a server.
 A pull request that touches `rules/` runs `.github/workflows/rules.yml`:
 `signalman gates` checks each changed rule for parse, fixtures, noise
 budget, latency budget, and prefilter, and the report lands in one PR
-comment and the job summary. Only a failed gate fails the job; a rule the
-v2 prefilter cannot key on (the `Always` set) is a warning. The noise gate
+comment and the job summary. A failed gate fails the job; a rule the
+v2 prefilter cannot key on (the `Always` set) is a warning. A PR that also
+changes `cmd/`, `internal/`, the taxonomy, or the corpus fails without
+running the gates, since the gates would run its own code. The noise gate
 runs when the repository variable `SIGNALMAN_NOISE_CORPUS` names a corpus
 and is skipped otherwise. `docs/authoring.md` covers the supported Sigma
 subset, rejection codes, fixtures, explain, budgets, and the gates.
@@ -134,9 +138,12 @@ is the spec's `alerts` table (ReplacingMergeTree ordered by
 on first start. `cmd/signalman-sink` consumes the `alerts` topic and inserts
 batches through clickhouse-go, committing offsets only after an insert
 succeeds; while ClickHouse is down it retries and stops polling, so the
-outage is consumer lag, not loss. A redelivered batch collapsing on merge is
-property-tested against a model of the merge; the same check against a real
-ClickHouse is an integration test that has not been run yet.
+outage is consumer lag, not loss. A record the table cannot hold goes to
+the `alerts.dead` topic, counted by `signalman_sink_dead_letters_total`; a
+permanent insert error stops the sink with the offsets it holds. A
+redelivered batch collapsing on merge is checked against a model of the
+merge; the same check against a real ClickHouse is an integration test that
+has not been run yet.
 
 Plan E's code has landed. Every metric in the spec's core metrics table is
 exported with its type and labels, and a test holds the registered set to
@@ -258,7 +265,10 @@ that needs them.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`:
   `docker compose -f deploy/docker-compose.yml up -d --wait`. Integration tests
   carry the `integration` build tag and reach Redpanda at `localhost:19092`
-  (override with `SIGNALMAN_BROKERS`).
+  (override with `SIGNALMAN_BROKERS`). The ClickHouse tests (retro-hunt and
+  alert sink) read a clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`, which
+  `make integration` sets to the compose server. Without it they skip
+  locally and fail when `CI=true`.
 - Run the daemon against the compose stack:
   `go run ./cmd/signalmand -rules <dir> -taxonomy config/taxonomy`. It
   serves `/metrics` on `:9464`, reloads rules on `SIGHUP`, and by default
@@ -274,12 +284,15 @@ that needs them.
   (`-clickhouse` DSN, defaulting to the compose stack), and serves
   `/metrics` on `:9465`. The table is created when the ClickHouse volume is
   first initialized; after changing the DDL, `docker compose down -v`.
-  `make integration` sets `SIGNALMAN_CLICKHOUSE_DSN` to the compose stack;
-  without it the ClickHouse tests skip.
+  It needs the `alerts.dead` topic, which compose creates. Reset the
+  Redpanda and ClickHouse volumes together: `seq` restarts with a new
+  `events.raw` and would collide with stored alerts.
 - `make check-alerts` validates the Prometheus config and alert rules and runs
   their promtool unit tests. It needs `promtool` on PATH (from the Prometheus
-  release archive) and says so when it is missing. It is not part of
-  `make check`.
+  release archive) and says so when it is missing; with `CI=true` a missing
+  promtool fails it. It is not part of `make check`; CI's `alerts` job
+  installs promtool 3.5.0 from the release tarball, checks its sha256, and
+  runs it.
 - Shadow mode: add `-shadow` to `signalmand`, then run
   `go run ./cmd/differ` against the same brokers. The differ serves
   `/metrics` on `:9466`; `signalman_divergences_counted_total` is the number
@@ -296,8 +309,6 @@ that needs them.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.
-  The retro-hunt test reads a clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`
-  and skips without it.
 - `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
   one. Nightly CI runs them for 10 minutes each and uploads any crashers.
 - `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer

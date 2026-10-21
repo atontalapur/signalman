@@ -83,6 +83,22 @@ func TestRuleFilesTakesFilesAndDirsAndDedupes(t *testing.T) {
 	}
 }
 
+func TestRuleFilesDedupesOneFileUnderTwoSpellings(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, "a.yml")
+	t.Chdir(dir)
+
+	// The same file, relative and absolute, is one rule file, not a
+	// duplicate id. The first spelling given is the one kept for display.
+	got, err := RuleFiles("a.yml", filepath.Join(dir, "a.yml"), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a.yml"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
 func TestRuleFilesMissingPathIsAnError(t *testing.T) {
 	if _, err := RuleFiles("testdata/does_not_exist"); err == nil {
 		t.Fatal("a missing path is an operator error")

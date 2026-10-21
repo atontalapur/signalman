@@ -317,3 +317,27 @@ func TestEndToEndUnderGeneratedLoad(t *testing.T) {
 	t.Logf("%v of generated load: %d events, %d evaluated, %d dropped, %d audit windows, all green",
 		dur, produced, evaluated, dropped, len(reports))
 }
+
+func TestAuditStartsAtTheLogStartOfAnUncommittedPartition(t *testing.T) {
+	mem := newMemory(broker.WithMaxPoll(8))
+	produceRaw(t, mem, 0, 120)
+	// Retention trimmed the head of every partition before the group ever
+	// committed. Those offsets were never admitted, so they are not missing.
+	end, _ := mem.EndOffsets(context.Background(), TopicEventsRaw)
+	for p, e := range end {
+		mem.Trim(broker.TopicPartition{Topic: TopicEventsRaw, Partition: p}, e/2)
+	}
+	r, slot, a := auditRig(t, mem, mem)
+	reports, err := runAndAudit(t, r, slot, a, mem)
+	if err != nil {
+		t.Fatalf("audit over a trimmed log: %v", err)
+	}
+	for _, w := range reports {
+		if w.From < end[w.Partition]/2 {
+			t.Fatalf("window %+v starts below the log start %d", w, end[w.Partition]/2)
+		}
+	}
+	if len(reports) == 0 {
+		t.Fatal("nothing audited")
+	}
+}

@@ -336,7 +336,7 @@
         "type": "prometheus",
         "uid": "signalman-prom"
       },
-      "description": "Drop ledger entries by reason. Every reason is a decode failure; overload never drops.",
+      "description": "Drop ledger entries by reason. Every reason but output-too-large is a decode failure; overload never drops.",
       "gridPos": {
         "h": 8,
         "w": 8,

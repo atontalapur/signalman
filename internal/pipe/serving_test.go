@@ -1,8 +1,10 @@
 package pipe
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -188,5 +190,41 @@ func TestNoRolloutWhenV2Serves(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(r.m.RolloutPercent); got != 0 {
 		t.Fatalf("rollout gauge %v after v1 serves again, want 0", got)
+	}
+}
+
+// With v2 serving, the canary age and rule_matches_total follow v2's
+// alerts, not the v1 oracle's verdicts: a v2 that wrongly says false for
+// the canary writes no canary alert, and the age keeps climbing even though
+// v1 beside it matches.
+func TestV2PrimaryCanaryFollowsTheServedAlert(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1790000000, 0)}
+	mem := newMemory()
+	r := newRigClock(t, mem, mem, clk.Now)
+	r.rs = loadShippedRules(t)
+	slot := NewSlot(V2(r.rs), r.m)
+	if err := slot.StoreWithShadow(blindEngine{V2(r.rs)}, V1(r.rs)); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCanary(mem, r.m, clk.Now, nil).Inject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clk.Add(60 * time.Second)
+	p, err := New(testConfig(), r.b, r.norm, slot, r.m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runUntilCommitted(t, p, mem)
+	clk.Add(5 * time.Second)
+	if n := len(alertsByKey(t, mem)); n != 0 {
+		t.Fatalf("%d alerts; v2 serves the canary rule and never matches it", n)
+	}
+	for part := int32(0); part < testPartitions; part++ {
+		if a, ok := r.m.CanaryAge.Age(part); !ok || a != 65*time.Second {
+			t.Fatalf("partition %d canary age %v (tracked %v), want 65s: no canary alert was served", part, a, ok)
+		}
+	}
+	if got := testutil.ToFloat64(r.m.RuleMatches.WithLabelValues(CanaryRuleID)); got != 0 {
+		t.Fatalf("rule_matches_total for the canary = %v; it counts served alerts, and none was", got)
 	}
 }

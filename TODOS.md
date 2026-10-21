@@ -12,14 +12,6 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P4
 **Depends on:** Plan A Task 13
 
-### Reject rules the alert table cannot store
-**What:** The rule loader accepts any `id` and any `level` (including none), but the ClickHouse `alerts` table types `rule_id` as UUID and `severity` as an Enum8 of the five Sigma levels. An alert from such a rule stops `signalman-sink` at that record (`chsink.Decode`).
-**Why:** Stopping is correct for the sink (skipping would be silent loss), but the place to catch it is load time, where the error names the file and line, not a halted sink in production.
-**Context:** Options: a load error code for a non-UUID id or a missing or unknown level, or a lint warning in `signalman lint` only. A new code is a `docs/rule-loading.md` and `docs/corpus-acceptance.md` change too. Every rule in `rules/` already has a UUID id and a valid level.
-**Effort:** S
-**Priority:** P2
-**Depends on:** SIG-31
-
 ### Revisit the event.Value layout
 **What:** `event.Value` is 64 bytes with every payload slot present. Options from the SIG-13 review: fold `I` and `B` into one slot, move `L` behind a pointer.
 **Why:** The allocation half of the original entry is settled. v2 (SIG-40) never calls `Value.Text` on its hot path: each field is folded once per event with `match.AppendFold` and `strconv.AppendInt` into a reused arena, and the common wildcard shapes compare bytes (`match.Folded`). v2 is at 0 allocs/event on the corpus (`docs/results.md`). What is left is size, which costs copies and cache, not allocations.
@@ -32,14 +24,6 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **What:** `rename` in `internal/sigma/rule.go` maps `Pred.Field` through the taxonomy but leaves the `fieldref` target, which lives in the rule value, under its Sigma name.
 **Why:** Found while writing the ClickHouse backend (SIG-32). Under `Image: NewProcessName`, `ParentImage|fieldref: Image` compares against a field the event never has, so the rule silently never matches. v1 and the SQL backend agree on this, so no differ catches it.
 **Context:** Fix in the loader by rewriting the value through the same mapping, then let `ch` and v1 both pick it up. Changes RuleSetV for any rule using fieldref under a renaming entry. See `docs/backend-ch.md`, "Found in the frontend".
-**Effort:** S
-**Priority:** P2
-**Depends on:** nothing
-
-### Export the ClickHouse DSN in the integration job
-**What:** The `integration` CI job must export `SIGNALMAN_CLICKHOUSE_DSN`.
-**Why:** Without it `internal/backend/ch`'s retro-hunt test skips and the Plan D gate reads green without running.
-**Context:** See `.github/workflows/ci.yml` `integration` job.
 **Effort:** S
 **Priority:** P2
 **Depends on:** nothing
@@ -61,6 +45,15 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Depends on:** None
 
 ## Completed
+
+### Reject rules the alert table cannot store
+**What:** The rule loader accepts any `id` and any `level` (including none), but the ClickHouse `alerts` table types `rule_id` as UUID and `severity` as an Enum8 of the five Sigma levels. An alert from such a rule stops `signalman-sink` at that record (`chsink.Decode`).
+**Why:** Stopping is correct for the sink (skipping would be silent loss), but the place to catch it is load time, where the error names the file and line, not a halted sink in production.
+**Context:** Options: a load error code for a non-UUID id or a missing or unknown level, or a lint warning in `signalman lint` only. A new code is a `docs/rule-loading.md` and `docs/corpus-acceptance.md` change too. Every rule in `rules/` already has a UUID id and a valid level.
+**Effort:** S
+**Priority:** P2
+**Depends on:** SIG-31
+**Completed:** SIG-46. The loader rejects a non-UUID `id` (`invalid-id`) and a missing or unknown `level` (`level`). `chsink.Decode` keeps its checks as a backstop, and a record it refuses now goes to `alerts.dead` instead of stopping the sink (SIG-31).
 
 ### Decide event value limits at decode time
 **What:** The decoder (Plan C) needs three stated decisions: a maximum field value length, what to do with invalid UTF-8 (reject, replace, or pass through), and whether nested lists are flattened or rejected.

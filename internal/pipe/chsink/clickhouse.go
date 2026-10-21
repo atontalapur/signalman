@@ -3,12 +3,16 @@ package chsink
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/atontalapur/signalman/internal/broker"
+	"github.com/atontalapur/signalman/internal/engine/v1"
+	"github.com/atontalapur/signalman/internal/engine/v2"
 	"github.com/atontalapur/signalman/internal/pipe"
 	"github.com/google/uuid"
 )
@@ -30,12 +34,33 @@ var severities = map[string]bool{"informational": true, "low": true, "medium": t
 
 func validSeverity(s string) bool { return severities[s] }
 
+// DateTime64 holds 1900-01-01 00:00:00 through 2299-12-31 23:59:59.999. A
+// time outside it is stored as a different time or refused.
+var (
+	minDateTime64 = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+	maxDateTime64 = time.Date(2299, 12, 31, 23, 59, 59, 999e6, time.UTC)
+)
+
+func checkDateTime64(name string, t time.Time) error {
+	if t.Before(minDateTime64) || t.After(maxDateTime64) {
+		return fmt.Errorf("%s %s is outside the DateTime64(3) range 1900-01-01 to 2299-12-31", name, t.UTC().Format(time.RFC3339Nano))
+	}
+	return nil
+}
+
 // Decode reads an alerts topic record and checks it fits the table. A
 // record that does not would fail every insert of its batch, so it is
-// refused here, with a reason, rather than retried forever.
+// refused here, with a reason, rather than retried forever; the sink
+// dead-letters it.
 //
-// The rule loader does not require a UUID id or a level, so a rule that
-// lacks either loads, matches, and produces alerts the table cannot hold.
+// The engine must be v1 or v2: the column exists to compare alert volume
+// per engine during the cutover, and a row with any other value would be
+// counted under neither.
+//
+// The rule loader rejects a non-UUID id and a missing or unknown level
+// (codes invalid-id and level), so a loaded rule cannot produce such an
+// alert. These checks stay as a backstop for records from elsewhere: an
+// older rule set, a hand-written record, or a bug.
 func Decode(r broker.Record) (pipe.Alert, error) {
 	var a pipe.Alert
 	if err := json.Unmarshal(r.Value, &a); err != nil {
@@ -47,7 +72,55 @@ func Decode(r broker.Record) (pipe.Alert, error) {
 	if !validSeverity(a.Severity) {
 		return a, fmt.Errorf("rule %s severity %q is not one of informational, low, medium, high, critical", a.RuleID, a.Severity)
 	}
+	if a.Engine != v1.Name && a.Engine != v2.Name {
+		return a, fmt.Errorf("partition %d seq %d rule %s engine %q is not %s or %s; per-engine alert volume needs it",
+			a.Partition, a.Seq, a.RuleID, a.Engine, v1.Name, v2.Name)
+	}
+	if err := checkDateTime64("event_time", a.EventTime); err != nil {
+		return a, err
+	}
+	if err := checkDateTime64("ingest_time", a.IngestTime); err != nil {
+		return a, err
+	}
 	return a, nil
+}
+
+// ErrPermanent is wrapped by an Insert error that will fail again on retry:
+// a row the server refuses by type or value, a missing table or column, a
+// refused login. Retrying it holds every partition behind the batch, so the
+// sink stops instead. The same idea as broker.ErrPermanent on the produce
+// side.
+var ErrPermanent = errors.New("permanent insert error")
+
+// permanentCodes are ClickHouse exception codes an identical insert hits
+// again. Anything else (network, memory, timeouts, too many parts while
+// merges catch up) is treated as an outage and retried.
+var permanentCodes = map[int32]bool{
+	6: true, 7: true, 8: true, 15: true, 16: true, 19: true, 20: true, // parse, column count, missing column
+	25: true, 26: true, 27: true, 36: true, 38: true, 41: true, // parse, bad arguments
+	43: true, 47: true, 53: true, 60: true, 62: true, 69: true, 70: true, 72: true, // types, unknown table, syntax
+	81: true, 115: true, 117: true, 131: true, 164: true, // unknown database or setting, incorrect data, readonly
+	192: true, 193: true, 321: true, 349: true, 376: true, 467: true, // auth, out of range, NULL, UUID, bool
+	497: true, 516: true, 565: true, 691: true, // access denied, auth failed, too many partitions, enum element
+}
+
+// codeTooManyParts covers two cases. "Too many parts" while merges lag is
+// an outage that clears; "too many partitions for single INSERT block" is
+// the batch itself and fails every time, so only that message is permanent.
+const codeTooManyParts = 252
+
+// classify wraps err in ErrPermanent when retrying the same insert cannot
+// succeed.
+func classify(err error) error {
+	var ex *clickhouse.Exception
+	if !errors.As(err, &ex) {
+		return err
+	}
+	if permanentCodes[ex.Code] ||
+		(ex.Code == codeTooManyParts && strings.Contains(strings.ToLower(ex.Message), "partitions for single insert block")) {
+		return fmt.Errorf("%w: %w", ErrPermanent, err)
+	}
+	return err
 }
 
 // ClickHouse inserts into the alerts table over clickhouse-go.
@@ -85,20 +158,30 @@ func insertQuery(table string) string {
 // queries alongside the sink.
 func (c *ClickHouse) Conn() driver.Conn { return c.conn }
 
+// insertSettings apply to every insert. The sink commits an offset as soon
+// as Insert returns, and by default ClickHouse acknowledges an insert once
+// the part is written, before it is fsynced, so a host crash could lose
+// rows whose offsets are committed. fsync_after_insert makes the ack wait
+// for the fsync. It costs insert latency per part, which the sink's large,
+// infrequent batches keep small.
+var insertSettings = clickhouse.Settings{"fsync_after_insert": 1}
+
 // Insert sends rows as one INSERT. ClickHouse writes one block as one part,
-// so the rows of a successful Insert are all stored.
+// so the rows of a successful Insert are all stored. An error that would
+// recur on retry wraps ErrPermanent; a row the client cannot encode is one.
 func (c *ClickHouse) Insert(ctx context.Context, rows []pipe.Alert) error {
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(insertSettings))
 	batch, err := c.conn.PrepareBatch(ctx, c.query)
 	if err != nil {
-		return err
+		return classify(err)
 	}
 	defer func() { _ = batch.Close() }()
 	for _, a := range rows {
 		if err := batch.Append(rowValues(a)...); err != nil {
-			return fmt.Errorf("append partition %d seq %d rule %s: %w", a.Partition, a.Seq, a.RuleID, err)
+			return fmt.Errorf("%w: append partition %d seq %d rule %s: %w", ErrPermanent, a.Partition, a.Seq, a.RuleID, err)
 		}
 	}
-	return batch.Send()
+	return classify(batch.Send())
 }
 
 // rowValues is a's values in Columns order.

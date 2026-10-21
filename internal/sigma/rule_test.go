@@ -125,8 +125,8 @@ func TestLoadRuleRejectsAggregationLoudly(t *testing.T) {
 	if lerr.RuleID == "" || lerr.Line == 0 {
 		t.Fatalf("an aggregation error must carry the rule id and the condition line: %+v", lerr)
 	}
-	if lerr.Line != 9 {
-		t.Fatalf("line = %d, want the condition line 9", lerr.Line)
+	if lerr.Line != 10 {
+		t.Fatalf("line = %d, want the condition line 10", lerr.Line)
 	}
 }
 
@@ -149,6 +149,9 @@ func TestLoadRuleErrorCodes(t *testing.T) {
 		"no_condition.yml":        "condition",
 		"bad_modifier.yml":        "modifier",
 		"undefined_selection.yml": "condition",
+		"bad_uuid.yml":            "invalid-id",
+		"no_level.yml":            "level",
+		"bad_level.yml":           "level",
 	}
 	for file, code := range cases {
 		_, lerr := LoadRule(filepath.Join("testdata/rules_bad", file), tax)
@@ -162,6 +165,64 @@ func TestLoadRuleErrorCodes(t *testing.T) {
 		if lerr.Path == "" {
 			t.Errorf("%s: rejection carries no path", file)
 		}
+	}
+}
+
+// The alerts table stores rule_id as a UUID and severity as an enum of the
+// five Sigma levels. A rule outside either loads, matches, and then produces
+// an alert no insert can hold, so the loader refuses it instead.
+func TestLoadRuleRequiresCanonicalUUIDAndKnownLevel(t *testing.T) {
+	tax := loadTax(t)
+	const rest = "logsource:\n  product: windows\n  category: process_creation\n" +
+		"detection:\n  selection:\n    Image: x\n  condition: selection\n"
+	ok := "1f1a1f1a-000e-4000-8000-00000000000e"
+	cases := []struct {
+		id, level, code string
+	}{
+		{ok, "informational", ""},
+		{ok, "low", ""},
+		{ok, "medium", ""},
+		{ok, "high", ""},
+		{ok, "critical", ""},
+		{strings.ToUpper(ok), "high", ""},
+		{"{" + ok + "}", "high", CodeInvalidID},
+		{"urn:uuid:" + ok, "high", CodeInvalidID},
+		{strings.ReplaceAll(ok, "-", ""), "high", CodeInvalidID},
+		{ok[:35] + "g", "high", CodeInvalidID},
+		{"proc_dump", "high", CodeInvalidID},
+		{ok, "", CodeLevel},
+		{ok, "High", CodeLevel},
+		{ok, "severe", CodeLevel},
+	}
+	for _, c := range cases {
+		src := "title: t\nid: '" + c.id + "'\n"
+		if c.level != "" {
+			src += "level: " + c.level + "\n"
+		}
+		_, lerr := LoadRuleBytes("r.yml", []byte(src+rest), tax)
+		got := ""
+		if lerr != nil {
+			got = lerr.Code
+		}
+		if got != c.code {
+			t.Errorf("id %q level %q: code %q, want %q (%v)", c.id, c.level, got, c.code, lerr)
+		}
+		if lerr != nil && lerr.RuleID != c.id {
+			t.Errorf("id %q: rejection names rule %q", c.id, lerr.RuleID)
+		}
+	}
+}
+
+// An aggregation is reported as one even on a rule that also lacks a
+// level, so the corpus acceptance report keeps measuring the engine.
+func TestLoadRuleReportsAggregationBeforeLevel(t *testing.T) {
+	tax := loadTax(t)
+	src := "title: t\nid: 1f1a1f1a-000f-4000-8000-00000000000f\n" +
+		"logsource:\n  product: windows\n  category: process_creation\n" +
+		"detection:\n  selection:\n    EventID: 1\n  condition: selection | count() > 5\n"
+	_, lerr := LoadRuleBytes("r.yml", []byte(src), tax)
+	if lerr == nil || lerr.Code != CodeAggregation {
+		t.Fatalf("got %v, want an aggregation rejection", lerr)
 	}
 }
 
@@ -318,6 +379,7 @@ func TestLoadRuleReportsExpressibilityBeforeTaxonomy(t *testing.T) {
 	src := []byte(`
 title: Aggregated on a source nobody mapped
 id: 1f1a1f1a-000a-4000-8000-00000000000a
+level: low
 logsource:
   product: macos
   category: process_creation
@@ -340,6 +402,7 @@ func TestLoadRuleReportsModifierGapsBeforeTaxonomy(t *testing.T) {
 	src := []byte(`
 title: Unsupported modifier on an unmapped source
 id: 1f1a1f1a-000b-4000-8000-00000000000b
+level: low
 logsource:
   product: macos
   category: process_creation
@@ -361,6 +424,7 @@ detection:
 func TestLoadErrorUnwrapsDetectionCause(t *testing.T) {
 	src := []byte(`title: t
 id: 00000000-0000-4000-8000-000000000000
+level: low
 logsource:
   product: windows
   category: process_creation

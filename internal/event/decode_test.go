@@ -1,7 +1,9 @@
 package event
 
 import (
+	"math"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -83,5 +85,55 @@ func TestFromMapRejectsAFlattenedKeyCollision(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("two sources for one flattened field must not be resolved by map order")
+	}
+}
+
+func TestFromMapKeepsOutOfRangeNumbersAsText(t *testing.T) {
+	ev, err := FromMap(map[string]any{
+		"umax":   uint64(math.MaxUint64),
+		"uedge":  uint64(math.MaxInt64),
+		"fbig":   9.3e18,
+		"ftwo63": 9223372036854775808.0,
+		"fmin":   -9223372036854775808.0,
+		"finf":   math.Inf(1),
+		"fnan":   math.NaN(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Value{
+		"umax":   String("18446744073709551615"),
+		"uedge":  Int(math.MaxInt64),
+		"fbig":   String("9.3e+18"),
+		"ftwo63": String("9.223372036854776e+18"),
+		"fmin":   Int(math.MinInt64),
+		"finf":   String("+Inf"),
+		"fnan":   String("NaN"),
+	}
+	if !reflect.DeepEqual(ev.Fields, want) {
+		t.Fatalf("got %#v\nwant %#v", ev.Fields, want)
+	}
+}
+
+func TestDecodeJSONRejectsDuplicateKeys(t *testing.T) {
+	for _, src := range []string{
+		`{"a": 1, "a": 2}`,
+		`{"x": {"a": 1, "a": 2}}`,
+		`{"x": {"a": 1}, "x": {"b": 2}}`,
+	} {
+		if _, err := DecodeJSON([]byte(src)); err == nil || !strings.Contains(err.Error(), "given twice") {
+			t.Errorf("DecodeJSON(%s) = %v, want a duplicate key error", src, err)
+		}
+	}
+}
+
+func TestDecodeJSONReadsAnEmptyObjectAsAbsent(t *testing.T) {
+	ev, err := DecodeJSON([]byte(`{"a": {}, "b": {"c": {}}, "d": 1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Value{"d": Int(1)}
+	if !reflect.DeepEqual(ev.Fields, want) {
+		t.Fatalf("an object with no leaves contributes no fields: got %#v", ev.Fields)
 	}
 }

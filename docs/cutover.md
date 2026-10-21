@@ -79,11 +79,29 @@ streams:
   never write it, so it is a missing verdict;
 - one side has nothing to read: wait. Lag, never loss.
 
+A v1 record with no `shadow` owes no v2 record and is passed over. On v1 a
+shadowed record is a repeat only of an earlier shadowed one, so when
+signalmand restarts with `-shadow` and redelivers events it first wrote
+without it, the shadowed copies are compared. A v2 record for a seq v1 has
+already moved past without a shadowed record is not counted: v1 wrote that
+event unshadowed (typically v2's record landed and v1's did not before a
+restart without `-shadow`), so v1 has its verdict. A shadowed v1 head whose
+v2 record never comes would otherwise hold the partition: once a later
+unshadowed v1 record shows signalmand moved on without the shadow, the
+differ reads v2 up to its end offset at that moment, and if the record is
+not there it is a missing verdict. v2 records are written in the same
+produce as their v1 record, before any later batch, so nothing below that
+offset is still to come.
+
 Each side's channel holds `-queue` records, so one side can run at most that
 far (plus one poll) ahead before its reader stops. Output depends only on
 the two streams, not on when records arrive. Divergences are produced before
 the offsets covering them are committed under `-group`, so a restart repeats
-work and never skips it.
+work and never skips it. Each committed offset carries that side's
+repeat-dropping state (highest seq handled, and on v1 highest shadowed seq)
+as its commit metadata, so a restart that lands inside a redelivered run on
+one side drops the same repeats a running differ would. Offsets committed
+by an older differ have no metadata and start with empty state.
 
 ### Divergence classes
 

@@ -10,6 +10,7 @@ package fixture
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -48,7 +49,8 @@ type rawCase struct {
 }
 
 // Load reads and validates a fixture file. Unknown keys are errors: a
-// misspelled expect key would otherwise read as an empty expectation.
+// misspelled expect key would otherwise read as an empty expectation. So is
+// a second YAML document, whose cases would otherwise never run.
 func Load(path string) (*File, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
@@ -59,6 +61,11 @@ func Load(path string) (*File, error) {
 	var raw rawFile
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	// A second document would otherwise be ignored, and its cases with it.
+	var extra yaml.Node
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("%s: a fixture file is one YAML document; found a second", path)
 	}
 	lines := caseLines(src)
 
