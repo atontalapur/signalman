@@ -41,13 +41,14 @@ func loadSet(t testing.TB, rulesDir, taxDir string) *sigma.RuleSet {
 	return rs
 }
 
-// fixtureSources are the rule sets checked into the repository, so they run
-// in CI where the corpus does not exist.
+// fixtureSources are the rule sets checked into the repository, including the
+// shipped rules/ directory, so they run in CI where the corpus does not exist.
 func fixtureSources(t testing.TB) []ruleSource {
 	t.Helper()
 	return []ruleSource{
 		{"sigma-fixtures", loadSet(t, "../../sigma/testdata/rules", "../../sigma/testdata/taxonomy")},
 		{"v1-fixtures", loadSet(t, "../v1/testdata/rules", "../v1/testdata/taxonomy")},
+		{"shipped-rules", loadSet(t, "../../../rules", "../../../config/taxonomy")},
 	}
 }
 
@@ -416,4 +417,26 @@ func compareEngines(t testing.TB, rs *sigma.RuleSet, evs []*event.Event) equival
 	}
 	res.digests = want
 	return res
+}
+
+// TestFixtureSourcesCoverShippedRules keeps the shipped rules/ directory in
+// the CI equivalence set. Every shipped rule must load: a rejection there
+// would silently shrink what the equivalence tests compare.
+func TestFixtureSourcesCoverShippedRules(t *testing.T) {
+	var got *sigma.RuleSet
+	for _, src := range fixtureSources(t) {
+		if src.name == "shipped-rules" {
+			got = src.rs
+		}
+	}
+	if got == nil {
+		t.Fatal("fixtureSources does not include the shipped rules/ directory")
+	}
+	files, err := sigma.RuleFiles("../../../rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rules) == 0 || len(got.Rules) != len(files) {
+		t.Fatalf("shipped-rules loaded %d rules from %d rule files", len(got.Rules), len(files))
+	}
 }
