@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -42,6 +43,7 @@ type Tap struct {
 	broker.Broker
 	now   func() time.Time
 	start time.Time
+	seed  maphash.Seed // hashes verdict record bytes for the redelivery check
 
 	work    chan tapCall
 	pending sync.WaitGroup
@@ -81,6 +83,7 @@ type version struct {
 type outcome struct {
 	ver         int // index into byIdx; -1 for a drop
 	matched     []int
+	sum         uint64 // maphash of the first verdict record's bytes
 	reason      string
 	verdictRecs int
 	dropRecs    int
@@ -111,6 +114,7 @@ func NewTap(b broker.Broker, workers, queue int) *Tap {
 	t := &Tap{
 		Broker:   b,
 		now:      time.Now,
+		seed:     maphash.MakeSeed(),
 		work:     make(chan tapCall, queue),
 		offline:  map[int32]bool{},
 		versions: map[string]*version{},
@@ -324,6 +328,7 @@ type parsedVerdict struct {
 	head    verdictHead
 	ver     *version
 	matched []int
+	sum     uint64
 }
 
 var (
@@ -442,6 +447,7 @@ func (t *Tap) process(c tapCall) {
 				probs = append(probs, p)
 				continue
 			}
+			pv.sum = maphash.Bytes(t.seed, r.Value)
 			verdicts = append(verdicts, pv)
 		case pipe.TopicEventsNorm:
 			var h normHead
@@ -510,14 +516,14 @@ func (t *Tap) process(c tapCall) {
 	for _, pv := range verdicts {
 		o := t.at(pv.head.Partition, pv.head.Seq)
 		if o.verdictRecs > 0 {
-			if o.ver == pv.ver.idx && equalInts(o.matched, pv.matched) {
+			if o.sum == pv.sum && o.ver == pv.ver.idx && equalInts(o.matched, pv.matched) {
 				t.st.dupVerdictRecs++
 				t.st.dupAlerts += len(pv.matched)
 			} else {
 				t.st.redeliveryChanged++
 			}
 		} else {
-			o.ver, o.matched = pv.ver.idx, pv.matched
+			o.ver, o.matched, o.sum = pv.ver.idx, pv.matched, pv.sum
 		}
 		o.verdictRecs++
 		t.st.verdictRecs++
@@ -586,14 +592,15 @@ type Correctness struct {
 	Matched int `json:"matched"`
 	// AlertRecords counts alert records as written, duplicates included.
 	AlertRecords int `json:"alert_records"`
-	// DuplicateVerdictRecords and DuplicateAlerts are redelivered copies,
-	// identical to the first write.
+	// DuplicateVerdictRecords are redelivered verdict records byte for byte
+	// equal to the first write (compared by a 64-bit hash of the bytes), and
+	// DuplicateAlerts the alerts of those events.
 	DuplicateVerdictRecords int `json:"duplicate_verdict_records"`
 	DuplicateAlerts         int `json:"duplicate_alerts"`
 	DuplicateDrops          int `json:"duplicate_drops"`
-	// RedeliveryChanged counts redelivered events whose verdicts differ
-	// from the first write: possible only when a reload landed between the
-	// two writes.
+	// RedeliveryChanged counts redelivered verdict records whose bytes
+	// differ from the first write. A reload landing between the two writes
+	// is the only allowed cause; OK fails on any, OKAcrossReloads does not.
 	RedeliveryChanged int `json:"redelivery_changed"`
 	Straddles         int `json:"straddles"`
 	ShortVerdicts     int `json:"short_verdicts"`
@@ -607,8 +614,16 @@ type Correctness struct {
 	Problems []string         `json:"problems,omitempty"`
 }
 
-// OK reports whether invariant 1 and the reload contract held.
+// OK reports whether invariant 1 and the reload contract held and every
+// redelivered verdict record was identical to its first write. Use it for
+// any run with no reload.
 func (c Correctness) OK() bool {
+	return c.OKAcrossReloads() && c.RedeliveryChanged == 0
+}
+
+// OKAcrossReloads is OK without the redelivery check: under reloads a
+// redelivered event may be evaluated again under the other rule set.
+func (c Correctness) OKAcrossReloads() bool {
 	return c.Missing == 0 && c.Both == 0 && c.Beyond == 0 && c.Straddles == 0 &&
 		c.ShortVerdicts == 0 && c.AlertMismatches == 0 && len(c.Problems) == 0
 }

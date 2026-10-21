@@ -68,6 +68,9 @@ type experiment struct {
 	rep  *ExperimentReport
 	t0   time.Duration // load start
 	t1   time.Duration // load end
+	// reloads is set by an experiment that swaps rule sets, where a
+	// redelivered event may legitimately be evaluated under the other one.
+	reloads bool
 }
 
 func newExperiment(t *testing.T, name string, set loadRuleSet, c *Corpus, base float64) *experiment {
@@ -161,8 +164,12 @@ func (e *experiment) finish(compare bool) *ExperimentReport {
 	e.t.Logf("%s: sent %d, evaluated %d, dropped %d, missing %d, dup verdict records %d, straddles %d, peak lag %d at %v, drain %v, load p99 %v, digests match replay %v",
 		r.Name, r.Replay.Sent, ck.Evaluated, ck.Dropped, ck.Missing, ck.DuplicateVerdictRecords, ck.Straddles,
 		r.PeakLag.Lag, r.PeakLag.At.Round(time.Millisecond), r.Drain.Round(time.Millisecond), r.LoadLatency.P99, deref(r.DigestsMatchReplay))
-	if !ck.OK() {
-		e.t.Errorf("%s: invariant 1 or the reload contract failed: %+v", r.Name, ck)
+	ok := ck.OK()
+	if e.reloads {
+		ok = ck.OKAcrossReloads()
+	}
+	if !ok {
+		e.t.Errorf("%s: invariant 1, the reload contract, or redelivery identity failed: %+v", r.Name, ck)
 	}
 	return r
 }
@@ -348,6 +355,7 @@ func TestLoadExperiment(t *testing.T) {
 		alt.Rules = set.rs.Rules[:len(set.rs.Rules)-len(set.rs.Rules)/10]
 		alt.Version = set.rs.Version + "-minus-10pct"
 		e.h.Tap.Expect(&alt)
+		e.reloads = true
 		reloads := 0
 		e.run([]Phase{e.phase(0.8, time.Minute)}, func(ctx context.Context) {
 			for i := 0; ; i++ {

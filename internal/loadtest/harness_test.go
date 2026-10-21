@@ -359,3 +359,61 @@ func TestMalformedRecordsEachDropForTheirReason(t *testing.T) {
 		}
 	}
 }
+
+func TestTapCountsARedeliveryWhoseBytesChanged(t *testing.T) {
+	rs, _ := repoSet(t)
+	mem := broker.NewMemory(map[string]int32{pipe.TopicEventsRaw: 1})
+	tap := NewTap(mem, 1, 4)
+	defer tap.Close()
+	tap.Expect(rs)
+
+	ev := &event.Event{Seq: 0, Fields: map[string]event.Value{}}
+	it := &pipe.Item{Rec: broker.Record{Topic: pipe.TopicEventsRaw, Offset: 0}, Event: ev}
+	e := pipe.V1(rs)
+	it.Verdicts = e.EvaluateInto(nil, ev)
+	first := pipe.VerdictRecord(e, it)
+	if err := tap.Produce(context.Background(), []broker.Record{pipe.NormRecord(it), first}); err != nil {
+		t.Fatal(err)
+	}
+	// The same rule set and the same matched rules, but different bytes:
+	// a redelivery that compares equal on indices alone.
+	again := first
+	again.Value = bytes.Replace(first.Value, []byte(`"taxonomy_v":"`), []byte(`"taxonomy_v":"x`), 1)
+	if bytes.Equal(again.Value, first.Value) {
+		t.Fatal("test record did not change")
+	}
+	if err := tap.Produce(context.Background(), []broker.Record{pipe.NormRecord(it), again}); err != nil {
+		t.Fatal(err)
+	}
+	got := tap.Check(map[int32]int64{0: 1})
+	if got.RedeliveryChanged != 1 || got.DuplicateVerdictRecords != 0 {
+		t.Fatalf("redelivery changed %d, duplicates %d; want 1 and 0", got.RedeliveryChanged, got.DuplicateVerdictRecords)
+	}
+	if got.OK() {
+		t.Fatal("OK() with a redelivered verdict record that changed")
+	}
+	if !got.OKAcrossReloads() {
+		t.Fatalf("OKAcrossReloads() false: %+v", got)
+	}
+}
+
+func TestTapCountsAnIdenticalRedeliveryAsADuplicate(t *testing.T) {
+	rs, _ := repoSet(t)
+	mem := broker.NewMemory(map[string]int32{pipe.TopicEventsRaw: 1})
+	tap := NewTap(mem, 1, 4)
+	defer tap.Close()
+	tap.Expect(rs)
+	ev := &event.Event{Seq: 0, Fields: map[string]event.Value{}}
+	it := &pipe.Item{Rec: broker.Record{Topic: pipe.TopicEventsRaw, Offset: 0}, Event: ev}
+	e := pipe.V1(rs)
+	it.Verdicts = e.EvaluateInto(nil, ev)
+	for range 2 {
+		if err := tap.Produce(context.Background(), []broker.Record{pipe.NormRecord(it), pipe.VerdictRecord(e, it)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := tap.Check(map[int32]int64{0: 1})
+	if got.RedeliveryChanged != 0 || got.DuplicateVerdictRecords != 1 || !got.OK() {
+		t.Fatalf("correctness %+v", got)
+	}
+}
