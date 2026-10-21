@@ -3,6 +3,51 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.16.0] - 2026-10-21
+
+### Added
+
+- `cmd/cutover check` evaluates one gate of the G0 to G6 ladder and prints
+  every criterion with its status and evidence: a corpus replay digested
+  per partition through v1 and v2, the differential fuzzer's summed
+  counters and the property tests for G0, Prometheus for G1 to G6, and a
+  game day result for the rollback timings. A criterion nothing here can
+  check stays unchecked until attested with `-attest`. `-record` dates a
+  passed gate in `docs/cutover.md` and appends its evidence.
+- `cmd/cutover gameday` rolls the `-rollout` file back and forward with a
+  rename and times each change from `signalman_rollout_percent` and
+  `signalman_alerts_total`; `cutover measure` times a change made by hand.
+- `signalmand -serve v2` makes v2 the serving engine for every rule, with
+  v1 as the oracle under `-shadow`; `cmd/differ -primary v2` joins on v2's
+  records. The default stays `-serve v1`.
+- The ClickHouse `alerts` table and the sink carry the serving `engine`
+  column, with `002_alerts_engine.sql` for an existing table.
+- `signalman_audit_windows_total` counts the windows the invariant 1 audit
+  closed.
+
+### Changed
+
+- The corpus reader moves to `internal/corpus` and the rollout file parser
+  to `internal/pipe`. Prometheus also scrapes the differ.
+- `chsink.Decode` refuses an alert whose engine is not v1 or v2, and the
+  sink dead-letters it.
+
+### Fixed
+
+- Gates passed on a window only partly scraped. Every gate with a window
+  now needs signalmand and the differ scraped for 95% of it (and of the
+  alert volume baseline), and each engine's verdict rate above zero at
+  every 5m step.
+- `-at` could be in the future and `-record` could write a future date.
+  Both are refused.
+- G6 passed audit-violations when the audit never ran. It now needs
+  `signalman_audit_windows_total` rising at every 5m step.
+- A rollback drill counted for any step at any time. G2 to G4 now need one
+  from the gate's step, written within `-drill-slack` (24h) of the hold.
+  `-rollback-only` used to leave production at the rollback target; it now
+  writes `-from` back and checks the gauge, or exits non-zero.
+- `-record` dated a gate with earlier gates undated. It now refuses.
+
 ## [0.15.0] - 2026-10-21
 
 ### Added
