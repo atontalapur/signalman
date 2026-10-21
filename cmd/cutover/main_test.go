@@ -106,11 +106,24 @@ func TestCheckPrintsEvidenceAndChangesNothing(t *testing.T) {
 func TestCheckRecordWritesTheDateAndEvidence(t *testing.T) {
 	clock(t, tuesday.Add(2*time.Hour))
 	doc := docCopy(t)
+	// G5 is recorded only once G0 to G4 have dates.
+	b, _ := os.ReadFile(doc)
+	lines := strings.Split(string(b), "\n")
+	for i, l := range lines {
+		for _, g := range []string{"G0", "G1", "G2", "G3", "G4"} {
+			if strings.HasPrefix(l, "| "+g+" ") && strings.HasSuffix(l, "| |") {
+				lines[i] = strings.TrimSuffix(l, " |") + " 2026-10-01 |"
+			}
+		}
+	}
+	if err := os.WriteFile(doc, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	code, out, stderr := cli(t, "check", "-gate", "G5", "-at", "2026-11-03T15:00:00Z", "-prom", g5Prom(t), "-drill", drillFile(t, 8, 12), "-doc", doc, "-record")
 	if code != exitOK {
 		t.Fatalf("code %d\n%s\n%s", code, out, stderr)
 	}
-	b, _ := os.ReadFile(doc)
+	b, _ = os.ReadFile(doc)
 	if d := cutover.LadderDates(string(b)); d["G5"] != "2026-11-03" {
 		t.Fatalf("G5 dated %q", d["G5"])
 	}

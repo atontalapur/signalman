@@ -263,7 +263,8 @@ go run ./cmd/cutover check -gate G2 -prom http://localhost:9090 -drill g2-rollba
 Nothing is written unless `-record` is given, and `-record` writes only for
 a gate that passed: it puts the date of `-at` (default now) in the table
 above and appends the checks and their evidence under "Gate evidence" at
-the end of this document. It refuses a gate that already has a date. G3 is
+the end of this document. It refuses a gate that already has a date, and a
+gate with an undated gate before it: the ladder is climbed in order. G3 is
 recorded in two steps, `-percent 10` and then `-percent 50`; only the second
 dates the row. `-at` after now is refused: a window that has not ended
 cannot be checked, and its date cannot go in the table.

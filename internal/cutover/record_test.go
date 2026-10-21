@@ -25,13 +25,32 @@ func undated() string {
 	return doc
 }
 
-func TestRecordDatesTheGateAndAppendsEvidence(t *testing.T) {
+// datedBefore is undated() with every gate before gate dated, as the ladder
+// requires before gate is recorded.
+func datedBefore(gate string) string {
 	doc := undated()
+	for _, g := range Gates {
+		if g == gate {
+			break
+		}
+		lines := strings.Split(doc, "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(l, "| "+g+" ") && strings.HasSuffix(l, "| |") {
+				lines[i] = strings.TrimSuffix(l, " |") + " 2026-09-01 |"
+			}
+		}
+		doc = strings.Join(lines, "\n")
+	}
+	return doc
+}
+
+func TestRecordDatesTheGateAndAppendsEvidence(t *testing.T) {
+	doc := datedBefore("G4")
 	out, err := Record(doc, passed("G4", 0), "cutover check -gate G4 -record", recordNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := LadderDates(out); d["G4"] != "2026-11-02" || d["G3"] != "" {
+	if d := LadderDates(out); d["G4"] != "2026-11-02" || d["G5"] != "" {
 		t.Fatalf("dates %v", d)
 	}
 	if !strings.Contains(out, "| G4 100% served by v2 | e | 2026-11-02 |") {
@@ -67,7 +86,7 @@ func TestRecordRefusesAGateThatDidNotPass(t *testing.T) {
 }
 
 func TestRecordG3TakesBothStepsInOrder(t *testing.T) {
-	doc := undated()
+	doc := datedBefore("G3")
 	if _, err := Record(doc, passed("G3", 50), "x", recordNow); err == nil {
 		t.Fatal("G3 50% recorded before 10%")
 	}
@@ -126,5 +145,25 @@ func TestCutoverDocHasTheLadder(t *testing.T) {
 func TestRecordRefusesAReportFromTheFuture(t *testing.T) {
 	if _, err := Record(undated(), passed("G0", 0), "x", checkAt.Add(-time.Second)); err == nil {
 		t.Fatal("a report dated after now was recorded")
+	}
+}
+
+// The ladder is climbed in order: a gate is recorded only once every gate
+// before it has a date.
+func TestRecordEnforcesLadderOrder(t *testing.T) {
+	if _, err := Record(undated(), passed("G0", 0), "x", recordNow); err != nil {
+		t.Fatalf("G0 needs nothing before it: %v", err)
+	}
+	doc := datedBefore("G4")
+	doc = strings.Replace(doc, "| c | 2026-09-01 |", "| c | |", 1) // G2 undated
+	_, err := Record(doc, passed("G4", 0), "x", recordNow)
+	if err == nil || !strings.Contains(err.Error(), "G2") {
+		t.Fatalf("G4 recorded with G2 undated: %v", err)
+	}
+	if _, err := Record(datedBefore("G3"), passed("G3", 10), "x", recordNow); err != nil {
+		t.Fatalf("G3 10%% after G2: %v", err)
+	}
+	if _, err := Record(datedBefore("G2"), passed("G3", 10), "x", recordNow); err == nil {
+		t.Fatal("G3 10% recorded before G2")
 	}
 }

@@ -98,7 +98,8 @@ func OpenDivergences(doc string) (open []string, n int) {
 
 // Record adds a passed gate to docs/cutover.md: the date in the ladder
 // table, and the evidence under "## Gate evidence". It refuses a report that
-// did not pass, a gate already dated, and a step already recorded. G3 is
+// did not pass, a gate already dated, a step already recorded, and a gate
+// with an undated gate before it in the ladder. G3 is
 // two steps: 10% records evidence only, and 50% dates the gate once 10% is
 // recorded. It also refuses a report whose time is after now, which would
 // put a date that has not happened in the ladder. invocation is the command
@@ -125,6 +126,14 @@ func Record(doc string, r Report, invocation string, now time.Time) (string, err
 	}
 	if dates[r.Gate] != "" {
 		return doc, fmt.Errorf("%s is already dated %s", r.Gate, dates[r.Gate])
+	}
+	for _, g := range Gates {
+		if g == r.Gate {
+			break
+		}
+		if dates[g] == "" {
+			return doc, fmt.Errorf("%s is recorded after %s, which has no date; the ladder is climbed in order", r.Name(), g)
+		}
 	}
 	dateIt := !(r.Gate == "G3" && r.Step == 10)
 	if r.Gate == "G3" && r.Step == 50 && !strings.Contains(doc, "\n### G3 10% passed ") {
