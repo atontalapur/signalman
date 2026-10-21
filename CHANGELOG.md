@@ -67,7 +67,7 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 - The alerts table partitions and expires on `ingest_time`, not
   `event_time` as the spec has it, matching the events table. The deviation
   is in `docs/pipeline.md`.
-- Every insert sets `fsync_after_insert=1`, so an acknowledged insert is on
+- The alerts table sets `fsync_after_insert` and `fsync_part_directory`, so an acknowledged insert is on
   disk before its offset is committed.
 - `docs/pipeline.md` says Redpanda and ClickHouse volumes must be reset
   together, since `seq` is the `events.raw` offset and is the dedup key.
