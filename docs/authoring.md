@@ -79,9 +79,9 @@ rules/x.yml:1 [modifier] rule 3f0d7c2e-6a61-4c39-9f5e-4b1f5d3a9e10: selection "s
 |---|---|
 | `yaml` | Fix the YAML. A bad `budget:` lands here too. |
 | `missing-id` | Add an `id`. Verdicts are keyed on it. |
-| `invalid-id` | The `id` is not a UUID such as `3f0d7c2e-6a61-4c39-9f5e-4b1f5d3a9e10`. Generate one with `uuidgen`. |
+| `invalid-id` | The `id` is not a UUID such as `3f0d7c2e-6a61-4c39-9f5e-4b1f5d3a9e10`. Generate one with `uuidgen`. Upper-case hex loads, and verdicts and alerts carry it in lower case. |
 | `level` | Add `level:` with one of `informational`, `low`, `medium`, `high`, `critical`, in lower case. |
-| `duplicate-id` | Another rule already has this id. Generate a new UUID. |
+| `duplicate-id` | Another rule already has this id, in any case. Generate a new UUID. |
 | `no-taxonomy` | The logsource is not mapped. Map it, or use a mapped one. |
 | `condition` | The condition is empty, malformed, or names a selection that does not exist. |
 | `detection` | The detection block has a shape the compiler does not take. |

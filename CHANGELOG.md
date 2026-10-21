@@ -41,6 +41,10 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   POST failed. The comment copy now drops table rows too, keeping failures
   and warnings first, says how many it left out, and the job summary gets
   the full report it points to.
+- Two rules whose ids differed only in hex case both loaded, matched the
+  same events, and wrote alerts to one `(partition, seq, rule_id)` row, so
+  one alert disappeared on merge. The loader now lowers the id, so the rule
+  set and `gates --set` reject the second as `duplicate-id`.
 
 ## [0.11.0] - 2026-10-21
 

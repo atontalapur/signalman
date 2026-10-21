@@ -304,6 +304,39 @@ func TestLoadRuleSetRejectsADuplicateID(t *testing.T) {
 	}
 }
 
+// A UUID is one value whatever the case of its hex. The loader lowers the
+// id before anything compares or stores it, so two spellings of one id are
+// a duplicate and not two rules writing the same alerts row.
+func TestLoadRuleSetRejectsADuplicateIDInAnotherCase(t *testing.T) {
+	tax := loadTax(t)
+	rs, errs, err := LoadRuleSet("testdata/rules_dup_case", tax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Rules) != 1 {
+		t.Fatalf("one id in two cases loads once: got %d rules", len(rs.Rules))
+	}
+	if len(errs) != 1 || errs[0].Code != CodeDuplicateID {
+		t.Fatalf("expected one duplicate-id rejection, got %+v", errs)
+	}
+	if want := "1f1a1f1a-000a-4000-8000-00000000000a"; errs[0].RuleID != want {
+		t.Errorf("rejection names %q, want %q", errs[0].RuleID, want)
+	}
+}
+
+func TestLoadRuleLowersTheID(t *testing.T) {
+	src := "title: t\nid: 1F1A1F1A-000B-4000-8000-00000000000B\nlevel: low\n" +
+		"logsource:\n  product: windows\n  category: process_creation\n" +
+		"detection:\n  selection:\n    Image: x\n  condition: selection\n"
+	r, lerr := LoadRuleBytes("r.yml", []byte(src), loadTax(t))
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if want := "1f1a1f1a-000b-4000-8000-00000000000b"; r.ID != want {
+		t.Errorf("ID %q, want %q", r.ID, want)
+	}
+}
+
 func TestRuleSetVersionTracksRuleContent(t *testing.T) {
 	tax := loadTax(t)
 	base, _, err := LoadRuleSet("testdata/rules", tax)

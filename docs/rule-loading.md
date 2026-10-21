@@ -32,7 +32,9 @@ fuzzer and the corpus tools generate rules that never touch the disk.
    exist is `condition`.
 7. **Check the id and level.** The id must be a UUID in the 36-character
    8-4-4-4-12 form, hex in either case; anything else, including braces, a
-   `urn:uuid:` prefix, or the 32-digit form, is `invalid-id`. `level` must
+   `urn:uuid:` prefix, or the 32-digit form, is `invalid-id`. The loader
+   lowers the hex before anything else reads the id, so the duplicate
+   check, RuleSetV, verdicts, and alerts carry one spelling. `level` must
    be one of `informational`, `low`, `medium`, `high`, `critical`, spelled
    that way; missing or anything else is `level`. The ClickHouse alerts
    table stores `rule_id` as a UUID and `severity` as an enum of those five,
@@ -114,7 +116,10 @@ A duplicate id is rejected rather than merged: verdicts are keyed on the rule
 id, so two rules sharing one would produce verdicts nobody could attribute.
 The first file to claim an id keeps it, which makes the outcome independent
 of walk order, and the second gets a `duplicate-id` rejection naming both
-paths.
+paths. Ids are compared after lowering, so `C63673F9-...` and
+`c63673f9-...` are the same id: both would otherwise load and write alerts
+to the same `(partition, seq, rule_id)` row, and one would vanish when
+ClickHouse merges.
 
 ## Where this is enforced
 
