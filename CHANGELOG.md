@@ -3,6 +3,56 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.15.0] - 2026-10-21
+
+### Added
+
+- `signalmand -shadow` evaluates every event with v2 beside v1 in the same
+  batch and writes `verdicts.v2` with no alerts. The slot stores the pair as
+  one value, so a reload never splits them across RuleSetV. A v2 panic or
+  malformed verdict list leaves v1 untouched, writes no v2 record, and
+  counts in `signalman_shadow_failures_total`.
+- `cmd/differ` merge-joins `verdicts.v1` and `verdicts.v2` per partition on
+  (partition, seq, rule_id), classifies disagreements into the spec's five
+  classes, and writes each to the `divergences` topic and the JSON log.
+  Memory is bounded by one head per side and a bounded channel.
+- Per-rule rollout: v2 serves a rule's alerts when fnv(rule_id) mod 100 is
+  below the rollout percentage, read once per batch, so each match gets
+  exactly one alert from its serving engine. `signalmand -rollout` rereads
+  the percentage from a file every `-rollout-poll` (5s) and on SIGHUP.
+  Alerts carry the serving engine; `signalman_alerts_total` and
+  `signalman_rollout_percent` are exported.
+- `docs/cutover.md`: the four arguments, the gate ladder, retirement
+  criteria, and an empty divergence log.
+- `broker.Checkpoint`: a committed offset with its commit metadata.
+
+### Changed
+
+- The differ commits each side's repeat-dropping state as offset commit
+  metadata (`CommitCheckpoints` replaces `CommitOffsets` on the broker).
+- `-create-topics` and the compose stack create `verdicts.v2` and
+  `divergences`, with the same 1 MiB `max.message.bytes` as every topic.
+
+### Fixed
+
+- A 20 MB `signalmand` binary was committed at the repository root. It is
+  removed, and the cmd binary names are ignored there.
+- signalmand now refuses at startup a `verdicts.v2` with fewer partitions
+  than `events.raw` when the shadow is on, and a `verdicts.v2` record over
+  the output limit stops the pipeline like a `verdicts.v1` one.
+- A differ restart inside a redelivered batch could report false missing
+  verdicts, because its repeat state started empty.
+- A shadowed redelivery of events first written without `-shadow` was
+  passed over as a repeat, so its v2 records were reported missing.
+- A v2 record for an event v1 wrote unshadowed is no longer counted as a
+  missing v1 verdict.
+- A shadowed v1 record whose v2 record never arrives no longer blocks its
+  partition forever: once a later unshadowed v1 record shows signalmand
+  moved on, it is reported missing after v2 is read to its end offset.
+- The canary age and `signalman_rule_matches_total` follow the alerts
+  actually served, so a v2 that wrongly stops matching the canary while it
+  serves the rule now pages.
+
 ## [0.14.0] - 2026-10-21
 
 ### Added
