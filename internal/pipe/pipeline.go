@@ -146,6 +146,9 @@ type work struct {
 // Run processes events.raw until ctx ends or a stage fails. Work that was
 // not committed when it returns is redelivered to the next Run.
 func (p *Pipeline) Run(ctx context.Context) error {
+	if err := p.checkTopics(ctx); err != nil {
+		return err
+	}
 	cons, err := p.b.Consume(p.cfg.Group, []string{TopicEventsRaw})
 	if err != nil {
 		return err
@@ -202,6 +205,32 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		return err
 	}
 	return sinkErr
+}
+
+// checkTopics refuses a topic layout the sink cannot write to. Verdicts are
+// pinned to the event's partition, so a verdict topic with fewer partitions
+// than events.raw fails every produce for the partitions it lacks, forever.
+// The other outputs are keyed and need only exist.
+func (p *Pipeline) checkTopics(ctx context.Context) error {
+	raw, err := p.b.EndOffsets(ctx, TopicEventsRaw)
+	if err != nil {
+		return fmt.Errorf("topic check: %w", err)
+	}
+	vt := VerdictTopic(p.slot.load().eng)
+	for _, t := range []string{TopicEventsNorm, vt, TopicAlerts, TopicDrops} {
+		parts, err := p.b.EndOffsets(ctx, t)
+		if err != nil {
+			return fmt.Errorf("topic check: output topic %s: %w", t, err)
+		}
+		if len(parts) == 0 {
+			return fmt.Errorf("topic check: output topic %s does not exist", t)
+		}
+		if t == vt && len(parts) < len(raw) {
+			return fmt.Errorf("topic check: %s has %d partitions and %s has %d; verdicts are pinned to the event's partition, so it needs at least as many",
+				vt, len(parts), TopicEventsRaw, len(raw))
+		}
+	}
+	return nil
 }
 
 // pool starts n workers and runs done once all of them return.
@@ -362,24 +391,55 @@ func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-cha
 // match, or a drop. Items are in poll order, which is offset order within a
 // partition, so a partition's records reach every topic in Seq order, which
 // is the ordering invariant for alerts.
-func outputs(b *batch) []broker.Record {
+//
+// An item whose events.norm or alert record would be over
+// MaxOutputRecordBytes becomes an output-too-large drop instead: nothing
+// for it has been written yet, so it still leaves as exactly one outcome.
+// A verdict record over the limit is a property of the rule set, not the
+// event, and is an error.
+func (p *Pipeline) outputs(b *batch) ([]broker.Record, error) {
 	recs := make([]broker.Record, 0, 2*len(b.items))
 	for _, it := range b.items {
 		if it.Drop != nil {
 			recs = append(recs, DropRecord(it))
 			continue
 		}
-		recs = append(recs, NormRecord(it))
+		var vrs []broker.Record
 		if b.act.shadow != nil {
-			recs = append(recs, ShadowedVerdictRecords(b.act.eng, b.act.shadow, it)...)
+			vrs = ShadowedVerdictRecords(b.act.eng, b.act.shadow, it)
 		} else {
-			recs = append(recs, VerdictRecord(b.act.eng, it))
+			vrs = []broker.Record{VerdictRecord(b.act.eng, it)}
 		}
+		for _, vr := range vrs {
+			if n := broker.RecordSize(vr); n > MaxOutputRecordBytes {
+				rs := b.act.eng.RuleSet()
+				return nil, fmt.Errorf("%w: rule set %s has %d rules and its %s verdict record is %d bytes, over the %d byte output limit",
+					broker.ErrPermanent, rs.Version, len(rs.Rules), vr.Topic, n, MaxOutputRecordBytes)
+			}
+		}
+		mine := append([]broker.Record{NormRecord(it)}, vrs...)
 		alerts(b, it, func(r *sigma.Rule, eng Engine) {
-			recs = append(recs, AlertRecord(r, it, eng.Name()))
+			mine = append(mine, AlertRecord(r, it, eng.Name()))
 		})
+		if big := oversized(mine); big != "" {
+			it.Verdicts, it.Shadow, it.Event.Fields = nil, nil, nil
+			p.norm.drop(it, ReasonOutputTooLarge, big)
+			recs = append(recs, DropRecord(it))
+			continue
+		}
+		recs = append(recs, mine...)
 	}
-	return recs
+	return recs, nil
+}
+
+// oversized describes the first record over MaxOutputRecordBytes, or is "".
+func oversized(recs []broker.Record) string {
+	for _, r := range recs {
+		if n := broker.RecordSize(r); n > MaxOutputRecordBytes {
+			return fmt.Sprintf("%s record would be %d bytes, limit %d", r.Topic, n, MaxOutputRecordBytes)
+		}
+	}
+	return ""
 }
 
 // alerts calls emit once per alert the item owes: for each matched rule,
@@ -473,9 +533,14 @@ func (p *Pipeline) count(b *batch) {
 // is now durable, and resets the canary age of every partition whose canary
 // alert is in it. Drops carry no trustworthy event time and are skipped,
 // and so are canary events: they arrive every 30 seconds whatever the
-// upstream is doing, and would hide an upstream that stopped.
+// upstream is doing, and would hide an upstream that stopped. An event time
+// ahead of the metrics clock counts as now and is counted in
+// signalman_event_time_future_total; the event and its verdicts are
+// untouched, since the clock is the metric's and never the engine's.
 func (p *Pipeline) stale(b *batch) {
+	now := p.m.Staleness.Now()
 	newest := map[int32]time.Time{}
+	future := map[int32]int{}
 	for _, it := range b.items {
 		if it.Drop != nil {
 			continue
@@ -489,19 +554,33 @@ func (p *Pipeline) stale(b *batch) {
 			}
 			continue
 		}
-		if it.Event.EventTime.After(newest[part]) {
-			newest[part] = it.Event.EventTime
+		t := it.Event.EventTime
+		if t.After(now) {
+			future[part]++
+			t = now
+		}
+		if t.After(newest[part]) {
+			newest[part] = t
 		}
 	}
 	for part, t := range newest {
 		p.m.Staleness.Advance(part, t)
 	}
+	for part, n := range future {
+		p.m.EventTimeFuture.WithLabelValues(strconv.Itoa(int(part))).Add(float64(n))
+	}
 }
 
 // write produces a batch's outputs, retrying until they are durable or ctx
-// ends. A sink that cannot write is lag, so this never gives up on its own.
+// ends. A sink that cannot write is lag, so a transient failure never makes
+// it give up. A permanent one (broker.ErrPermanent) would fail the same way
+// forever and hold every partition behind it, so it stops the pipeline with
+// the batch uncommitted.
 func (p *Pipeline) write(ctx context.Context, b *batch) error {
-	recs := outputs(b)
+	recs, err := p.outputs(b)
+	if err != nil {
+		return err
+	}
 	wait := p.cfg.RetryBackoff
 	for {
 		err := p.b.Produce(ctx, recs)
@@ -510,6 +589,11 @@ func (p *Pipeline) write(ctx context.Context, b *batch) error {
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if errors.Is(err, broker.ErrPermanent) {
+			first, last := b.items[0], b.items[len(b.items)-1]
+			return fmt.Errorf("sink: batch of %d events (first partition %d offset %d, last partition %d offset %d) cannot be written: %w",
+				len(b.items), first.Rec.Partition, first.Rec.Offset, last.Rec.Partition, last.Rec.Offset, err)
 		}
 		p.log.Warn("produce failed, retrying the batch", "records", len(recs), "err", err)
 		if !sleep(ctx, wait) {

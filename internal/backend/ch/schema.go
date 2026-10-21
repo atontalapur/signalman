@@ -55,9 +55,12 @@ func checkTable(table string) error {
 }
 
 // CreateTableSQL is the events table DDL. The spec fixes the alerts table,
-// not an events table; this one keeps the alert table's key, partitioning,
-// and TTL so the two line up, and replaces its fields Map(String, String)
-// with one column per comparison family. Each holds a value v1 would
+// not an events table; this one keeps the alert table's key and 90 day
+// retention, and replaces its fields Map(String, String) with one column per
+// comparison family. Partitioning and TTL read ingest_time, which the
+// pipeline sets, not event_time, which the source sets: an old or skewed
+// event_time would be TTL-deleted on arrival, and an insert spanning more
+// than 100 daily partitions is refused. event_time is used only in WHERE. Each holds a value v1 would
 // compute at match time, computed once in Go by Encode. No column is
 // Nullable, so SQL NULL and its three-valued logic never enter a WHERE
 // clause. See docs/backend-ch.md.
@@ -80,8 +83,8 @@ func CreateTableSQL(table string) (string, error) {
   raw         String CODEC(ZSTD(3))
 ) ENGINE = ReplacingMergeTree
 ORDER BY (partition, seq)
-PARTITION BY toYYYYMMDD(event_time)
-TTL toDateTime(event_time) + INTERVAL 90 DAY`, nil
+PARTITION BY toYYYYMMDD(ingest_time)
+TTL toDateTime(ingest_time) + INTERVAL 90 DAY`, nil
 }
 
 // Values returns the row's columns in CreateTableSQL order, for a

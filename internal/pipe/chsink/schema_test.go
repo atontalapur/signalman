@@ -67,13 +67,18 @@ func TestDDLColumnsMatchSpec(t *testing.T) {
 	}
 }
 
+// Partitioning and TTL read ingest_time, which the pipeline sets from the
+// events.raw record, not event_time, which the source sets: an old event
+// time would be TTL-deleted on insert, and a skewed batch would span more
+// than 100 partitions. The spec says event_time; docs/pipeline.md records
+// the deviation.
 func TestDDLEngineOrderPartitionTTL(t *testing.T) {
 	ddl := readDDL(t)
 	for _, want := range []string{
 		") ENGINE = ReplacingMergeTree\n",
 		"\nORDER BY (partition, seq, rule_id)\n",
-		"\nPARTITION BY toYYYYMMDD(event_time)\n",
-		"\nTTL toDateTime(event_time) + INTERVAL 90 DAY;",
+		"\nPARTITION BY toYYYYMMDD(ingest_time)\n",
+		"\nTTL toDateTime(ingest_time) + INTERVAL 90 DAY;",
 	} {
 		if !strings.Contains(ddl, want) {
 			t.Errorf("DDL lacks %q", want)

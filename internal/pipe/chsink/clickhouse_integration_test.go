@@ -17,9 +17,16 @@ import (
 // rows are the rows a single insert left. It applies the DDL from
 // deploy/clickhouse (idempotent) and writes under a partition number no
 // pipeline produces, so it can share the table with other runs.
+//
+// SIGNALMAN_CLICKHOUSE_DSN is set by `make integration` and the CI
+// integration job. Without it the test skips locally and fails under
+// CI=true, where a skip would read green without running.
 func TestReingestCollapsesInClickHouse(t *testing.T) {
 	dsn := os.Getenv("SIGNALMAN_CLICKHOUSE_DSN")
 	if dsn == "" {
+		if os.Getenv("CI") == "true" {
+			t.Fatal("SIGNALMAN_CLICKHOUSE_DSN is not set")
+		}
 		t.Skip("SIGNALMAN_CLICKHOUSE_DSN is not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -39,14 +46,18 @@ func TestReingestCollapsesInClickHouse(t *testing.T) {
 		}
 	}
 
-	// Negative partitions never come from Kafka. Recent event times keep
-	// the rows inside the 90 day TTL.
+	// Negative partitions never come from Kafka. TTL reads ingest_time, so
+	// a recent ingest_time keeps the rows; half the event times are two
+	// years old, which an event_time TTL would delete on the merge below.
 	part := -int32(time.Now().UnixNano()%1_000_000_000) - 1
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	var batch []pipe.Alert
 	for seq := range uint64(50) {
 		a := genAlert(part, seq, int(seq)%len(ruleIDs))
 		a.EventTime, a.IngestTime = now, now.Add(time.Second)
+		if seq%2 == 0 {
+			a.EventTime = now.AddDate(-2, 0, 0)
+		}
 		batch = append(batch, a)
 	}
 

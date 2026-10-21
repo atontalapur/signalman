@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -282,16 +283,92 @@ func TestReportEscapesPipesAndStaysUnderTheCommentLimit(t *testing.T) {
 		rules = append(rules, rg)
 	}
 	var b strings.Builder
-	renderReport(&b, reportHeader{TaxonomyV: "t"}, rules, nil)
+	if err := renderReport(&b, reportHeader{TaxonomyV: "t"}, rules, nil, maxComment); err != nil {
+		t.Fatal(err)
+	}
 	out := b.String()
-	if len(out) > maxReport {
-		t.Fatalf("report is %d bytes, cap %d", len(out), maxReport)
+	if len(out) > maxComment {
+		t.Fatalf("report is %d bytes, cap %d", len(out), maxComment)
 	}
 	if !strings.Contains(out, "| `rules/a\\|b.yml` |") {
 		t.Errorf("a pipe in a cell must be escaped")
 	}
 	if !strings.Contains(out, "Details were cut") {
 		t.Errorf("a cut report says so")
+	}
+}
+
+// A large PR has more table rows than one comment holds. The comment keeps
+// the failures and warnings, says how many rules it left out, and stays
+// under the cap; the unbounded report keeps every row and every detail.
+func TestReportWithManyRulesBoundsTheCommentAndNotTheFullReport(t *testing.T) {
+	var rules []ruleGates
+	for i := 0; i < 3000; i++ {
+		rg := ruleGates{Path: fmt.Sprintf("rules/some/fairly/long/directory/name/rule_%04d.yml", i)}
+		for g := gParse; g < numGates; g++ {
+			rg.Gates[g] = gateResult{Status: gatePass, Note: "fine"}
+		}
+		switch i {
+		case 2500:
+			rg.Gates[gFixtures] = gateResult{Status: gateFail, Note: "fixtures disagree", Detail: []string{"case x: want match"}}
+		case 2900:
+			rg.Gates[gPrefilter] = gateResult{Status: gateWarn, Note: "in Always", Help: "add a literal"}
+		}
+		rules = append(rules, rg)
+	}
+	missing := []string{"rules/gone.yml"}
+
+	var full strings.Builder
+	if err := renderReport(&full, reportHeader{TaxonomyV: "t"}, rules, missing, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(full.String(), "\n| `rules/"); n != len(rules) {
+		t.Fatalf("full report has %d rows, want %d", n, len(rules))
+	}
+	if !strings.Contains(full.String(), "case x: want match") || strings.Contains(full.String(), "not listed") {
+		t.Fatalf("the full report must keep details and cut nothing")
+	}
+
+	var comment strings.Builder
+	if err := renderReport(&comment, reportHeader{TaxonomyV: "t"}, rules, missing, maxComment); err != nil {
+		t.Fatal(err)
+	}
+	out := comment.String()
+	if len(out) > maxComment {
+		t.Fatalf("comment is %d bytes, cap %d", len(out), maxComment)
+	}
+	for _, want := range []string{"rule_2500.yml", "rule_2900.yml", "rules/gone.yml", "3000 rules checked: 1 failed, 1 with warnings"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("comment lacks %q", want)
+		}
+	}
+	listed := strings.Count(out, "\n| `rules/")
+	if listed >= len(rules) || listed < 2 {
+		t.Fatalf("comment lists %d rows", listed)
+	}
+	if want := fmt.Sprintf("%d of %d rules are not listed", len(rules)-listed, len(rules)); !strings.Contains(out, want) {
+		t.Errorf("comment lacks %q", want)
+	}
+	if !strings.HasPrefix(out, reportMarker) {
+		t.Errorf("comment lost its marker")
+	}
+}
+
+// --comment writes the bounded report to a file and stdout keeps the full
+// one, so the job summary and the PR comment can come from one run.
+func TestGatesCommentFlagWritesASecondReport(t *testing.T) {
+	p := copyRule(t, "noisy", "")
+	comment := filepath.Join(t.TempDir(), "comment.md")
+	code, out, stderr := gates(t, "--comment", comment, p)
+	if code != exitOK {
+		t.Fatalf("code %d\n%s%s", code, out, stderr)
+	}
+	b, err := os.ReadFile(comment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != out {
+		t.Fatalf("a small report is the same in both places:\nstdout:\n%s\ncomment:\n%s", out, b)
 	}
 }
 

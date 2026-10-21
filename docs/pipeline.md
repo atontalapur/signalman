@@ -27,6 +27,7 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 | `divergences` | partition, pinned | `differ.Divergence`: one per `(partition, seq, rule_id)` the engines disagree on (`docs/cutover.md`) |
 | `alerts` | rule_id | `Alert`: one per match by the engine serving the rule, shaped like the spec's ClickHouse alert table plus `engine` |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
+| `alerts.dead` | the alert's key | an `alerts` record the ClickHouse table cannot hold, written by `signalman-sink`; not in the spec |
 
 `verdicts.v1` holds one record per event rather than one per verdict, so the
 topic grows with events, not events times rules, and an event's verdicts are
@@ -56,7 +57,7 @@ as a string, since `Value` has no float kind. The event time comes from the
 ### Drop reasons
 
 The only way an admitted event leaves without verdicts. Every reason is a
-decode failure; overload never drops.
+property of the record's bytes; overload never drops.
 
 | Reason | Meaning |
 |---|---|
@@ -68,6 +69,33 @@ decode failure; overload never drops.
 | `missing-source` | no `source` header |
 | `event-time` | event time absent or unparseable |
 | `panic` | the normalizer panicked on this record; the partition moves on |
+| `record-too-large` | key, value, and headers together over 128 KiB; the entry keeps a 16 KiB prefix of the raw bytes (`truncated: true`, `raw_bytes` is the full length) |
+| `output-too-large` | the record fit, but its `events.norm` or an alert record would be over the output limit (long flattened names can do this); decided in the sink before anything for the event is written |
+
+### Size limits
+
+A broker refuses a record over `max.message.bytes` on every retry, so one
+oversized output would hold its partition forever, and again after a
+restart. The limits make every output fit:
+
+| Limit | Value | Where |
+|---|---|---|
+| `max.message.bytes` on every topic | 1 MiB | `deploy/docker-compose.yml`, `signalmand -create-topics` |
+| producer batch limit | 1 MiB, the same | `broker.MaxMessageBytes`, `kgo.ProducerBatchMaxBytes` |
+| largest output record (key, value, headers) | 1 MiB minus 16 KiB for framing | `pipe.MaxOutputRecordBytes` |
+| largest admitted record | 128 KiB | `pipe.DefaultMaxRecordBytes` |
+
+JSON escapes one byte to at most six, and a drop entry carries the host id
+twice (field and key), the source, a detail cut to 1 KiB, and the raw bytes
+in base64, so the entry for a record under 128 KiB stays under seven times
+that, inside the output limit. A verdict record grows with the rule count
+(about 60 bytes a rule), so a rule set of more than roughly 16,000 rules
+stops the pipeline with an error naming the rule set.
+
+Topics that already exist keep their configuration: neither the compose
+setup nor `-create-topics` alters them. On a Redpanda volume created before
+this limit, set it by hand with
+`rpk topic alter-config <topic> --set max.message.bytes=1048576`.
 
 ## Delivery: at-least-once
 
@@ -82,8 +110,21 @@ into silent loss. A delayed detection can be reported on afterwards; a lost
 one cannot, so at-least-once with an idempotent sink was chosen.
 
 A failed produce is retried with backoff until it succeeds or the process
-stops. A failed commit is logged and not retried: the next batch's commit
+stops, unless the error is permanent (`broker.ErrPermanent`: message too
+large, unknown topic or partition, a pinned partition the topic lacks, an
+authorization failure). Retrying those cannot succeed and would hold every
+partition behind the batch, so the pipeline stops with the batch
+uncommitted and an error naming its offsets. At startup it also refuses a
+missing output topic, or a `verdicts.v1` with fewer partitions than
+`events.raw`, since verdicts are pinned to the event's partition. A failed commit is logged and not retried: the next batch's commit
 supersedes it, and the worst case is redelivery.
+
+A batch still in flight when a rebalance takes its partition away does not
+commit for that partition: the Redpanda consumer drops commits for
+partitions this member no longer owns, for a reassigned partition until a
+record is polled from it again, and any commit that would move a
+partition's offset backwards. The new owner redelivers from its own
+position.
 
 Within a partition, outputs are written in Seq order, so alerts for a
 partition are emitted in Seq order. Ordering across partitions, and so across
@@ -113,11 +154,25 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   ones. The buffer never holds more than `batch-rows + max-poll` rows.
 - **Commit after insert.** Offsets are committed only after the INSERT
   returns. A crash between the two redelivers the batch. A redelivered alert
-  is an exact copy (same partition, seq, rule_id, and event_time, so the
+  is an exact copy (same partition, seq, rule_id, and ingest_time, so the
   same PARTITION BY day), and the ReplacingMergeTree collapses the copies
   when parts merge. Until a merge runs the copies are visible: read with
   `FINAL`, or `OPTIMIZE TABLE alerts FINAL`, to see the collapsed table. A
-  failed commit is logged, not retried, as in the pipeline.
+  failed commit is logged, not retried, as in the pipeline. Every insert
+  sets `fsync_after_insert=1`, so ClickHouse acknowledges only after the part
+  is on disk; without it a host crash after the ack could lose rows whose
+  offsets are committed. The cost is one fsync per part, small at the
+  sink's batch sizes.
+- **Partitioning and TTL on ingest_time.** The spec partitions and expires
+  the table on `event_time`. Here both read `ingest_time` instead, the
+  `events.raw` record timestamp, which a replay reproduces. `event_time`
+  comes from the source: an alert for an event older than 90 days would be
+  TTL-deleted on insert, after its offset was committed, which is loss; and
+  a batch with skewed times could touch more than the 100 partitions one
+  INSERT may. Queries still filter on `event_time`. A record whose
+  `event_time` or `ingest_time` is outside the DateTime64(3) range
+  (1900-01-01 to 2299-12-31) is refused by the sink, since the normalizer
+  has no drop reason for it at this layer.
 - **Outage.** A failed insert is retried with the same rows, backing off
   from 100ms to 5s, and nothing is polled meanwhile. The outage surfaces as
   `signalman_consumer_lag_records{topic="alerts"}` on the sink's `/metrics`
@@ -125,21 +180,52 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   retention. Nothing is dropped. signalmand itself is not slowed: the
   acceptance line "the sink backpressures the pipeline" holds for the
   alerts consumer, whose lag is the backpressure, not for detection.
-- **Records the table cannot hold.** The rule loader accepts any rule id
-  and any level, but the table's `rule_id` is a UUID and `severity` is an
-  Enum8 of the five Sigma levels. A record that would fail every insert of
-  its batch stops the sink with its topic, partition, and offset, and
-  nothing in that batch is committed. Skipping it would be silent loss;
-  stopping is lag an operator can see and fix.
+- **Records the table cannot hold.** The table's `rule_id` is a UUID,
+  `severity` is an Enum8 of the five Sigma levels, and the times are
+  DateTime64(3). The rule loader now rejects a non-UUID id and a missing or
+  unknown level (codes `invalid-id` and `level`), so these come from a
+  hand-written record, an older rule set, or a bug, but a record that would
+  fail every insert of its batch would still stop the sink for every
+  partition. `Decode` checks each record, and one it refuses goes to the
+  `alerts.dead` topic: same key and value, with headers naming its topic,
+  partition, offset, and the reason (capped at 1 KiB; a value too large to
+  fit beside the headers is cut, and `signalman-dead-truncated` records its
+  length). Its offset is committed with the batch around it, only after the
+  dead-letter write returned, so a crash redelivers it and it may be
+  dead-lettered twice. Each one increments
+  `signalman_sink_dead_letters_total`; any increase is an alert stored
+  nowhere queryable and needs an operator. `alerts.dead` keeps 30 days and
+  has the same 1 MiB record limit as the other topics. The sink refuses to
+  start without it. A transient dead-letter write failure is retried like
+  an insert; a permanent one stops the sink with the record's position.
+- **Permanent insert errors.** ClickHouse exceptions an identical insert
+  hits again (parse and type errors, a missing table or column, refused
+  auth, too many partitions in one block) and client-side append errors
+  wrap `chsink.ErrPermanent`. The sink then stops at once, naming the
+  offsets it holds per partition, and commits nothing. Everything else,
+  including "too many parts" while merges catch up, is retried as an
+  outage.
 
-Idempotence is tested twice. `TestReingestingABatchChangesNoRow` models the
-merge (last insert wins per sorting key, within a day partition) and checks
-over 500 random histories that inserting a batch again, whole or as a
-prefix, changes no row of `FINAL` or of the merged table.
+Idempotence is checked twice, once against a model and once for real.
+`TestModelReingestChangesNoRow` runs over `replacingTable`, a model of the
+merge written for the test (last insert wins per sorting key, within a day
+partition), and checks over 500 random histories that inserting a batch
+again, whole or as a prefix, changes no row of `FINAL` or of the merged
+table. That shows the sink's redelivery pattern is safe if ClickHouse merges
+the way the model does; it proves nothing about ClickHouse.
 `TestReingestCollapsesInClickHouse` (build tag `integration`, needs
-`SIGNALMAN_CLICKHOUSE_DSN`) does the same against a real ClickHouse with
-`SELECT ... FINAL` and `OPTIMIZE TABLE ... FINAL`. It has not been run yet:
-there is no Docker on the development machine.
+`SIGNALMAN_CLICKHOUSE_DSN`, fails instead of skipping under `CI=true`) is
+the proof: the same check against a real ClickHouse with `SELECT ... FINAL`
+and `OPTIMIZE TABLE ... FINAL`. It has not been run yet: there is no Docker
+on the development machine.
+
+**Reset Redpanda and ClickHouse together.** `seq` is the `events.raw`
+offset, and `(partition, seq, rule_id)` is the table's dedup key. Recreating
+`events.raw` (or wiping the Redpanda volume) restarts offsets at 0, so new
+alerts reuse keys already in the table, and the ReplacingMergeTree collapses
+distinct alerts into one, silently. Wipe both volumes at once
+(`docker compose -f deploy/docker-compose.yml down -v`), or drop the
+`alerts` table when the topic is recreated.
 
 ## Rule set reload
 
@@ -184,6 +270,12 @@ offset. Windows slide forward with the committed offset, at most
 names the partition and seqs, and increments
 `signalman_audit_violations_total{partition}`; any increase is a P1.
 
+Each partition's audit starts at the later of the group's committed offset
+and the log start of `events.raw`, so offsets retention removed before the
+group ever committed are not reported missing. A committed offset below the
+log start is logged as a warning: those records were removed before the
+pipeline read them.
+
 It assumes `events.raw` is a plain topic with dense offsets, and that it
 starts in the same `signalmand` process before the pipeline produces. Two
 instances on one group would break the second assumption.
@@ -224,6 +316,8 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_shadow_failures_total` | counter | engine | sink, per event the shadow failed on; not in the spec table |
 | `signalman_alerts_total` | counter | engine, rule_id | sink, per durable alert, by the serving engine; not in the spec table |
 | `signalman_rollout_percent` | gauge | | the slot, on every rollout change; not in the spec table |
+| `signalman_event_time_future_total` | counter | partition | sink, per durable event whose event time is ahead of the clock; not in the spec table |
+| `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
 
 `signalman_rule_eval_seconds` is sampled: on events whose Seq is a multiple
 of `-rule-eval-every` (default 100, 0 turns it off), a match worker times
@@ -237,8 +331,12 @@ committed. Staleness is `now() - max(event_time)` over events whose batch is
 durable, per partition, computed when Prometheus scrapes, so it keeps rising
 while nothing arrives. An upstream that stops producing leaves lag at zero
 and staleness climbing; only staleness sees it. Canary events are left out
-of staleness, or the canary would keep it fresh. The wall clock is read
-only by the metric, never by anything a verdict depends on.
+of staleness, or the canary would keep it fresh. An event time ahead of
+the clock counts as now and increments `signalman_event_time_future_total`:
+taken as is, one event from a host whose clock runs a day fast would hold
+staleness at zero for that day. The event and its verdicts keep the time
+it carried. The wall clock is read only by the metric, never by anything a
+verdict depends on.
 
 ## Canary
 
@@ -275,7 +373,11 @@ on the in-memory broker with a fake clock, kills the consumer, and evaluates
 the rule as written in the file against the gauge every scrape interval.
 
 `deploy/prometheus/` holds the scrape config and alert rules, with promtool
-unit tests in `alerts_test.yml` (`make check-alerts`).
+unit tests in `alerts_test.yml` (`make check-alerts`). CI runs that target
+in the `alerts` job with promtool 3.5.0, the compose Prometheus version,
+taken from the official release tarball after a sha256 check against a
+value pinned in `ci.yml`. A version bump changes both the compose image and
+that pin.
 `deploy/grafana/dashboards/signalman.json` is the dashboard, provisioned
 into the compose stack's Grafana at `localhost:3000`.
 

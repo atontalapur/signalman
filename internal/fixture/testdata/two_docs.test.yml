@@ -1,0 +1,13 @@
+rule: proc_dump.yml
+cases:
+  - name:   first document
+    expect: match
+    event:
+      event_id: 1
+---
+rule: proc_dump.yml
+cases:
+  - name:   second document, never read before
+    expect: no-match
+    event:
+      event_id: 2

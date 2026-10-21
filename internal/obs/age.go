@@ -32,15 +32,27 @@ func newAgeGauge(name, help string, now func() time.Time) *AgeGauge {
 	}
 }
 
-// Advance moves the partition's instant forward to t. An earlier t is
-// ignored, so out-of-order event times never make staleness jump back.
-func (g *AgeGauge) Advance(p int32, t time.Time) {
+// Advance moves the partition's instant forward to min(t, now). An earlier
+// t is ignored, so out-of-order event times never make staleness jump back.
+// A t after now is clamped to now and Advance reports true: kept as is, one
+// event from a clock running a day fast would hold the age at zero for a
+// day, whatever happened to the partition meanwhile.
+func (g *AgeGauge) Advance(p int32, t time.Time) (clamped bool) {
+	now := g.now()
+	if t.After(now) {
+		t, clamped = now, true
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if cur, ok := g.at[p]; !ok || t.After(cur) {
 		g.at[p] = t
 	}
+	return clamped
 }
+
+// Now is the gauge's clock, for a caller that compares many instants
+// against one reading.
+func (g *AgeGauge) Now() time.Time { return g.now() }
 
 // Reset sets the partition's instant to now: its age reads zero.
 func (g *AgeGauge) Reset(p int32) { g.Advance(p, g.now()) }
