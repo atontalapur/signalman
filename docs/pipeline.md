@@ -18,10 +18,10 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 
 | Topic | Key | Body |
 |---|---|---|
-| `events.raw` | host_id | the untouched source record; header `source` names the source |
+| `events.raw` | host_id | the untouched source record; header `source` names the source, one of `pipe.Sources` |
 | `events.norm` | host_id | `NormEvent`: seq, partition, host_id, source, event_time, ingest_at, typed fields, raw |
 | `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions |
-| `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table |
+| `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table, plus `fields_omitted` when `fields` was left empty to fit the output limit |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
 | `alerts.dead` | the alert's key | an `alerts` record the ClickHouse table cannot hold, written by `signalman-sink`; not in the spec |
 
@@ -63,10 +63,11 @@ property of the record's bytes; overload never drops.
 | `nested-value` | a list holding a list or object, or objects nested deeper than 8 |
 | `duplicate-field` | a key appears twice, literally or after taxonomy renaming |
 | `missing-source` | no `source` header |
+| `unknown-source` | the `source` header is not `auditd`, `cloudtrail`, or `sysmon` (`pipe.Sources`), including one that is not valid UTF-8; the detail quotes its first 64 bytes |
 | `event-time` | event time absent or unparseable |
 | `panic` | the normalizer panicked on this record; the partition moves on |
 | `record-too-large` | key, value, and headers together over 128 KiB; the entry keeps a 16 KiB prefix of the raw bytes (`truncated: true`, `raw_bytes` is the full length) |
-| `output-too-large` | the record fit, but its `events.norm` or an alert record would be over the output limit (long flattened names can do this); decided in the sink before anything for the event is written |
+| `output-too-large` | the record fit, but its `events.norm` record would be over the output limit (long flattened names can do this); decided in the sink before anything for the event is written. It depends on the event alone: an alert never causes a drop |
 
 ### Size limits
 
@@ -84,7 +85,19 @@ restart. The limits make every output fit:
 JSON escapes one byte to at most six, and a drop entry carries the host id
 twice (field and key), the source, a detail cut to 1 KiB, and the raw bytes
 in base64, so the entry for a record under 128 KiB stays under seven times
-that, inside the output limit. A verdict record grows with the rule count
+that, inside the output limit.
+
+An alert repeats the event's fields beside its raw bytes, each escaped
+again, so an escape-heavy event under 128 KiB can have an alert over the
+limit even though its `events.norm` fits. Dropping it would let an event's
+own fields suppress its detection, and would make the drop depend on the
+rule set. Instead the alert leaves `fields` empty and sets
+`fields_omitted: true`; `raw` stays whole, and `events.norm` at the same
+partition and seq has every field. Without fields an alert holds the host
+id and raw bytes once each, at most 6 x 128 KiB = 768 KiB, which leaves
+more than 200 KiB for the rule's ID, title, and level. A rule whose
+metadata does not fit even then stops the pipeline with an error naming
+the rule. A verdict record grows with the rule count
 (about 60 bytes a rule), so a rule set of more than roughly 16,000 rules
 stops the pipeline with an error naming the rule set.
 
@@ -168,10 +181,14 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   comes from the source: an alert for an event older than 90 days would be
   TTL-deleted on insert, after its offset was committed, which is loss; and
   a batch with skewed times could touch more than the 100 partitions one
-  INSERT may. Queries still filter on `event_time`. A record whose
-  `event_time` or `ingest_time` is outside the DateTime64(3) range
-  (1900-01-01 to 2299-12-31) is refused by the sink, since the normalizer
-  has no drop reason for it at this layer.
+  INSERT may. Queries still filter on `event_time`. The sink refuses a
+  record whose times it cannot store exactly, since the normalizer has no
+  drop reason for them at this layer. `event_time` must be from 1900-01-01
+  to 2262-04-11T23:47:16.854775807Z: DateTime64(3) goes to 2299, but
+  clickhouse-go encodes through `UnixNano`, which overflows after that and
+  would store 2290 as 1705. `ingest_time` must be from 1970-01-01 to
+  2105-11-09T06:28:15Z, so `toDateTime(ingest_time) + INTERVAL 90 DAY` in
+  the TTL stays inside DateTime's range.
 - **Outage.** A failed insert is retried with the same rows, backing off
   from 100ms to 5s, and nothing is polled meanwhile. The outage surfaces as
   `signalman_consumer_lag_records{topic="alerts"}` on the sink's `/metrics`
@@ -286,6 +303,11 @@ Names from the spec's core metrics table, in `internal/obs`.
 | `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | partition | the audit; not in the spec table |
 | `signalman_sink_dead_letters_total` | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
+
+A `source` label is never the raw header: it is the header when it is one of
+`pipe.Sources`, `unknown` when the header is missing, and `other` otherwise.
+The header is producer-controlled, and as a label a non-UTF-8 value panics
+the Prometheus client and any value adds a series.
 
 Not yet exported: `signalman_rule_eval_seconds`,
 `signalman_event_staleness_seconds`, `signalman_canary_age_seconds`. Those are

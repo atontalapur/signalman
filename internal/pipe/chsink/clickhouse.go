@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -27,16 +28,26 @@ var severities = map[string]bool{"informational": true, "low": true, "medium": t
 
 func validSeverity(s string) bool { return severities[s] }
 
-// DateTime64 holds 1900-01-01 00:00:00 through 2299-12-31 23:59:59.999. A
-// time outside it is stored as a different time or refused.
+// Time bounds the insert stores exactly. DateTime64(3) holds 1900-01-01 to
+// 2299-12-31, but clickhouse-go encodes a time.Time through UnixNano, which
+// overflows after 2262-04-11T23:47:16.854775807Z and turns, say, 2290 into
+// 1705. ingest_time also feeds the TTL toDateTime(ingest_time) + INTERVAL 90
+// DAY, and DateTime holds 1970-01-01 to 2106-02-07T06:28:15Z; past either
+// end the TTL overflows, so the row is expired early or kept forever.
 var (
-	minDateTime64 = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
-	maxDateTime64 = time.Date(2299, 12, 31, 23, 59, 59, 999e6, time.UTC)
+	minEventTime  = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+	maxEventTime  = time.Unix(0, math.MaxInt64).UTC()
+	minIngestTime = time.Unix(0, 0).UTC()
+	// ttlDays is the TTL interval in deploy/clickhouse/001_alerts.sql.
+	ttlDays = 90
+	// endIngestTime is the first second whose TTL passes DateTime's end.
+	endIngestTime = time.Unix(math.MaxUint32+1, 0).UTC().AddDate(0, 0, -ttlDays)
 )
 
-func checkDateTime64(name string, t time.Time) error {
-	if t.Before(minDateTime64) || t.After(maxDateTime64) {
-		return fmt.Errorf("%s %s is outside the DateTime64(3) range 1900-01-01 to 2299-12-31", name, t.UTC().Format(time.RFC3339Nano))
+func checkTime(name string, t, lo, hi time.Time) error {
+	if t.Before(lo) || t.After(hi) {
+		return fmt.Errorf("%s %s is outside the range the alerts table stores exactly, %s to %s",
+			name, t.UTC().Format(time.RFC3339Nano), lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano))
 	}
 	return nil
 }
@@ -61,10 +72,10 @@ func Decode(r broker.Record) (pipe.Alert, error) {
 	if !validSeverity(a.Severity) {
 		return a, fmt.Errorf("rule %s severity %q is not one of informational, low, medium, high, critical", a.RuleID, a.Severity)
 	}
-	if err := checkDateTime64("event_time", a.EventTime); err != nil {
+	if err := checkTime("event_time", a.EventTime, minEventTime, maxEventTime); err != nil {
 		return a, err
 	}
-	if err := checkDateTime64("ingest_time", a.IngestTime); err != nil {
+	if err := checkTime("ingest_time", a.IngestTime, minIngestTime, endIngestTime.Add(-time.Nanosecond)); err != nil {
 		return a, err
 	}
 	return a, nil
