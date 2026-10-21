@@ -1,0 +1,153 @@
+# The pipeline
+
+How `signalmand` moves an event from `events.raw` to verdicts, alerts, or
+the drop ledger, and how it proves none went missing. Code lives in
+`internal/pipe`, `internal/broker`, and `internal/obs`.
+
+```
+events.raw -> ingest -> normalize -> match (Slot: v1) -> sink -> events.norm, verdicts.v1, alerts, drops
+                  bounded      bounded          bounded      |
+                                                           commit offsets after the batch is durable
+```
+
+## Topics and records
+
+All record bodies are JSON. Types are in `internal/pipe/wire.go` and
+`internal/pipe/drop.go`.
+
+| Topic | Key | Body |
+|---|---|---|
+| `events.raw` | host_id | the untouched source record; header `source` names the source |
+| `events.norm` | host_id | `NormEvent`: seq, partition, host_id, source, event_time, ingest_at, typed fields, raw |
+| `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions |
+| `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table |
+| `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
+
+`verdicts.v1` holds one record per event rather than one per verdict, so the
+topic grows with events, not events times rules, and an event's verdicts are
+written or redelivered together. `EventVerdicts.Expand` turns it back into
+data contract verdicts for the digest and the differ.
+
+## Seq
+
+Seq is the record's offset in its `events.raw` partition. The offset is
+already per-partition, monotonic, and durable, so Seq survives a restart with
+nothing extra stored. A redelivered record gets the Seq it had the first time,
+which is what lets the alert table deduplicate on `(partition, seq, rule_id)`
+and lets the digest stay stable across a crash. A persisted counter would give
+a redelivered record a new Seq and turn every redelivery into a duplicate
+alert.
+
+## Normalization
+
+The raw record is a JSON object. Nested objects flatten to dotted names. A
+field whose name matches a taxonomy name ignoring case (a `match` key or the
+event side of a field mapping, from `Taxonomy.FieldNames`) is renamed to the
+taxonomy's spelling, because a bound rule reads fields by exact name. An
+integer number becomes an int value; any other number keeps its literal text
+as a string, since `Value` has no float kind. The event time comes from the
+`event_time` field (RFC 3339 or epoch milliseconds), never the wall clock.
+
+### Drop reasons
+
+The only way an admitted event leaves without verdicts. Every reason is a
+decode failure; overload never drops.
+
+| Reason | Meaning |
+|---|---|
+| `parse` | not JSON, not an object, or trailing data |
+| `invalid-utf8` | the record is not valid UTF-8 (checked before decoding, so nothing is silently replaced) |
+| `value-too-long` | a string over 64 KiB |
+| `nested-value` | a list holding a list or object, or objects nested deeper than 8 |
+| `duplicate-field` | a key appears twice, literally or after taxonomy renaming |
+| `missing-source` | no `source` header |
+| `event-time` | event time absent or unparseable |
+| `panic` | the normalizer panicked on this record; the partition moves on |
+
+## Delivery: at-least-once
+
+A batch is one poll. The sink waits for every item in the batch, writes all of
+its outputs, waits for the broker to ack them (all in-sync replicas), and only
+then commits the batch's offsets. Batches commit in poll order. A crash before
+the commit redelivers the batch with the same Seqs; the duplicates are exact
+copies and the alert table's ReplacingMergeTree collapses them.
+
+The alternative, committing before the outputs are durable, makes a crash
+into silent loss. A delayed detection can be reported on afterwards; a lost
+one cannot, so at-least-once with an idempotent sink was chosen.
+
+A failed produce is retried with backoff until it succeeds or the process
+stops. A failed commit is logged and not retried: the next batch's commit
+supersedes it, and the worst case is redelivery.
+
+Within a partition, outputs are written in Seq order, so alerts for a
+partition are emitted in Seq order. Ordering across partitions, and so across
+hosts, is not guaranteed.
+
+## Backpressure: lag over loss
+
+Ingest, normalize, match, and the sink are joined by bounded channels
+(`-queue`), with fixed worker pools (`-normalize-workers`, `-match-workers`)
+that are stated by the operator, never derived from the machine. At most
+`-inflight` polled batches wait for the sink. When the sink cannot write, its
+input fills, the workers block, the batch queue fills, and ingest stops
+polling. Consumer lag grows; nothing is dropped. The number of records
+admitted but not yet committed is bounded by `(inflight + 2) x max-poll`.
+
+## Rule set reload
+
+The engine sits in a `Slot`. Ingest reads the slot once per batch, when it
+forms the batch, and every item in that batch is evaluated with that engine.
+`SIGHUP` reloads the rule directory into the slot; the new rule set applies
+from the next batch. No batch straddles two RuleSetV values, by construction
+rather than by locking. A taxonomy change needs a restart, because the
+normalizer is built from it.
+
+The slot holds anything implementing `pipe.Engine` (`Name`, `RuleSet`,
+`EvaluateInto`), which is the seam v2 drops into.
+
+## Invariant 1 audit
+
+`pipe.Auditor` reads `verdicts.v1` and `drops` and checks, for every
+`events.raw` offset the group has committed, that the event has a verdict
+record with one verdict per rule of its RuleSetV, or a drop entry, and not
+both. Because commits follow durable writes, the arithmetic
+`ingested = evaluated + dropped` must close exactly for every committed
+offset. Windows slide forward with the committed offset, at most
+`-audit-window` seqs at a time. A failing window is logged at error level,
+names the partition and seqs, and increments
+`signalman_audit_violations_total{partition}`; any increase is a P1.
+
+It assumes `events.raw` is a plain topic with dense offsets, and that it
+starts in the same `signalmand` process before the pipeline produces. Two
+instances on one group would break the second assumption.
+
+### Status of the Plan C gate
+
+The gate is "green for an hour under load". That has not been run: there is
+no Docker on the development machine. What has run is
+`TestEndToEndUnderGeneratedLoad` in `internal/pipe`, which pushes generated
+load (including malformed records and rule set reloads every half second)
+through the in-memory broker for 3 seconds with the audit stepping
+throughout, and requires every window green. `SIGNALMAN_SOAK_DURATION=1h`
+lengthens it, but the in-memory broker keeps every record, so the real hour
+belongs on Redpanda.
+
+## Metrics
+
+Names from the spec's core metrics table, in `internal/obs`.
+
+| Metric | Labels | Set by |
+|---|---|---|
+| `signalman_events_ingested_total` | source, partition | ingest, per admitted record |
+| `signalman_events_dropped_total` | reason, source | normalizer, per drop |
+| `signalman_verdicts_total` | engine, matched | sink, once durable |
+| `signalman_rule_matches_total` | rule_id | sink, once durable |
+| `signalman_stage_queue_depth` | stage (normalize, match, sink, batches) | sampled every second |
+| `signalman_consumer_lag_records` | topic, partition | log end offset minus committed offset |
+| `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
+| `signalman_audit_violations_total` | partition | the audit; not in the spec table |
+
+Not yet exported: `signalman_rule_eval_seconds`,
+`signalman_event_staleness_seconds`, `signalman_canary_age_seconds`. Those are
+Plan E.

@@ -1,6 +1,8 @@
 // Command signalmand is the pipeline daemon: it consumes events.raw from
 // Redpanda, normalizes each record through the taxonomy, evaluates it with
-// the v1 engine, and writes events.norm, verdicts.v1, alerts, and drops.
+// the v1 engine, and writes events.norm, verdicts.v1, alerts, and drops. An
+// in-process audit checks invariant 1 against those topics as offsets are
+// committed.
 //
 // SIGHUP reloads the rule directory. The new rule set applies from the next
 // batch on; a batch in flight finishes under the rules it started with. A
@@ -49,6 +51,8 @@ type flags struct {
 	metricsAddr      string
 	createTopics     bool
 	partitions       int
+	auditInterval    time.Duration
+	auditWindow      int64
 }
 
 func parseFlags(args []string) (flags, error) {
@@ -70,6 +74,8 @@ func parseFlags(args []string) (flags, error) {
 	fs.StringVar(&f.metricsAddr, "metrics-addr", ":9464", "address serving /metrics")
 	fs.BoolVar(&f.createTopics, "create-topics", false, "create missing pipeline topics at startup")
 	fs.IntVar(&f.partitions, "partitions", 8, "partitions per topic for -create-topics")
+	fs.DurationVar(&f.auditInterval, "audit-interval", 10*time.Second, "how often the invariant 1 audit runs; 0 disables it")
+	fs.Int64Var(&f.auditWindow, "audit-window", 10000, "widest seq range the audit checks at once")
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}
@@ -157,6 +163,17 @@ func run(f flags, log *slog.Logger) error {
 
 	slot := pipe.NewSlot(pipe.V1(rs), m)
 	go reloadOnHUP(ctx, f, tax, slot, log)
+
+	// The audit snapshots its starting point before the pipeline produces
+	// anything, so it must be built first.
+	if f.auditInterval > 0 {
+		a, err := pipe.NewAuditor(ctx, b, pipe.AuditConfig{Group: f.group, Window: f.auditWindow}, slot.RuleCount, m, log)
+		if err != nil {
+			return err
+		}
+		defer a.Close()
+		go a.Run(ctx, f.auditInterval)
+	}
 
 	p, err := pipe.New(pipe.Config{
 		Group:              f.group,

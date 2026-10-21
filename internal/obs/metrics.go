@@ -26,6 +26,11 @@ type Metrics struct {
 	// RuleSetVersion is 1 for the rule set the next batch will use.
 	// Labels: ruleset_v, taxonomy_v.
 	RuleSetVersion *prometheus.GaugeVec
+	// AuditViolations counts admitted events the invariant 1 audit could
+	// not account for: missing, both verdicts and a drop, or verdicts short
+	// of the rule count. Not in the spec's table; it is the audit's output,
+	// and any increase is a P1. Labels: partition.
+	AuditViolations *prometheus.CounterVec
 }
 
 // New registers the metrics on reg.
@@ -59,8 +64,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "signalman_ruleset_version_info",
 			Help: "1 for the rule set and taxonomy versions new batches are evaluated under.",
 		}, []string{"ruleset_v", "taxonomy_v"}),
+		AuditViolations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_audit_violations_total",
+			Help: "Committed events with no verdicts and no drop, with both, or with too few verdicts.",
+		}, []string{"partition"}),
 	}
 	reg.MustRegister(m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
-		m.Verdicts, m.RuleMatches, m.RuleSetVersion)
+		m.Verdicts, m.RuleMatches, m.RuleSetVersion, m.AuditViolations)
 	return m
 }
