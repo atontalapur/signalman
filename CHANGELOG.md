@@ -3,6 +3,50 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.13.0] - 2026-10-21
+
+### Added
+
+- `cmd/signalman-sink` and `internal/pipe/chsink`: consumes the `alerts`
+  topic and batch-inserts into the ClickHouse `alerts` table over
+  clickhouse-go, committing offsets only after an insert succeeds. While
+  ClickHouse is down it retries one batch and stops polling, so an outage
+  is consumer lag on `alerts`, not loss.
+- `deploy/clickhouse/001_alerts.sql`, the spec's alerts table
+  (ReplacingMergeTree on `(partition, seq, rule_id)`, 90 day TTL), created
+  by the compose ClickHouse on first start.
+- The `alerts.dead` topic and `signalman_sink_dead_letters_total`. A record
+  the table cannot hold is written there with its position and reason, and
+  its offset is committed after that write. Compose and
+  `signalmand -create-topics` create the topic; the sink refuses to start
+  without it.
+- An integration test that reinserts a batch into a real ClickHouse and
+  checks it collapses. It has not been run yet.
+
+### Changed
+
+- The alerts table partitions and expires on `ingest_time`, not
+  `event_time` as the spec has it, matching the events table. The deviation
+  is in `docs/pipeline.md`.
+- Every insert sets `fsync_after_insert=1`, so an acknowledged insert is on
+  disk before its offset is committed.
+- `docs/pipeline.md` says Redpanda and ClickHouse volumes must be reset
+  together, since `seq` is the `events.raw` offset and is the dedup key.
+
+### Fixed
+
+- A ClickHouse error an identical insert hits again (type, parse, missing
+  table, too many partitions in one block) was retried forever. It now
+  stops the sink with the batch's offsets and commits nothing.
+- One undecodable alerts record stopped the sink for every partition and
+  crash-looped it on restart. It is now dead-lettered.
+- An alert for an event older than 90 days was TTL-deleted after its offset
+  was committed. A time outside the DateTime64(3) range is refused.
+- The ClickHouse sink integration test fails instead of skipping under
+  `CI=true` without a DSN.
+- The merge property test is named and documented as a check of a model,
+  not of ClickHouse.
+
 ## [0.12.0] - 2026-10-21
 
 ### Added
