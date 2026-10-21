@@ -12,15 +12,13 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P4
 **Depends on:** Plan A Task 13
 
-### Revisit Value layout and Text() allocation for the v2 hot path
-**What:** `event.Value` is 64 bytes with every payload slot present, and `Value.Text()` allocates a string per call for `KindInt` and `KindBool`. Both sit on the per-field, per-rule comparison path.
-**Why:** Flagged by the SIG-13 pre-landing review. v1 is never optimized by rule, and the v2 hot path is Plan G, so the layout stays as the plan specifies until there is a benchmark to justify changing it.
-**Context:** Options noted in review: fold `I` and `B` into one slot, move `L` behind a pointer, add `AppendText(dst []byte)` using `strconv.AppendInt`, and a `BenchmarkValueText` asserting 0 allocs/op. From the SIG-15 review, on the same path: `Wildcard.MatchString` lowercases and rune-decodes the input per call, `Any`/`All` repeat that per value in a list, and `Contains`/`StartsWith`/`EndsWith` without author wildcards could use `strings.Contains`/`HasPrefix`/`HasSuffix` on a once-lowered input. Decide in Plan G with numbers.
-
-**Numbers, from SIG-22 (`BenchmarkEvaluateCorpus`, M1 Pro, corpus 2e8fd89):** 1236 accepted corpus rules against one Sysmon process creation event cost 3.55 ms, 2.30 MB, and 18,593 allocations per event, which is about 15 allocations per rule per event, single-threaded 347,854 verdicts/s. The baseline is recorded in `docs/evaluation.md`. This is the evidence the entry was waiting for; the decision is still Plan G's.
+### Revisit the event.Value layout
+**What:** `event.Value` is 64 bytes with every payload slot present. Options from the SIG-13 review: fold `I` and `B` into one slot, move `L` behind a pointer.
+**Why:** The allocation half of the original entry is settled. v2 (SIG-40) never calls `Value.Text` on its hot path: each field is folded once per event with `match.AppendFold` and `strconv.AppendInt` into a reused arena, and the common wildcard shapes compare bytes (`match.Folded`). v2 is at 0 allocs/event on the corpus (`docs/results.md`). What is left is size, which costs copies and cache, not allocations.
+**Context:** v2 copies one `Value` per program field per event into its scratch. Measure that before changing a type every package uses.
 **Effort:** M
-**Priority:** P3
-**Depends on:** Plan G
+**Priority:** P4
+**Depends on:** Plan F load numbers
 
 ### Case folding applied to base64 text widens matching
 **What:** `Equals` lowercases both sides, and encoding transforms run before that fold, so a `base64offset|contains` matcher compares lowercased base64. Two different plaintext bytes can encode to base64 characters that differ only in case (`A` and `a`), so a value can match a blob it did not encode.

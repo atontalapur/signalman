@@ -1,0 +1,25 @@
+rule: rundll32_url_exec.yml
+cases:
+  - name:   javascript handler
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: 'rundll32.exe javascript:"\..\mshtml,RunHTMLApplication ";alert(1)'
+
+  - name:   url.dll OpenURL
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: rundll32.exe url.dll,OpenURL C:\Users\Public\a.hta
+
+  - name:   url.dll alone
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: rundll32.exe url.dll,FileProtocolHandler https://example.com

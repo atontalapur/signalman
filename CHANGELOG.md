@@ -3,6 +3,73 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.9.0] - 2026-10-21
+
+### Added
+
+- `internal/engine/v2`, the compiled evaluator. It interns every leaf
+  predicate, logsource tests included, into one table, and each rule
+  becomes a tree over that table's bitset.
+- A literal prefilter: each rule's required literals feed an Aho-Corasick
+  automaton (`internal/engine/v2/aho`), and a rule none of whose literals
+  occur is settled false without a walk. Nothing under a `not` is used.
+- Presence gating: a rule whose required fields are absent is settled false
+  without a walk and still emits its verdict.
+- `EvaluateInto` makes 0 allocations per event on the fixtures and the
+  SigmaHQ corpus. On the corpus stream it runs at 17,633 ns/event against
+  v1's 938,733 (`docs/results.md`).
+- Equivalence with v1, verdict by verdict and digest by digest, over the
+  fixtures and the corpus, plus rule independence and prefilter soundness
+  tests and `FuzzPrefilterSound`.
+
+### Changed
+
+- `ast.Pred` carries the modifier chain and values its matcher was built
+  from, and `match.Build` is now `Plan` followed by `Spec.Matcher`. RuleSetV
+  is unchanged.
+
+### Fixed
+
+- The v2 equivalence tests now cover the shipped `rules/` directory in CI,
+  and fail if any shipped rule stops loading. Before, those rules were only
+  compared when the SigmaHQ corpus was present.
+
+## [0.8.0] - 2026-10-21
+
+### Added
+
+- `signalman`, the rule author CLI. Every command takes `--taxonomy` and
+  exits 0 on pass, 1 on a failed check, 2 when it could not run.
+- `signalman test`: each rule ships a sibling `<rule>.test.yml` of match and
+  no-match cases, run through the v1 evaluator. A disagreeing case, a
+  missing fixture, or a fixture without both kinds of case fails.
+- `signalman explain <rule> <event.json>`: the condition tree with each
+  node's result, each leaf's observed value, and the logsource test. Its
+  walker is held equal to v1 by a test over every shipped rule and fixture.
+- `signalman lint`: every `LoadError` in structured form, or JSON with
+  `--json`, duplicate ids across files included.
+- `signalman bench`: p50, p99 and max per rule over a corpus or the
+  fixtures; a p99 over the threshold (50us by default) fails.
+- `signalman noise`: one rule over a corpus, with matches per 100k events
+  and the first ten matches. A rule may declare `budget:` in matches per
+  100k; noise fails above it. The budget does not enter RuleSetV.
+- `rules/`: twenty hand-written rules, 56 fixture cases, all passing.
+- The loader keeps each rule's expanded condition, selections and tags for
+  `explain`. The bound tree and RuleSetV are unchanged.
+
+### Fixed
+
+- A YAML integer above MaxInt64 no longer wraps to a negative Int, and a
+  float at or beyond 2^63 no longer converts differently per platform. Both
+  stay as text.
+- An event file or corpus line with a key given twice in one object is
+  rejected instead of keeping the last copy. An empty object `{}` adds no
+  fields; that is now documented and tested.
+- A fixture file with a second YAML document is rejected instead of
+  silently ignoring the second document's cases.
+- One rule file named both relative and absolute loads once instead of
+  reporting a false duplicate id.
+
 ## [0.7.1] - 2026-10-01
 
 ### Changed

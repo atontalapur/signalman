@@ -34,11 +34,44 @@ into a valid rule skeleton and requires the two to agree, and every
 suppression has a section in `test/fuzz/KNOWN_DIVERGENCES.md`. The run
 counts are in `docs/results.md`.
 
+The compiled engine has started early: `internal/engine/v2` interns every
+leaf predicate across the rule set, skips rules with a field presence
+bitset and an Aho-Corasick literal prefilter, and evaluates the rest from a
+per-event predicate bitset with no allocation. Its verdicts are compared
+with v1's one by one and by per-partition digest; over the 1,236 accepted
+`rules`-tree rules and 30.6 million generated verdicts they are identical.
+In process on an M1 Pro it is about 125 times faster than v1 on the
+benchmark event. `docs/evaluation.md` describes it and `docs/results.md`
+has the numbers. The shadow lane, differ, and rollout that make up the rest
+of Plan G need the pipeline first.
+
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
 and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
+
+Plan B is done. `internal/engine/v1` evaluates every rule per event and
+`internal/verdict` folds the verdicts into a per-partition digest; the
+shuffle property test holds. `cmd/signalman` is the author CLI, and
+`rules/` holds twenty hand-written rules, each with a sibling
+`<rule>.test.yml` of match and no-match cases, all passing:
+
+```
+signalman test    rules/                         # run fixtures through v1
+signalman explain rules/proc_dump.yml ev.json    # condition tree, results, observed values
+signalman lint    rules/                         # every LoadError, structured (--json too)
+signalman bench   rules/ [--corpus dir]          # p50/p99/max per rule, flags p99 over 50us
+signalman noise   rules/proc_dump.yml --corpus dir   # matches per 100k, ten samples, budget:
+```
+
+Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
+are 0 for pass, 1 for a failed check, 2 when the command could not run.
+A corpus is a directory of `.ndjson` or `.jsonl` files, one JSON event per
+line, with field names as they appear after the taxonomy. An event with a
+key given twice in one object is rejected, and an empty object `{}` adds no
+fields. A fixture file is one YAML document. A rule may
+declare `budget:` in matches per 100k events; noise exits 1 above it.
 
 Plan C's code has landed. `cmd/signalmand` consumes `events.raw`, assigns Seq
 from the offset, normalizes through the taxonomy, evaluates with v1, and
@@ -55,13 +88,13 @@ one-hour soak against Redpanda has not been run.
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
-| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | in progress: v1 evaluator and verdict digest done; gate property green |
+| B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
-| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | not started |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | not started |
+| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, and `budget:` done; rule PR CI gates and `docs/authoring.md` not started |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
@@ -96,7 +129,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ## Repository
 
 ```
-cmd/signalman/          CLI: lint, test, explain, noise, bench
+cmd/signalman/          CLI: test, explain, lint, bench, noise
 cmd/signalmand/         the pipeline daemon
 cmd/differ/             shadow-mode verdict comparison
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
@@ -104,7 +137,10 @@ internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
 internal/sigma/match/   wildcard matcher, all Sigma modifiers, modifier chain to Matcher
 internal/engine/v1/     reference evaluator, permanent oracle (no index, no cache)
-internal/engine/v2/     compiled evaluator
+internal/fixture/       <rule>.test.yml loader and runner, through v1
+internal/explain/       explain walker and renderer, held equal to v1 by test
+internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
+internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL
 internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
@@ -118,11 +154,12 @@ docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
 docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
-docs/evaluation.md      the v1 evaluator and how verdict streams are compared
+docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
+rules/                  twenty hand-written rules, each with a .test.yml fixture
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
 scripts/                backlog validator, Jira sync
@@ -158,6 +195,10 @@ that needs them.
   `python3 -m venv test/fuzz/.venv && test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt`.
   Without it every case in `test/fuzz` skips, so a green `make check` on a
   machine with no venv says nothing about the fuzzer.
+- The corpus tests in `internal/engine/v2` look for the SigmaHQ clone at
+  `corpora/sigmahq` or at `SIGNALMAN_CORPUS`, and skip without it, as CI
+  does. `SIGNALMAN_EQUIV_PER_RULE` lengthens the equivalence stream and
+  `SIGNALMAN_LATENCY=1` turns on the latency report.
 - `make check-backlog` after editing `docs/backlog.yml`.
 - Debt too small for a story lives in `TODOS.md`.
 - Jira project SIG. One story per branch, `feat/SIG-<n>-<slug>`. PR titles are

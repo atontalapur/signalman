@@ -1,0 +1,16 @@
+rule: proc_dump.yml
+cases:
+  - name:   claims a match that is not one
+    expect: match
+    event:
+      channel:  Microsoft-Windows-Sysmon/Operational
+      event_id: 1
+      Image:    C:\Windows\System32\notepad.exe
+
+  - name:   matching tree, wrong channel
+    expect: no-match
+    event:
+      channel:     Security
+      event_id:    1
+      Image:       C:\Windows\System32\rundll32.exe
+      CommandLine: rundll32.exe comsvcs.dll MiniDump

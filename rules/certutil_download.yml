@@ -1,0 +1,25 @@
+title: Certutil Download From URL
+id: c63673f9-e75c-4103-9a9c-465b14613393
+status: test
+description: certutil fetching a remote file with urlcache or verifyctl, a living-off-the-land download.
+author: signalman
+tags:
+  - attack.command-and-control
+  - attack.t1105
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_img:
+    - Image|endswith: '\certutil.exe'
+    - OriginalFileName: 'CertUtil.exe'
+  selection_flag:
+    CommandLine|windash|contains:
+      - '-urlcache'
+      - '-verifyctl'
+  selection_url:
+    CommandLine|contains:
+      - 'http://'
+      - 'https://'
+  condition: all of selection_*
+level: high
