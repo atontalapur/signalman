@@ -92,6 +92,20 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   of the event time and now.
 - The promtool alert tests never ran in CI.
 
+## [0.13.1] - 2026-10-21
+
+### Added
+
+- `rules/signalman_canary.yml`, the signalman-canary rule, with fixtures.
+  It matches only the synthetic event the canary generator (0.14.0) writes,
+  and ships in its own rules-only PR so the rule gates judge it with code
+  already on the base branch.
+
+### Changed
+
+- The CLI and explain tests count the rules in `rules/` instead of
+  hardcoding twenty, so adding a rule needs no code change.
+
 ## [0.13.0] - 2026-10-21
 
 ### Added
