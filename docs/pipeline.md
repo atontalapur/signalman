@@ -306,7 +306,7 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_events_ingested_total` | counter | source, partition | ingest, per admitted record |
 | `signalman_events_dropped_total` | counter | reason, source | normalizer, per drop |
 | `signalman_verdicts_total` | counter | engine, matched | sink, once durable |
-| `signalman_rule_matches_total` | counter | rule_id | sink, once durable |
+| `signalman_rule_matches_total` | counter | rule_id | sink, per durable alert, from whichever engine serves the rule |
 | `signalman_rule_eval_seconds` | histogram | rule_id | match workers, sampled (`-rule-eval-every`) |
 | `signalman_stage_queue_depth` | gauge | stage (normalize, match, sink, batches) | sampled every second |
 | `signalman_consumer_lag_records` | gauge | topic, partition | log end offset minus committed offset |
@@ -349,7 +349,9 @@ rule, `rules/signalman_canary.yml`, and nothing else in `rules/`. The rule
 loads and is evaluated like any other, so the canary takes the same path as
 a real detection: normalize, the engine slot, the sink. When a batch holding
 a canary alert is durable, the sink resets that partition's
-`signalman_canary_age_seconds`. When no alert arrives, the gauge climbs,
+`signalman_canary_age_seconds`. The alert is the one served: under a rollout
+that hands the canary rule to v2, a v2 that wrongly says false for it writes
+no canary alert, and the age climbs and pages. When no alert arrives, the gauge climbs,
 because it is computed at scrape time from the last reset.
 
 The generator starts a partition's age the first time it injects there, so

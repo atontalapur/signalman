@@ -494,21 +494,26 @@ func alerts(b *batch, it *Item, emit func(*sigma.Rule, Engine)) {
 // durable, so the counters never run ahead of what a consumer can read.
 func (p *Pipeline) count(b *batch) {
 	var matched, unmatched float64
-	perRule := map[string]float64{}
 	for _, it := range b.items {
 		for _, v := range it.Verdicts {
 			if v.Matched {
 				matched++
-				perRule[v.RuleID]++
 			} else {
 				unmatched++
 			}
 		}
 	}
+	// signalman_rule_matches_total counts the alerts the batch served, from
+	// whichever engine serves each rule, so a rule v2 serves and wrongly
+	// stops matching goes quiet on it.
 	served := map[[2]string]float64{}
+	perRule := map[string]float64{}
 	for _, it := range b.items {
 		if it.Drop == nil {
-			alerts(b, it, func(r *sigma.Rule, eng Engine) { served[[2]string{eng.Name(), r.ID}]++ })
+			alerts(b, it, func(r *sigma.Rule, eng Engine) {
+				served[[2]string{eng.Name(), r.ID}]++
+				perRule[r.ID]++
+			})
 		}
 	}
 	for k, n := range served {
@@ -544,7 +549,7 @@ func (p *Pipeline) count(b *batch) {
 
 // stale advances event staleness to the newest event time in a batch that
 // is now durable, and resets the canary age of every partition whose canary
-// alert is in it. Drops carry no trustworthy event time and are skipped,
+// alert is in it: the alert served, from whichever engine serves the rule. Drops carry no trustworthy event time and are skipped,
 // and so are canary events: they arrive every 30 seconds whatever the
 // upstream is doing, and would hide an upstream that stopped. An event time
 // ahead of the metrics clock counts as now and is counted in
@@ -560,11 +565,11 @@ func (p *Pipeline) stale(b *batch) {
 		}
 		part := it.Event.Partition
 		if it.HostID == CanaryHostID {
-			for _, v := range it.Verdicts {
-				if v.Matched && v.RuleID == CanaryRuleID {
+			alerts(b, it, func(r *sigma.Rule, _ Engine) {
+				if r.ID == CanaryRuleID {
 					p.m.CanaryAge.Reset(part)
 				}
-			}
+			})
 			continue
 		}
 		t := it.Event.EventTime

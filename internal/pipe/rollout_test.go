@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/atontalapur/signalman/internal/broker"
+	"github.com/atontalapur/signalman/internal/event"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -356,9 +357,61 @@ func TestRolloutChangeTakesEffectAtTheNextBatch(t *testing.T) {
 	}
 }
 
-// The canary age is reset from v1's verdicts, which exist for every event
-// whichever engine serves the alert, so a rollout that hands the canary
-// rule to v2, or a v2 failure on the canary event, cannot stall the canary.
+// blindEngine is a well-formed engine that never matches the canary rule.
+type blindEngine struct{ Engine }
+
+func (b blindEngine) EvaluateInto(dst []event.Verdict, ev *event.Event) []event.Verdict {
+	out := b.Engine.EvaluateInto(dst, ev)
+	for i := range out {
+		if out[i].RuleID == CanaryRuleID {
+			out[i].Matched = false
+		}
+	}
+	return out
+}
+
+// The canary age is reset by the canary alert, from whichever engine
+// serves the rule, so it pages on the alerts the SOC actually gets. A v2
+// that wrongly says false for the canary while it serves the rule writes no
+// canary alert, and the age keeps climbing.
+func TestCanaryAgeAndRuleMatchesFollowTheServedAlert(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1790000000, 0)}
+	mem := newMemory()
+	r := newRigClock(t, mem, mem, clk.Now)
+	r.rs = loadShippedRules(t)
+	slot := NewSlot(V1(r.rs), r.m)
+	if err := slot.StoreWithShadow(V1(r.rs), blindEngine{V2(r.rs)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := slot.SetRollout(100); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCanary(mem, r.m, clk.Now, nil).Inject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clk.Add(60 * time.Second)
+	p, err := New(testConfig(), r.b, r.norm, slot, r.m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runUntilCommitted(t, p, mem)
+	clk.Add(5 * time.Second)
+	if n := len(alertsByKey(t, mem)); n != 0 {
+		t.Fatalf("%d alerts; v2 serves the canary rule and never matches it", n)
+	}
+	for part := int32(0); part < testPartitions; part++ {
+		if a, ok := r.m.CanaryAge.Age(part); !ok || a != 65*time.Second {
+			t.Fatalf("partition %d canary age %v (tracked %v), want 65s: no canary alert was served", part, a, ok)
+		}
+	}
+	if got := testutil.ToFloat64(r.m.RuleMatches.WithLabelValues(CanaryRuleID)); got != 0 {
+		t.Fatalf("rule_matches_total for the canary = %v; it counts served alerts, and none was", got)
+	}
+}
+
+// A rollout that hands the canary rule to v2, or a v2 failure on the
+// canary event, still resets the canary: the served alert comes from v2,
+// or from v1 when v2 failed on the event.
 func TestCanaryResetsWhicheverEngineServesIt(t *testing.T) {
 	for name, shadow := range map[string]func(*rig) Engine{
 		"v2 serves": func(r *rig) Engine { return V2(r.rs) },
