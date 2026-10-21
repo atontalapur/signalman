@@ -207,3 +207,24 @@ the rule as written in the file against the gauge every scrape interval.
 unit tests in `alerts_test.yml` (`make check-alerts`).
 `deploy/grafana/dashboards/signalman.json` is the dashboard, provisioned
 into the compose stack's Grafana at `localhost:3000`.
+
+## Silent rules
+
+`SignalmanRuleWentSilent`, in `absence.yml` as the spec writes it, files a
+ticket (never a page) for a rule whose `signalman_rule_matches_total` rose in
+the last 30 days and not in the last 24 hours. The failure it is for: a
+taxonomy edit renames a field, every rule reading that field stops
+matching, and nothing errors.
+
+It only works because the slot exports every loaded rule's series at zero.
+A taxonomy change needs a restart, and in the new process a silenced rule
+never matches, so without the zero its series would end at the restart,
+leave the 24h window a day later, and the alert would compare nothing. A
+reload that drops a rule deletes its series, so a rule removed on purpose
+does not ticket. `TestTaxonomyRenameSilencesTheAffectedRule` runs the
+shipped rules for three simulated days, restarts on a taxonomy with
+`CommandLine` renamed in the sysmon binding, runs two more, and evaluates
+the alert's expression over the hourly scrapes: every rule reading
+`CommandLine` that went quiet fires, and no other rule does. Remove the
+zero series and it fails. `deploy/prometheus/alerts_silence_test.yml` is the
+promtool version.

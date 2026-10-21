@@ -44,3 +44,21 @@ groups:
           summary: "signalmand exports no canary age: the daemon is down or the canary is off"
           runbook: "Pipeline is not producing detections, or nothing is checking.
             Check that signalmand is running and that -canary-interval is not 0."
+
+      # As in the spec. A ticket, not a page: legitimately quiet rules are
+      # common, and a paging tier that cries wolf gets muted along with the
+      # canary. It depends on signalmand exporting every loaded rule's
+      # series at zero (internal/pipe Slot.exportRules): after the restart
+      # a taxonomy change needs, a rule that never matches again would
+      # otherwise have no series in the 24h window, and this would compare
+      # nothing.
+      - alert: SignalmanRuleWentSilent
+        expr: |
+          increase(signalman_rule_matches_total[24h]) == 0
+            and
+          increase(signalman_rule_matches_total[30d]) > 0
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Rule {{ $labels.rule_id }} matched in the last 30d but not today"

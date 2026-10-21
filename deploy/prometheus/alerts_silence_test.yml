@@ -1,0 +1,48 @@
+# promtool unit tests for SignalmanRuleWentSilent. Separate from
+# alerts_test.yml because it needs days of series, and a 15s evaluation
+# interval over days is slow for no gain.
+#
+#   promtool test rules deploy/prometheus/alerts_silence_test.yml
+rule_files:
+  - alerts/absence.yml
+
+evaluation_interval: 10m
+
+tests:
+  # Hourly scrapes. "renamed" matches for two days, then signalmand restarts
+  # on a taxonomy that renames a field it reads: the counter resets to zero
+  # and stays there. "steady" keeps matching. "quiet" was loaded and never
+  # matched. Only "renamed" tickets: its last rise is from 46h to 47h, so
+  # the 24h window is flat from 70h (pending) and the alert fires an hour
+  # later. The drop to zero at 48h is a counter reset, not a rise.
+  - interval: 1h
+    input_series:
+      - series: 'signalman_rule_matches_total{rule_id="renamed"}'
+        values: '0+5x47 0x48'
+      - series: 'signalman_rule_matches_total{rule_id="steady"}'
+        values: '0+5x95'
+      - series: 'signalman_rule_matches_total{rule_id="quiet"}'
+        values: '0x95'
+    alert_rule_test:
+      - eval_time: 69h50m
+        alertname: SignalmanRuleWentSilent
+        exp_alerts: []
+      - eval_time: 70h50m
+        alertname: SignalmanRuleWentSilent
+        exp_alerts: []
+      - eval_time: 71h
+        alertname: SignalmanRuleWentSilent
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              rule_id: renamed
+            exp_annotations:
+              summary: "Rule renamed matched in the last 30d but not today"
+      - eval_time: 90h
+        alertname: SignalmanRuleWentSilent
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              rule_id: renamed
+            exp_annotations:
+              summary: "Rule renamed matched in the last 30d but not today"

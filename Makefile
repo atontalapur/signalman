@@ -40,7 +40,7 @@ check-alerts:
 	@if command -v promtool >/dev/null; then \
 	  promtool check config --syntax-only deploy/prometheus/prometheus.yml && \
 	  promtool check rules deploy/prometheus/alerts/*.yml && \
-	  cd deploy/prometheus && promtool test rules alerts_test.yml; \
+	  cd deploy/prometheus && promtool test rules alerts_test.yml alerts_silence_test.yml; \
 	else \
 	  echo "note: promtool not on PATH, alert rules were not checked"; \
 	fi

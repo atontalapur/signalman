@@ -73,7 +73,32 @@ func (s *Slot) Store(e Engine) {
 		s.m.RuleSetVersion.DeleteLabelValues(old.Version, old.TaxonomyV)
 	}
 	s.m.RuleSetVersion.WithLabelValues(rs.Version, rs.TaxonomyV).Set(1)
+	s.exportRules(a)
 	s.shown = a
+}
+
+// exportRules gives every rule in the new set a rule_matches_total series,
+// at zero if it is new, and removes the series of rules the reload dropped.
+//
+// The zero is what makes SignalmanRuleWentSilent work. A taxonomy change
+// needs a restart, and a rule the change silences never matches in the new
+// process; without a zero its series would end at the restart, drop out of
+// the alert's 24h window, and the alert would have nothing to compare. A
+// rule removed on purpose loses its series, so it is not reported as gone
+// silent. A batch still in flight under the old set can bring a dropped
+// rule's series back with its last matches; it then stays until restart.
+// Caller holds s.mu.
+func (s *Slot) exportRules(a *active) {
+	if s.shown != nil {
+		for id := range s.shown.rules {
+			if _, kept := a.rules[id]; !kept {
+				s.m.RuleMatches.DeleteLabelValues(id)
+			}
+		}
+	}
+	for id := range a.rules {
+		s.m.RuleMatches.WithLabelValues(id)
+	}
 }
 
 // RuleCount reports how many verdicts per event a rule set version owes.
