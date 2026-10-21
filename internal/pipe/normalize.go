@@ -56,7 +56,16 @@ type Normalizer struct {
 	m     *obs.Metrics
 	// decode is a field so a test can make it panic on a chosen record.
 	decode func(raw []byte) (map[string]event.Value, *Drop)
+	// fault, when set, sees every record before it is decoded. See SetFault.
+	fault func(raw []byte)
 }
+
+// SetFault installs f, which is called with each record's bytes before it
+// is decoded, inside the normalizer's panic recovery. It exists for failure
+// injection: the load harness's poison record experiment makes f panic on a
+// marked record, which must cost one ReasonPanic drop and nothing else. Set
+// it before the pipeline runs; nil removes it.
+func (n *Normalizer) SetFault(f func(raw []byte)) { n.fault = f }
 
 // NewNormalizer builds a normalizer for tax.
 func NewNormalizer(tax *sigma.Taxonomy, cfg NormalizeConfig, m *obs.Metrics) *Normalizer {
@@ -86,6 +95,9 @@ func (n *Normalizer) Normalize(it *Item) {
 	if it.Event.Source == "" {
 		n.drop(it, ReasonMissingSource, "no "+HeaderSource+" header")
 		return
+	}
+	if n.fault != nil {
+		n.fault(it.Event.Raw)
 	}
 	fields, d := n.decode(it.Event.Raw)
 	if d != nil {

@@ -199,6 +199,34 @@ func TestPoisonRecordIsDroppedAndDoesNotWedgeThePartition(t *testing.T) {
 	}
 }
 
+func TestSetFaultPanicsInsideTheRecovery(t *testing.T) {
+	n, m := newNormalizer(t)
+	n.SetFault(func(raw []byte) {
+		if bytes.Contains(raw, []byte("poison")) {
+			panic("injected")
+		}
+	})
+	poison := item("sysmon", `{"event_time":1,"x":"poison"}`)
+	n.Normalize(poison)
+	if poison.Drop == nil || poison.Drop.Reason != ReasonPanic || poison.Drop.Detail != "injected" {
+		t.Fatalf("poison record = %+v", poison.Drop)
+	}
+	next := item("sysmon", sysmonDump)
+	n.Normalize(next)
+	if next.Drop != nil {
+		t.Fatalf("a fault that does not panic changed the outcome: %+v", next.Drop)
+	}
+	n.SetFault(nil)
+	again := item("sysmon", `{"event_time":1,"x":"poison"}`)
+	n.Normalize(again)
+	if again.Drop != nil {
+		t.Fatalf("SetFault(nil) left the fault installed: %+v", again.Drop)
+	}
+	if got := testutil.ToFloat64(m.EventsDropped.WithLabelValues(ReasonPanic, "sysmon")); got != 1 {
+		t.Fatalf("panic drops counted %v", got)
+	}
+}
+
 func TestDropRecordCarriesRawBytesAndIdentity(t *testing.T) {
 	n, _ := newNormalizer(t)
 	body := "{\"a\":\"\xff\"}"
