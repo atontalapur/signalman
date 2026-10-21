@@ -64,7 +64,7 @@ func TestStringAndCanonical(t *testing.T) {
 	if got, want := String(n), "(and a (not (or (1of s_*) (allof them))) [Image endswith .exe])"; got != want {
 		t.Fatalf("String = %s want %s", got, want)
 	}
-	if got, want := Canonical(n), `(and "a" (not (or (1of "s_*") (allof them))) ["Image endswith .exe"])`; got != want {
+	if got, want := Canonical(n), `(and "a" (not (or (1of "s_*") (allof them))) (pred "Image endswith .exe" "" "Image endswith .exe"))`; got != want {
 		t.Fatalf("Canonical = %s want %s", got, want)
 	}
 }
@@ -83,5 +83,19 @@ func TestSortedNames(t *testing.T) {
 	got := SortedNames(m)
 	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
 		t.Fatalf("SortedNames = %v", got)
+	}
+}
+
+// Desc shows the field as written, so Canonical must carry the field the
+// evaluator actually reads, and the key that built the matcher.
+func TestCanonicalCarriesFieldAndKey(t *testing.T) {
+	base := &Pred{Field: "Image", Desc: "Image 'x'", Key: "k"}
+	for _, other := range []*Pred{
+		{Field: "NewProcessName", Desc: "Image 'x'", Key: "k"},
+		{Field: "Image", Desc: "Image 'x'", Key: "k2"},
+	} {
+		if Canonical(base) == Canonical(other) {
+			t.Fatalf("Canonical collision: %s", Canonical(base))
+		}
 	}
 }
