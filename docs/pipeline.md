@@ -108,6 +108,13 @@ missing output topic, or a `verdicts.v1` with fewer partitions than
 `events.raw`, since verdicts are pinned to the event's partition. A failed commit is logged and not retried: the next batch's commit
 supersedes it, and the worst case is redelivery.
 
+A batch still in flight when a rebalance takes its partition away does not
+commit for that partition: the Redpanda consumer drops commits for
+partitions this member no longer owns, for a reassigned partition until a
+record is polled from it again, and any commit that would move a
+partition's offset backwards. The new owner redelivers from its own
+position.
+
 Within a partition, outputs are written in Seq order, so alerts for a
 partition are emitted in Seq order. Ordering across partitions, and so across
 hosts, is not guaranteed.

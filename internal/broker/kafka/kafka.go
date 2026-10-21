@@ -168,10 +168,12 @@ func classify(err error) error {
 // pipeline commits a batch only after its outputs are durable.
 //
 // On a rebalance, a batch in flight for a partition this member lost may
-// still commit afterwards. That commit covers only records this member fully
-// processed, so the worst case is redelivery to the new owner, which is the
-// at-least-once duplicate the sink absorbs, not a gap.
+// finish afterwards. Its commit is dropped (see ownership), so it cannot
+// move the new owner's group offset backwards; the new owner redelivers
+// from its own position, which is the at-least-once duplicate the sink
+// absorbs, not a gap.
 func (b *Broker) Consume(group string, topics []string) (broker.Consumer, error) {
+	own := &ownership{}
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(b.cfg.Brokers...),
 		kgo.ClientID(b.cfg.ClientID),
@@ -180,11 +182,14 @@ func (b *Broker) Consume(group string, topics []string) (broker.Consumer, error)
 		kgo.DisableAutoCommit(),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchMaxWait(500*time.Millisecond),
+		kgo.OnPartitionsAssigned(func(_ context.Context, _ *kgo.Client, m map[string][]int32) { own.assign(m) }),
+		kgo.OnPartitionsRevoked(func(_ context.Context, _ *kgo.Client, m map[string][]int32) { own.revoke(m) }),
+		kgo.OnPartitionsLost(func(context.Context, *kgo.Client, map[string][]int32) { own.lose() }),
 	)
 	if err != nil {
 		return nil, err
 	}
-	return &consumer{cl: cl, max: b.cfg.MaxPollRecords, group: true}, nil
+	return &consumer{cl: cl, max: b.cfg.MaxPollRecords, own: own}, nil
 }
 
 // ReadFrom consumes exact partitions from exact offsets with no group.
@@ -282,9 +287,9 @@ func (b *Broker) EnsureTopics(ctx context.Context, specs []TopicSpec) error {
 func (b *Broker) Close() { b.prod.Close() }
 
 type consumer struct {
-	cl    *kgo.Client
-	max   int
-	group bool
+	cl  *kgo.Client
+	max int
+	own *ownership // nil for a positioned reader
 }
 
 var errClosed = errors.New("kafka: consumer closed")
@@ -304,7 +309,11 @@ func (c *consumer) Poll(ctx context.Context) (broker.Fetch, error) {
 				}
 				return
 			}
-			f.HighWatermarks[broker.TopicPartition{Topic: p.Topic, Partition: p.Partition}] = p.HighWatermark
+			tp := broker.TopicPartition{Topic: p.Topic, Partition: p.Partition}
+			f.HighWatermarks[tp] = p.HighWatermark
+			if c.own != nil && len(p.Records) > 0 {
+				c.own.polled(tp, p.Records[0].Offset)
+			}
 			for _, r := range p.Records {
 				f.Records = append(f.Records, fromKgo(r))
 			}
@@ -322,8 +331,14 @@ func (c *consumer) Poll(ctx context.Context) (broker.Fetch, error) {
 }
 
 func (c *consumer) Commit(ctx context.Context, next map[broker.TopicPartition]int64) error {
-	if !c.group {
+	if c.own == nil {
 		return errors.New("kafka: a positioned reader has no group")
+	}
+	c.own.mu.Lock()
+	defer c.own.mu.Unlock()
+	next = c.own.filterLocked(next)
+	if len(next) == 0 {
+		return nil
 	}
 	offs := map[string]map[int32]kgo.EpochOffset{}
 	for tp, off := range next {
@@ -346,6 +361,9 @@ func (c *consumer) Commit(ctx context.Context, next map[broker.TopicPartition]in
 			}
 		}
 	})
+	if cerr == nil {
+		c.own.committedLocked(next)
+	}
 	return cerr
 }
 
