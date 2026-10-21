@@ -20,7 +20,7 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 | `events.raw` | host_id | the untouched source record; header `source` names the source, one of `pipe.Sources` |
 | `events.norm` | host_id | `NormEvent`: seq, partition, host_id, source, event_time, ingest_at, typed fields, raw |
 | `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions |
-| `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table |
+| `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table, plus `fields_omitted` when `fields` was left empty to fit the output limit |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
 
 `verdicts.v1` holds one record per event rather than one per verdict, so the
@@ -65,7 +65,7 @@ property of the record's bytes; overload never drops.
 | `event-time` | event time absent or unparseable |
 | `panic` | the normalizer panicked on this record; the partition moves on |
 | `record-too-large` | key, value, and headers together over 128 KiB; the entry keeps a 16 KiB prefix of the raw bytes (`truncated: true`, `raw_bytes` is the full length) |
-| `output-too-large` | the record fit, but its `events.norm` or an alert record would be over the output limit (long flattened names can do this); decided in the sink before anything for the event is written |
+| `output-too-large` | the record fit, but its `events.norm` record would be over the output limit (long flattened names can do this); decided in the sink before anything for the event is written. It depends on the event alone: an alert never causes a drop |
 
 ### Size limits
 
@@ -83,7 +83,19 @@ restart. The limits make every output fit:
 JSON escapes one byte to at most six, and a drop entry carries the host id
 twice (field and key), the source, a detail cut to 1 KiB, and the raw bytes
 in base64, so the entry for a record under 128 KiB stays under seven times
-that, inside the output limit. A verdict record grows with the rule count
+that, inside the output limit.
+
+An alert repeats the event's fields beside its raw bytes, each escaped
+again, so an escape-heavy event under 128 KiB can have an alert over the
+limit even though its `events.norm` fits. Dropping it would let an event's
+own fields suppress its detection, and would make the drop depend on the
+rule set. Instead the alert leaves `fields` empty and sets
+`fields_omitted: true`; `raw` stays whole, and `events.norm` at the same
+partition and seq has every field. Without fields an alert holds the host
+id and raw bytes once each, at most 6 x 128 KiB = 768 KiB, which leaves
+more than 200 KiB for the rule's ID, title, and level. A rule whose
+metadata does not fit even then stops the pipeline with an error naming
+the rule. A verdict record grows with the rule count
 (about 60 bytes a rule), so a rule set of more than roughly 16,000 rules
 stops the pipeline with an error naming the rule set.
 

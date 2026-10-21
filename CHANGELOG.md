@@ -51,6 +51,11 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   unbounded label. Labels now map to `auditd`, `cloudtrail`, `sysmon`,
   `unknown`, or `other`, and a source outside that set is an
   `unknown-source` drop.
+- A matched event whose alert record would be over the output limit was
+  dropped as `output-too-large` with its verdicts, so escape-heavy fields
+  could suppress a detection. The alert now leaves `fields` empty and sets
+  the new optional `fields_omitted`; `output-too-large` covers only
+  `events.norm`.
 
 ## [0.9.0] - 2026-10-21
 

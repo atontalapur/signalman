@@ -12,7 +12,8 @@ import (
 // has a name here and a label value on signalman_events_dropped_total.
 //
 // Every reason but output-too-large is a decode failure, and that one is a
-// property of the event's bytes too. A slow matcher, a full queue, or an
+// property of the event's bytes too: it looks only at events.norm, never at
+// the rule set or the event's alerts. A slow matcher, a full queue, or an
 // unavailable sink is never a reason to drop: those produce lag.
 const (
 	// ReasonParse: not JSON, not a JSON object, or trailing data after it.
@@ -51,11 +52,12 @@ const (
 	// record could produce an output no topic accepts. Its drop entry keeps
 	// only a prefix of the raw bytes; the full record stays in events.raw.
 	ReasonRecordTooLarge = "record-too-large"
-	// ReasonOutputTooLarge: the record fit, but one of its outputs
-	// (events.norm or an alert) would be over MaxOutputRecordBytes. Fields
-	// flatten with their full dotted names, so a small record with many
-	// children under a long name can grow without bound. Checked in the
-	// sink, before anything for the event is written.
+	// ReasonOutputTooLarge: the record fit, but its events.norm record
+	// would be over MaxOutputRecordBytes. Fields flatten with their full
+	// dotted names, so a small record with many children under a long name
+	// can grow without bound. Checked in the sink, before anything for the
+	// event is written. An alert never causes it: AlertRecord leaves out the
+	// fields instead, so a matched event is never dropped for its alert.
 	ReasonOutputTooLarge = "output-too-large"
 )
 
