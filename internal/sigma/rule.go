@@ -27,6 +27,16 @@ type Rule struct {
 	// use it for presence gating; it is cheap to compute here and awkward
 	// to recover later.
 	Fields []string
+	Tags   []string
+
+	// Condition and Selections keep the selection names that binding
+	// erases, for explain output. Condition is the expanded condition with
+	// an ast.Ident where each selection goes; Selections maps each name to
+	// its field-renamed subtree. Substituting one into the other gives Cond.
+	// Condition is never evaluated: ast.Eval panics on an Ident, and Cond
+	// is the tree every engine walks.
+	Condition  ast.Node
+	Selections map[string]ast.Node
 }
 
 // Error codes carried by LoadError. The set is closed: the corpus acceptance
@@ -64,10 +74,13 @@ func (e *LoadError) Error() string {
 func (e *LoadError) Unwrap() error { return e.Err }
 
 type ruleFile struct {
-	Title     string `yaml:"title"`
-	ID        string `yaml:"id"`
-	Status    string `yaml:"status"`
-	Level     string `yaml:"level"`
+	Title  string `yaml:"title"`
+	ID     string `yaml:"id"`
+	Status string `yaml:"status"`
+	Level  string `yaml:"level"`
+	// Tags is decoded loosely: tags are display metadata, and a malformed
+	// tag list must not change which rules load.
+	Tags      any `yaml:"tags"`
 	LogSource struct {
 		Category string `yaml:"category"`
 		Product  string `yaml:"product"`
@@ -162,17 +175,39 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 
 	bound := bind(cond, sels)
 	renamed, fields := rename(bound, entry.Fields)
+	named := make(map[string]ast.Node, len(names))
+	for _, name := range names {
+		named[name] = renameNode(sels[name], entry.Fields, map[string]bool{})
+	}
 
 	return &Rule{
-		ID:        f.ID,
-		Title:     f.Title,
-		Level:     f.Level,
-		Status:    f.Status,
-		Path:      path,
-		LogSource: tax.MatcherFor(entry),
-		Cond:      renamed,
-		Fields:    fields,
+		ID:         f.ID,
+		Title:      f.Title,
+		Level:      f.Level,
+		Status:     f.Status,
+		Path:       path,
+		LogSource:  tax.MatcherFor(entry),
+		Cond:       renamed,
+		Fields:     fields,
+		Tags:       tagList(f.Tags),
+		Condition:  cond,
+		Selections: named,
 	}, nil
+}
+
+// tagList keeps the string items of a tag list and ignores anything else.
+func tagList(raw any) []string {
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // conditionStrings reads the condition key, which Sigma allows to be a

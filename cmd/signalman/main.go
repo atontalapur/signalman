@@ -32,7 +32,8 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{
-		"test": {"run each rule's fixtures from its sibling .test.yml", cmdTest},
+		"test":    {"run each rule's fixtures from its sibling .test.yml", cmdTest},
+		"explain": {"show a rule's condition tree evaluated against one JSON event", cmdExplain},
 	}
 }
 
