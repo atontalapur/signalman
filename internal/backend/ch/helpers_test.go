@@ -81,3 +81,37 @@ func less(a, b Hit) bool {
 }
 
 func msTime(ms int64) time.Time { return time.UnixMilli(ms).UTC() }
+
+func TestIntegrationDSNFailsUnderCI(t *testing.T) {
+	env := func(kv map[string]string) func(string) string {
+		return func(k string) string { return kv[k] }
+	}
+	cases := []struct {
+		name     string
+		env      map[string]string
+		dsn      string
+		missing  bool
+		mustFail bool
+	}{
+		{"set", map[string]string{"SIGNALMAN_CLICKHOUSE_DSN": "clickhouse://x"}, "clickhouse://x", false, false},
+		{"set under CI", map[string]string{"SIGNALMAN_CLICKHOUSE_DSN": "clickhouse://x", "CI": "true"}, "clickhouse://x", false, false},
+		{"unset locally", map[string]string{}, "", true, false},
+		{"unset under CI", map[string]string{"CI": "true"}, "", true, true},
+	}
+	for _, c := range cases {
+		dsn, reason, fatal := integrationDSN(env(c.env))
+		if dsn != c.dsn || (reason != "") != c.missing || fatal != c.mustFail {
+			t.Errorf("%s: got (%q, %q, %v)", c.name, dsn, reason, fatal)
+		}
+	}
+}
+
+// integrationDSN reads the ClickHouse DSN for the integration test. When it
+// is missing, reason says so, and fatal is true under CI: a gate that skips
+// in CI would read green without running.
+func integrationDSN(getenv func(string) string) (dsn, reason string, fatal bool) {
+	if dsn = getenv("SIGNALMAN_CLICKHOUSE_DSN"); dsn != "" {
+		return dsn, "", false
+	}
+	return "", "SIGNALMAN_CLICKHOUSE_DSN is not set", getenv("CI") == "true"
+}

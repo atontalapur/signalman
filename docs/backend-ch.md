@@ -230,7 +230,8 @@ because v1 is the oracle; the fix belongs in the rule loader. Recorded in
 
 The integration test (`-tags integration`, `SIGNALMAN_CLICKHOUSE_DSN`) has
 not been run against a server: there was no ClickHouse available when it was
-written. Until it is, these are assumptions, each exercised by its fixture:
+written. CI now sets the DSN to the compose server and fails the test if it
+is missing, so the first CI integration run is the first real one. Until it is, these are assumptions, each exercised by its fixture:
 
 - RE2 and Go agree on the emitted subset (`\x{...}`, classes, `\A`, `\z`,
   `(?m:^)`, `\b`, repeats).

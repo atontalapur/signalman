@@ -187,7 +187,10 @@ that needs them.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`:
   `docker compose -f deploy/docker-compose.yml up -d --wait`. Integration tests
   carry the `integration` build tag and reach Redpanda at `localhost:19092`
-  (override with `SIGNALMAN_BROKERS`).
+  (override with `SIGNALMAN_BROKERS`). The ClickHouse retro-hunt test reads a
+  clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`, which `make integration`
+  sets to the compose server. Without it the test skips locally and fails
+  when `CI=true`.
 - Run the daemon against the compose stack:
   `go run ./cmd/signalmand -rules <dir> -taxonomy config/taxonomy`. It
   serves `/metrics` on `:9464`, reloads rules on `SIGHUP`, and by default

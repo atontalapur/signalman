@@ -20,13 +20,17 @@ import (
 // ClickHouse, retro-hunts every rule below over a window, and requires the
 // rows to equal a v1 replay of the same events over the same window.
 //
-// SIGNALMAN_CLICKHOUSE_DSN is a clickhouse-go DSN, for example
-// clickhouse://default:@localhost:9000/default. The test creates and drops
-// its own database, signalman_it, and never touches another.
+// SIGNALMAN_CLICKHOUSE_DSN is a clickhouse-go DSN; `make integration` sets
+// it to the compose server, clickhouse://signalman:signalman@localhost:9000/signalman.
+// Without it the test skips locally and fails under CI=true. The test
+// creates its own database, signalman_it, and never touches another.
 func TestRetroHuntEqualsReplay(t *testing.T) {
-	dsn := os.Getenv("SIGNALMAN_CLICKHOUSE_DSN")
+	dsn, reason, fatal := integrationDSN(os.Getenv)
+	if fatal {
+		t.Fatal(reason)
+	}
 	if dsn == "" {
-		t.Skip("SIGNALMAN_CLICKHOUSE_DSN is not set")
+		t.Skip(reason)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
