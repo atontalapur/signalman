@@ -46,12 +46,16 @@ jobs:
           test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt
       - run: make check
 
-  # Runs against real Redpanda and ClickHouse. Skipped until deploy/docker-compose.yml lands (Plan C).
+  # Runs against real Redpanda and ClickHouse from deploy/docker-compose.yml.
+  # The DSN matches the compose credentials; a test that needs it fails, not
+  # skips, when CI=true and it is unset.
   integration:
     needs: detect
     if: needs.detect.outputs.has_go == 'true' && needs.detect.outputs.has_compose == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SIGNALMAN_CLICKHOUSE_DSN: clickhouse://signalman:signalman@localhost:9000/signalman
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
