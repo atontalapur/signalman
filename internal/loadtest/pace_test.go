@@ -3,6 +3,7 @@ package loadtest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -43,15 +44,23 @@ type recorder struct {
 	clock *fakeClock
 	cost  time.Duration
 	fail  int
-	at    []time.Duration
-	sizes []int
-	recs  []broker.Record
-	t0    time.Time
+	// partial is how many records of a failing call are written anyway,
+	// as a Kafka ProduceSync may do before it returns an error.
+	partial int
+	failErr error
+	at      []time.Duration
+	sizes   []int
+	recs    []broker.Record
+	t0      time.Time
 }
 
 func (r *recorder) Produce(ctx context.Context, recs []broker.Record) error {
 	if r.fail > 0 {
 		r.fail--
+		r.recs = append(r.recs, recs[:min(r.partial, len(recs))]...)
+		if r.failErr != nil {
+			return r.failErr
+		}
 		return errors.New("injected")
 	}
 	r.at = append(r.at, r.clock.Now().Sub(r.t0))
@@ -173,5 +182,39 @@ func TestPhaseCount(t *testing.T) {
 		if got := c.p.Count(); got != c.want {
 			t.Fatalf("%+v.Count() = %d, want %d", c.p, got, c.want)
 		}
+	}
+}
+
+func TestReplayCountsRecordsResentAfterAPartialFailure(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	r := &recorder{clock: clk, t0: clk.Now(), fail: 2, partial: 4}
+	st, err := Replay(context.Background(), r, tinyCorpus(5), ReplayConfig{
+		Phases: []Phase{{Rate: 100, For: time.Second}},
+		Batch:  10,
+		Clock:  clk,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Two failed calls of 10 records, each resent whole: 20 resent, of which
+	// the 8 written before the failures are duplicates in the log.
+	if st.Sent != 100 || st.Retries != 2 || st.Resent != 20 || len(r.recs) != 108 {
+		t.Fatalf("sent %d retries %d resent %d recorded %d", st.Sent, st.Retries, st.Resent, len(r.recs))
+	}
+}
+
+func TestReplayStopsOnAPermanentProduceError(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	r := &recorder{clock: clk, t0: clk.Now(), fail: 1000, failErr: fmt.Errorf("%w: too large", broker.ErrPermanent)}
+	st, err := Replay(context.Background(), r, tinyCorpus(5), ReplayConfig{
+		Phases: []Phase{{Rate: 100, For: time.Second}},
+		Batch:  10,
+		Clock:  clk,
+	})
+	if !errors.Is(err, broker.ErrPermanent) {
+		t.Fatalf("err %v, want ErrPermanent", err)
+	}
+	if st.Retries != 0 || st.Sent != 0 {
+		t.Fatalf("retries %d sent %d after a permanent error", st.Retries, st.Sent)
 	}
 }

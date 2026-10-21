@@ -75,8 +75,14 @@ type ReplayStats struct {
 	Sent    int
 	Batches int
 	// Retries counts failed produce calls; each was retried with the same
-	// records, so a failure costs time, never records.
+	// records, so a failure never loses a record.
 	Retries int
+	// Resent counts records produced again because their call failed. A
+	// Kafka produce can write part of a call before it fails, so up to
+	// Resent records may be duplicates in events.raw. The pipeline treats
+	// each as its own event (its own offset, its own verdicts); the count
+	// says how far the log's record count can exceed Sent.
+	Resent int
 	// MaxBehind is how late the latest batch went out against its
 	// schedule. A replay that falls behind sends the next batch at once,
 	// one batch at a time; it never skips records and never sends more
@@ -146,7 +152,12 @@ func Replay(ctx context.Context, b broker.Broker, c *Corpus, cfg ReplayConfig) (
 					st.Elapsed = cfg.Clock.Now().Sub(start)
 					return st, ctx.Err()
 				}
+				if errors.Is(err, broker.ErrPermanent) {
+					st.Elapsed = cfg.Clock.Now().Sub(start)
+					return st, fmt.Errorf("replay: produce: %w", err)
+				}
 				st.Retries++
+				st.Resent += len(buf)
 				if !cfg.Clock.Sleep(ctx, cfg.RetryBackoff) {
 					st.Elapsed = cfg.Clock.Now().Sub(start)
 					return st, fmt.Errorf("replay: produce: %w", err)

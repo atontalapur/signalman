@@ -189,8 +189,8 @@ func run(ctx context.Context, f flags, dial func(context.Context) (broker.Broker
 	}
 	defer b.Close()
 	st, err := loadtest.Replay(ctx, b, c, loadtest.ReplayConfig{Phases: phases, Batch: f.batch})
-	fmt.Fprintf(out, "sent %d of %d records in %v (%.0f/s offered), %d batches, %d retries, at most %v behind schedule\n",
-		st.Sent, total, st.Elapsed.Round(time.Millisecond), st.Offered(), st.Batches, st.Retries, st.MaxBehind.Round(time.Millisecond))
+	fmt.Fprintf(out, "sent %d of %d records in %v (%.0f/s offered), %d batches, %d retries (%d records resent, possible duplicates), at most %v behind schedule\n",
+		st.Sent, total, st.Elapsed.Round(time.Millisecond), st.Offered(), st.Batches, st.Retries, st.Resent, st.MaxBehind.Round(time.Millisecond))
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
