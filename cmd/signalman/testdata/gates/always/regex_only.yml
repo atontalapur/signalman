@@ -1,0 +1,13 @@
+title: Regex Only On An Open Logsource
+id: 2f0d7c2e-6a61-4c39-9f5e-4b1f5d3a9e10
+status: test
+description: A regex is the only test and the logsource has no match criteria, so the prefilter has nothing to key on.
+author: signalman
+logsource:
+  product: test
+  category: open
+detection:
+  selection:
+    CommandLine|re: 'stage[0-9]+\.bin'
+  condition: selection
+level: low
