@@ -13,6 +13,12 @@ type Metrics struct {
 	EventsIngested *prometheus.CounterVec
 	// EventsDropped counts drop ledger entries. Labels: reason, source.
 	EventsDropped *prometheus.CounterVec
+	// StageQueueDepth is the occupancy of each bounded stage channel.
+	// Labels: stage.
+	StageQueueDepth *prometheus.GaugeVec
+	// ConsumerLag is records in the log not yet committed by the group.
+	// Labels: topic, partition.
+	ConsumerLag *prometheus.GaugeVec
 }
 
 // New registers the metrics on reg.
@@ -26,7 +32,15 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "signalman_events_dropped_total",
 			Help: "Admitted records written to the drop ledger instead of producing verdicts.",
 		}, []string{"reason", "source"}),
+		StageQueueDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "signalman_stage_queue_depth",
+			Help: "Items waiting in each bounded stage channel.",
+		}, []string{"stage"}),
+		ConsumerLag: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "signalman_consumer_lag_records",
+			Help: "Log end offset minus the committed offset, per partition.",
+		}, []string{"topic", "partition"}),
 	}
-	reg.MustRegister(m.EventsIngested, m.EventsDropped)
+	reg.MustRegister(m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag)
 	return m
 }

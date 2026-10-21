@@ -31,10 +31,13 @@ const HeaderSource = "source"
 const SourceUnknown = "unknown"
 
 // Item is one record's trip through the pipeline. Ingest creates it with the
-// event's identity; normalize fills in the fields or a drop.
+// event's identity; normalize fills in the fields or a drop; match fills in
+// the verdicts. Exactly one of Drop and Verdicts is set when it reaches the
+// sink.
 type Item struct {
-	Rec    broker.Record
-	HostID string
-	Event  *event.Event
-	Drop   *Drop
+	Rec      broker.Record
+	HostID   string
+	Event    *event.Event
+	Drop     *Drop
+	Verdicts []event.Verdict
 }

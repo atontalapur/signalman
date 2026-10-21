@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/atontalapur/signalman/internal/broker"
@@ -139,4 +140,71 @@ func NormRecord(it *Item) broker.Record {
 		panic(err)
 	}
 	return broker.Record{Topic: TopicEventsNorm, Partition: broker.AnyPartition, Key: []byte(it.HostID), Value: b}
+}
+
+// EventVerdicts is a verdict topic record body: every verdict for one event,
+// from one engine under one rule set. One record per event rather than one
+// per verdict keeps the topic at events times one, not events times rules,
+// and keeps an event's verdicts atomic: they are written, or redelivered,
+// together.
+type EventVerdicts struct {
+	Partition int32         `json:"partition"`
+	Seq       uint64        `json:"seq"`
+	Engine    string        `json:"engine"`
+	RuleSetV  string        `json:"ruleset_v"`
+	TaxonomyV string        `json:"taxonomy_v"`
+	Verdicts  []RuleVerdict `json:"verdicts"`
+}
+
+// RuleVerdict is one rule's result inside EventVerdicts.
+type RuleVerdict struct {
+	RuleID  string `json:"rule_id"`
+	Matched bool   `json:"matched"`
+}
+
+// Expand returns the record as data contract verdicts, in the order written.
+func (e EventVerdicts) Expand() []event.Verdict {
+	out := make([]event.Verdict, len(e.Verdicts))
+	for i, v := range e.Verdicts {
+		out[i] = event.Verdict{
+			Seq:       e.Seq,
+			Partition: e.Partition,
+			RuleID:    v.RuleID,
+			Matched:   v.Matched,
+			Engine:    e.Engine,
+			RuleSetV:  e.RuleSetV,
+			TaxonomyV: e.TaxonomyV,
+		}
+	}
+	return out
+}
+
+// VerdictRecord is the verdict topic record for an evaluated item, under
+// the engine that produced it. It is pinned to the event's own partition and
+// keyed by it, so a partition's verdicts stay one ordered stream for the
+// digest and the differ.
+func VerdictRecord(eng Engine, it *Item) broker.Record {
+	ev := it.Event
+	rs := eng.RuleSet()
+	rec := EventVerdicts{
+		Partition: ev.Partition,
+		Seq:       ev.Seq,
+		Engine:    eng.Name(),
+		RuleSetV:  rs.Version,
+		TaxonomyV: rs.TaxonomyV,
+		Verdicts:  make([]RuleVerdict, len(it.Verdicts)),
+	}
+	for i, v := range it.Verdicts {
+		rec.Verdicts[i] = RuleVerdict{RuleID: v.RuleID, Matched: v.Matched}
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		panic(err)
+	}
+	return broker.Record{
+		Topic:     VerdictTopic(eng),
+		Partition: ev.Partition,
+		Key:       []byte(strconv.Itoa(int(ev.Partition))),
+		Value:     b,
+	}
 }
