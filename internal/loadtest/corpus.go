@@ -36,8 +36,10 @@ type Corpus struct {
 // It is a constant so partition assignment is reproducible.
 const Hosts = 64
 
-// SourceLoadgen is the source header on generated records.
-const SourceLoadgen = "loadgen"
+// SourceLoadgen is the source header on generated records. It has to be
+// one of pipe.Sources, or the normalizer drops every record as
+// unknown-source; sysmon is the source most shipped rules are written for.
+const SourceLoadgen = "sysmon"
 
 // eventTimeBase is the first generated event_time (epoch milliseconds).
 // Record i gets eventTimeBase + i, so event time is part of the record, not
@@ -235,6 +237,7 @@ func MalformedRecords(host string) map[string]broker.Record {
 		pipe.ReasonNestedValue:    rawRecord(host, SourceLoadgen, []byte(`{"event_time":1,"x":[[1]]}`)),
 		pipe.ReasonDuplicateField: rawRecord(host, SourceLoadgen, []byte(`{"event_time":1,"x":1,"x":2}`)),
 		pipe.ReasonMissingSource:  noSource,
+		pipe.ReasonUnknownSource:  rawRecord(host, "loadgen", []byte(`{"event_time":1}`)),
 		pipe.ReasonEventTime:      rawRecord(host, SourceLoadgen, []byte(`{"x":1}`)),
 	}
 }

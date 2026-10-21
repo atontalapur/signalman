@@ -348,7 +348,7 @@ func TestMalformedRecordsEachDropForTheirReason(t *testing.T) {
 	norm := pipe.NewNormalizer(tax, pipe.NormalizeConfig{}, obs.New(prometheus.NewRegistry()))
 	in := pipe.NewIngest(obs.New(prometheus.NewRegistry()))
 	recs := MalformedRecords("h")
-	if len(recs) != 7 {
+	if len(recs) != 8 {
 		t.Fatalf("%d malformed records, want one per decode reason", len(recs))
 	}
 	for reason, r := range recs {

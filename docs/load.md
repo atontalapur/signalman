@@ -206,6 +206,11 @@ sent. No good record was dropped, and the digest equals replay. The
 partition did not wedge: latency on partition 5 (p50 1.49 s, p99 3.61 s)
 was no worse than on the other seven (p50 1.52 s, p99 3.97 s).
 
+This run predates the `unknown-source` drop reason. The experiment now
+also injects an `unknown-source` record, and generated records carry the
+source `sysmon`, since the normalizer drops any source not in
+`pipe.Sources`.
+
 **Still needs Redpanda.** Little: the drop path is the same code against
 either broker. A poison record from a real source, rather than one injected
 through a fault hook, has not been seen.
