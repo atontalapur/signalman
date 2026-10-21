@@ -58,6 +58,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # make integration runs every test, test/fuzz included, and with
+      # CI=true a missing oracle venv is a failure.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - run: |
+          python3 -m venv test/fuzz/.venv
+          test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt
       - run: docker compose -f deploy/docker-compose.yml up -d --wait
       - run: make integration
       - if: always()

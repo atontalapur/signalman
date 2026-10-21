@@ -273,12 +273,14 @@ func (b *Broker) EnsureTopics(ctx context.Context, specs []TopicSpec) error {
 		for k, v := range s.Configs {
 			cfg[k] = &v
 		}
+		// kadm returns the topic's own error as err too, so an existing
+		// topic arrives here, not only in resp.Err.
 		resp, err := b.admin.CreateTopic(ctx, s.Partitions, s.Replication, cfg, s.Name)
-		if err != nil {
-			return fmt.Errorf("create %s: %w", s.Name, err)
+		if err == nil {
+			err = resp.Err
 		}
-		if resp.Err != nil && !errors.Is(resp.Err, kerr.TopicAlreadyExists) {
-			return fmt.Errorf("create %s: %w", s.Name, resp.Err)
+		if err != nil && !errors.Is(err, kerr.TopicAlreadyExists) {
+			return fmt.Errorf("create %s: %w", s.Name, err)
 		}
 	}
 	return nil
