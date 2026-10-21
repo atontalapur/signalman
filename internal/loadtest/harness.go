@@ -128,6 +128,8 @@ type Harness struct {
 	cancel context.CancelFunc
 	done   chan error
 
+	fault func([]byte)
+
 	smu         sync.Mutex
 	samples     []Sample
 	marks       []Mark
@@ -173,6 +175,14 @@ func (h *Harness) Config() Config { return h.cfg }
 // Since is the time since the harness was built, the clock of every Sample,
 // Mark, and LatencySample.
 func (h *Harness) Since() time.Duration { return time.Since(h.start) }
+
+// SetFault installs a normalizer fault (pipe.Normalizer.SetFault) on the
+// pipeline and on ReferenceDigests' replay, so a record the fault turns
+// into a drop is a drop in both. Call it before Start.
+func (h *Harness) SetFault(f func([]byte)) {
+	h.fault = f
+	h.Norm.SetFault(f)
+}
 
 // Store reloads the slot with a v1 engine over rs; the tap is told to
 // expect it first.
@@ -431,6 +441,7 @@ func gauge(g prometheus.Gauge) float64 {
 func (h *Harness) ReferenceDigests(ctx context.Context, eng pipe.Engine) (map[int32]string, error) {
 	end := h.Produced()
 	norm := pipe.NewNormalizer(h.cfg.Taxonomy, pipe.NormalizeConfig{}, obs.New(prometheus.NewRegistry()))
+	norm.SetFault(h.fault)
 	in := pipe.NewIngest(obs.New(prometheus.NewRegistry()))
 	out := map[int32]string{}
 	var mu sync.Mutex

@@ -317,7 +317,7 @@ func TestOutputOutageIsLagNotLoss(t *testing.T) {
 func TestPoisonRecordIsOneDropAndThePartitionMovesOn(t *testing.T) {
 	rs, tax := repoSet(t)
 	h := newHarness(t, rs, tax, nil)
-	h.Norm.SetFault(PoisonFault)
+	h.SetFault(PoisonFault)
 	c := repoCorpus(t, rs, tax).Inject(100, []broker.Record{PoisonRecord("host-07")})
 	if err := h.Start(); err != nil {
 		t.Fatal(err)

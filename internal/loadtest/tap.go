@@ -91,8 +91,9 @@ type outcome struct {
 // outputs were accepted as durable. At is when that happened, measured from
 // the tap's creation.
 type LatencySample struct {
-	At  time.Duration
-	Lat time.Duration
+	At        time.Duration
+	Lat       time.Duration
+	Partition int32
 }
 
 type tapCall struct {
@@ -449,7 +450,7 @@ func (t *Tap) process(c tapCall) {
 				continue
 			}
 			norms++
-			lats = append(lats, LatencySample{At: at, Lat: c.at.Sub(h.IngestAt)})
+			lats = append(lats, LatencySample{At: at, Lat: c.at.Sub(h.IngestAt), Partition: h.Partition})
 		case pipe.TopicAlerts:
 			var k alertKey
 			if err := head(r.Value, sepTitle, &k); err != nil {

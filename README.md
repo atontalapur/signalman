@@ -73,6 +73,17 @@ A corpus is a directory of `.ndjson` or `.jsonl` files, one JSON event per
 line, with field names as they appear after the taxonomy. A rule may
 declare `budget:` in matches per 100k events; noise exits 1 above it.
 
+Plan F has started. `internal/loadtest` runs the pipeline in process over
+the in-memory broker behind a tap that checks every batch's outputs, and
+`cmd/loadgen` replays a corpus (ndjson, or events generated from a rule
+directory) into `events.raw` on Kafka at a multiple of a measured baseline.
+All seven spec experiments ran in process: under 2x and 5x overload, a
+consumer killed between durable outputs and commit, poison records, rule
+reloads every 250 ms, a 30 s output outage, and an offline partition, every
+event ended as verdicts or a drop, and the verdict digest matched a clean
+replay wherever one is comparable. Overload showed up as broker lag,
+never as loss. `docs/load.md` has the answers and lists what still needs Redpanda and ClickHouse.
+
 Plan C's code has landed. `cmd/signalmand` consumes `events.raw`, assigns Seq
 from the offset, normalizes through the taxonomy, evaluates with v1, and
 writes `events.norm`, `verdicts.v1`, `alerts`, and `drops`, committing
@@ -111,7 +122,7 @@ subset, rejection codes, fixtures, explain, budgets, and the gates.
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler and retro-hunt done, integration gate not yet run; sink not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
-| F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
+| F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); Redpanda and ClickHouse runs not done |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow has not run on a real rule PR yet and no noise corpus is configured |
 
@@ -150,6 +161,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ```
 cmd/signalman/          CLI: test, explain, lint, bench, noise, gates
 cmd/signalmand/         the pipeline daemon
+cmd/loadgen/            replays a corpus into events.raw at a multiple of a baseline rate
 cmd/differ/             shadow-mode verdict comparison
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
 internal/event/         Event, Value, Verdict
@@ -163,6 +175,7 @@ internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
 internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
+internal/loadtest/      in-process load harness: pacer, output tap, failure injection, the seven experiments
 internal/obs/           metrics (canary is Plan E)
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
@@ -176,7 +189,8 @@ docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
 docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
-docs/results.md         measured numbers: fuzzer, corpus, benchmarks
+docs/load.md            the seven load experiments: where work queued, what fell behind, correctness
+docs/results.md         measured numbers: fuzzer, corpus, benchmarks, pipeline baseline
 docs/authoring.md       writing rules: supported subset, rejections, fixtures, budgets, PR gates
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
@@ -210,6 +224,9 @@ that needs them.
   lengthens it, memory permitting.
   The retro-hunt test reads a clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`
   and skips without it.
+- Load runs skip unless `SIGNALMAN_LOAD=1`:
+  `SIGNALMAN_LOAD=1 go test -run 'TestLoadBaseline|TestLoadExperiment' -v -timeout 2h ./internal/loadtest/`.
+  `docs/load.md` lists the knobs.
 - `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
   one. Nightly CI runs them for 10 minutes each and uploads any crashers.
 - `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer
