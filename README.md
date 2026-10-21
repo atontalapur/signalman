@@ -83,12 +83,22 @@ topics, record formats, drop reasons, delivery, and the audit. The gate is
 not passed: the audit is green over generated load in test mode, but the
 one-hour soak against Redpanda has not been run.
 
+Plan D has started with the alert store. `deploy/clickhouse/001_alerts.sql`
+is the spec's `alerts` table (ReplacingMergeTree ordered by
+`(partition, seq, rule_id)`, 90 day TTL), created by the compose ClickHouse
+on first start. `cmd/signalman-sink` consumes the `alerts` topic and inserts
+batches through clickhouse-go, committing offsets only after an insert
+succeeds; while ClickHouse is down it retries and stops polling, so the
+outage is consumer lag, not loss. A redelivered batch collapsing on merge is
+property-tested against a model of the merge; the same check against a real
+ClickHouse is an integration test that has not been run yet.
+
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
-| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
+| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: alert schema and idempotent sink built, ClickHouse integration test not run; SQL compiler and retro-hunt not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
@@ -129,6 +139,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ```
 cmd/signalman/          CLI: test, explain, lint, bench, noise
 cmd/signalmand/         the pipeline daemon
+cmd/signalman-sink/     alerts topic to the ClickHouse alerts table
 cmd/differ/             shadow-mode verdict comparison
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
 internal/event/         Event, Value, Verdict
@@ -141,12 +152,14 @@ internal/engine/v2/     compiled evaluator: interned predicates, presence gating
 internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL
 internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit
+internal/pipe/chsink/   ClickHouse alert sink: batch insert, commit after insert, retry with backoff
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
 internal/obs/           metrics (canary is Plan E)
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
 test/replay/            corpus replay, digest comparison
 deploy/                 Dockerfile; docker compose for Redpanda, topic setup, and ClickHouse
+deploy/clickhouse/      ClickHouse init SQL: the alerts table
 docs/spec/              the spec (signalman-v1.html)
 docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
@@ -181,6 +194,13 @@ that needs them.
   refuses a rule directory with any rejection (`-strict=false` loads what it
   can). Worker pools, queue size, in-flight batches, and batch size are flags
   with fixed defaults, not derived from the machine.
+- Run the alert sink alongside it: `go run ./cmd/signalman-sink`. It
+  reads `alerts` as group `signalman-sink`, inserts into ClickHouse
+  (`-clickhouse` DSN, defaulting to the compose stack), and serves
+  `/metrics` on `:9465`. The table is created when the ClickHouse volume is
+  first initialized; after changing the DDL, `docker compose down -v`.
+  `make integration` sets `SIGNALMAN_CLICKHOUSE_DSN` to the compose stack;
+  without it the ClickHouse tests skip.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.

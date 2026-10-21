@@ -1,0 +1,333 @@
+package chsink
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/atontalapur/signalman/internal/broker"
+	"github.com/atontalapur/signalman/internal/obs"
+	"github.com/atontalapur/signalman/internal/pipe"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
+
+const group = "signalman-sink-test"
+
+// counting wraps a broker so a test can see how many polls returned records.
+type counting struct {
+	broker.Broker
+	polls atomic.Int64
+}
+
+func (c *counting) Consume(group string, topics []string) (broker.Consumer, error) {
+	cons, err := c.Broker.Consume(group, topics)
+	if err != nil {
+		return nil, err
+	}
+	return &countingConsumer{Consumer: cons, n: &c.polls}, nil
+}
+
+type countingConsumer struct {
+	broker.Consumer
+	n *atomic.Int64
+}
+
+func (c *countingConsumer) Poll(ctx context.Context) (broker.Fetch, error) {
+	f, err := c.Consumer.Poll(ctx)
+	if err == nil {
+		c.n.Add(1)
+	}
+	return f, err
+}
+
+func newBroker(maxPoll int) *counting {
+	return &counting{Broker: broker.NewMemory(map[string]int32{pipe.TopicAlerts: 3}, broker.WithMaxPoll(maxPoll))}
+}
+
+func alertRecord(t *testing.T, a pipe.Alert) broker.Record {
+	t.Helper()
+	b, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return broker.Record{Topic: pipe.TopicAlerts, Partition: broker.AnyPartition, Key: []byte(a.RuleID), Value: b}
+}
+
+// produceAlerts writes n distinct alerts and returns them.
+func produceAlerts(t *testing.T, b broker.Broker, n int) []pipe.Alert {
+	t.Helper()
+	var as []pipe.Alert
+	var recs []broker.Record
+	for i := range n {
+		a := genAlert(int32(i%4), uint64(i), i%len(ruleIDs))
+		as = append(as, a)
+		recs = append(recs, alertRecord(t, a))
+	}
+	if err := b.Produce(context.Background(), recs); err != nil {
+		t.Fatal(err)
+	}
+	return as
+}
+
+func testConfig() Config {
+	return Config{Group: group, BatchRows: 10, FlushInterval: 20 * time.Millisecond, RetryBackoff: time.Millisecond, MaxBackoff: 5 * time.Millisecond}
+}
+
+func committedAll(t *testing.T, b broker.Broker) bool {
+	t.Helper()
+	ctx := context.Background()
+	end, err := b.EndOffsets(ctx, pipe.TopicAlerts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.CommittedOffsets(ctx, group, pipe.TopicAlerts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, off := range end {
+		if off > 0 && got[p] != off {
+			return false
+		}
+	}
+	return true
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func start(t *testing.T, s *Sink) (stop func() error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- s.Run(ctx) }()
+	return func() error {
+		cancel()
+		return <-errc
+	}
+}
+
+func sameKeys(t *testing.T, want []pipe.Alert, got []pipe.Alert) {
+	t.Helper()
+	ref := &replacingTable{}
+	_ = ref.Insert(context.Background(), want)
+	exp := ref.final()
+	if len(exp) != len(got) {
+		t.Fatalf("table has %d rows, want %d", len(got), len(exp))
+	}
+	for i := range exp {
+		if keyOf(exp[i]) != keyOf(got[i]) {
+			t.Fatalf("row %d is %v, want %v", i, keyOf(got[i]), keyOf(exp[i]))
+		}
+	}
+}
+
+func TestSinkInsertsEveryAlertAndCommits(t *testing.T) {
+	b := newBroker(7)
+	want := produceAlerts(t, b, 95)
+	tbl := &replacingTable{}
+	reg := prometheus.NewRegistry()
+	s, err := New(testConfig(), b, tbl, obs.New(reg), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, s)
+	waitFor(t, "every offset committed", func() bool { return committedAll(t, b) })
+	if err := stop(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+	sameKeys(t, want, tbl.final())
+	if tbl.rawRows() != len(want) {
+		t.Fatalf("%d rows inserted for %d alerts with no redelivery", tbl.rawRows(), len(want))
+	}
+	for _, part := range tbl.parts {
+		if len(part) > 10+7 {
+			t.Fatalf("an insert of %d rows exceeds BatchRows plus one poll", len(part))
+		}
+	}
+	for p := range 3 {
+		if v := testutil.ToFloat64(s.m.ConsumerLag.WithLabelValues(pipe.TopicAlerts, strconv.Itoa(p))); v != 0 {
+			t.Fatalf("partition %d lag %v after everything committed", p, v)
+		}
+	}
+}
+
+// A partial batch is flushed after FlushInterval, not held until BatchRows.
+func TestSinkFlushesAPartialBatchOnInterval(t *testing.T) {
+	b := newBroker(500)
+	want := produceAlerts(t, b, 3)
+	tbl := &replacingTable{}
+	cfg := testConfig()
+	cfg.BatchRows = 1000
+	s, err := New(cfg, b, tbl, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, s)
+	waitFor(t, "the partial batch committed", func() bool { return committedAll(t, b) })
+	_ = stop()
+	sameKeys(t, want, tbl.final())
+}
+
+// TestSinkBackpressuresDuringOutage is the S-40 outage case. While
+// ClickHouse refuses inserts the sink keeps retrying one batch, commits
+// nothing, and stops polling; when it comes back every alert lands.
+func TestSinkBackpressuresDuringOutage(t *testing.T) {
+	b := newBroker(10)
+	want := produceAlerts(t, b, 50)
+	ch := &flaky{tbl: &replacingTable{}, down: true}
+	s, err := New(testConfig(), b, ch, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, s)
+
+	waitFor(t, "repeated insert attempts", func() bool { return ch.attemptCount() >= 20 })
+	polls := b.polls.Load()
+	waitFor(t, "more insert attempts", func() bool { return ch.attemptCount() >= 40 })
+	if got := b.polls.Load(); got != polls || got != 1 {
+		t.Fatalf("sink polled %d times (then %d) during the outage; it must stop at the first batch", polls, got)
+	}
+	got, err := b.CommittedOffsets(context.Background(), group, pipe.TopicAlerts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("offsets committed during the outage: %v", got)
+	}
+	if n := ch.tbl.rawRows(); n != 0 {
+		t.Fatalf("%d rows written while down", n)
+	}
+
+	ch.setDown(false)
+	waitFor(t, "every offset committed after recovery", func() bool { return committedAll(t, b) })
+	if err := stop(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+	sameKeys(t, want, ch.tbl.final())
+}
+
+// A crash after the insert and before the commit redelivers the batch. The
+// table after the second run, merged, is the table a single delivery leaves.
+func TestSinkRedeliveryCollapses(t *testing.T) {
+	b := newBroker(500)
+	want := produceAlerts(t, b, 40)
+	cfg := testConfig()
+	cfg.BatchRows = 1000
+
+	ch := &flaky{tbl: &replacingTable{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	ch.onInsert = cancel // the process dies the moment the insert lands
+	s, err := New(cfg, b, ch, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+	if committedAll(t, b) {
+		t.Fatal("offsets were committed; the test needs a crash before the commit")
+	}
+	once := ch.tbl.final()
+
+	ch.onInsert = nil
+	s2, err := New(cfg, b, ch, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := start(t, s2)
+	waitFor(t, "the redelivered batch committed", func() bool { return committedAll(t, b) })
+	_ = stop()
+
+	if ch.tbl.rawRows() != 2*len(want) {
+		t.Fatalf("%d raw rows; the redelivery should have inserted every alert twice", ch.tbl.rawRows())
+	}
+	ch.tbl.optimize()
+	if got := ch.tbl.final(); len(got) != len(once) || ch.tbl.rawRows() != len(want) {
+		t.Fatalf("after merge %d rows, single delivery had %d", len(got), len(once))
+	}
+	sameKeys(t, want, ch.tbl.final())
+}
+
+// A record the table cannot hold stops the sink with its position, commits
+// nothing, and inserts nothing: lag over loss, and never a silent skip.
+func TestSinkStopsOnAnUninsertableRecord(t *testing.T) {
+	cases := map[string]func(*pipe.Alert) []byte{
+		"not json":         func(*pipe.Alert) []byte { return []byte("{") },
+		"rule_id not uuid": func(a *pipe.Alert) []byte { a.RuleID = "proc_dump"; return nil },
+		"empty severity":   func(a *pipe.Alert) []byte { a.Severity = ""; return nil },
+		"unknown severity": func(a *pipe.Alert) []byte { a.Severity = "severe"; return nil },
+	}
+	for name, mut := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := newBroker(500)
+			produceAlerts(t, b, 5)
+			bad := genAlert(0, 99, 0)
+			rec := alertRecord(t, bad)
+			if raw := mut(&bad); raw != nil {
+				rec.Value = raw
+			} else {
+				rec = alertRecord(t, bad)
+			}
+			if err := b.Produce(context.Background(), []broker.Record{rec}); err != nil {
+				t.Fatal(err)
+			}
+			tbl := &replacingTable{}
+			cfg := testConfig()
+			cfg.BatchRows = 1000
+			s, err := New(cfg, b, tbl, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			err = s.Run(ctx)
+			if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Run returned %v; want a record error", err)
+			}
+			if !strings.Contains(err.Error(), "alerts/") || !strings.Contains(err.Error(), "offset") {
+				t.Fatalf("error %q does not name the record's position", err)
+			}
+			got, _ := b.CommittedOffsets(context.Background(), group, pipe.TopicAlerts)
+			if len(got) != 0 || tbl.rawRows() != 0 {
+				t.Fatalf("committed %v, inserted %d rows", got, tbl.rawRows())
+			}
+		})
+	}
+}
+
+func TestConfigRejectsZeroSizes(t *testing.T) {
+	b := newBroker(1)
+	if _, err := New(Config{}, b, &replacingTable{}, nil, nil); err == nil {
+		t.Fatal("a zero config must be rejected")
+	}
+	cfg := testConfig()
+	cfg.FlushInterval = 0
+	if _, err := New(cfg, b, &replacingTable{}, nil, nil); err == nil {
+		t.Fatal("FlushInterval is required")
+	}
+}
+
+func TestDecodeRoundTripsThePipelineAlert(t *testing.T) {
+	a := genAlert(3, 17, 2)
+	got, err := Decode(alertRecord(t, a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keyOf(got) != keyOf(a) || got.Raw != a.Raw || got.Fields["Image"] != a.Fields["Image"] || !got.EventTime.Equal(a.EventTime) {
+		t.Fatalf("decoded %+v from %+v", got, a)
+	}
+}
