@@ -54,6 +54,12 @@ func TestRetroHuntEqualsReplay(t *testing.T) {
 	t.Cleanup(func() { _, _ = db.Exec("DROP TABLE IF EXISTS " + table) })
 
 	evs := fixture()
+	// The fixture's times are in 1970. Retention reads ingest_time, so stamp
+	// it with now or the TTL could delete the rows before the hunt reads them.
+	now := time.Now().UTC()
+	for _, ev := range evs {
+		ev.IngestAt = now
+	}
 	// Twice: a redelivered batch must not change the answer before or after
 	// the ReplacingMergeTree merges.
 	insert(t, ctx, db, table, evs)

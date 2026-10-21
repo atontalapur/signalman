@@ -14,7 +14,13 @@ driver; the integration test brings `clickhouse-go`.
 
 The spec fixes the `alerts` table, not an events table, so the schema is
 defined here (`ch.CreateTableSQL`). It keeps the alert table's key,
-partitioning, and TTL. The alert table's `fields Map(String, String)` is
+`(partition, seq)`, and its 90 day retention, but partitions by day and
+expires on `ingest_time`, not `event_time`. `event_time` comes from the
+source: an old or skewed value would be deleted by the TTL as it arrives,
+and one insert spread over more than 100 days of `event_time` would be
+refused for touching too many partitions. `ingest_time` is set by the
+pipeline and stays near now. `event_time` appears only in the hunt's WHERE
+clause. The alert table's `fields Map(String, String)` is
 replaced by one column per comparison family, each holding what v1 would
 compute at match time, computed once in Go by `ch.Encode`:
 
