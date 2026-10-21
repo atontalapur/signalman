@@ -15,9 +15,14 @@ import (
 
 // Columns is the alerts table's columns in table order, which is the order
 // Insert appends values in. schema_test.go holds it equal to the DDL.
+//
+// The first eleven are the spec's (phase 04). engine is an extension: the
+// engine that served the alert, v1 or v2, so alert volume per rule can be
+// compared across engines during the rollout.
 var Columns = []string{
 	"partition", "seq", "rule_id", "rule_title", "severity",
 	"event_time", "ingest_time", "host_id", "source", "fields", "raw",
+	"engine",
 }
 
 // severities are the Enum8 values of the severity column.
@@ -89,16 +94,21 @@ func (c *ClickHouse) Insert(ctx context.Context, rows []pipe.Alert) error {
 	}
 	defer func() { _ = batch.Close() }()
 	for _, a := range rows {
-		fields := a.Fields
-		if fields == nil {
-			fields = map[string]string{}
-		}
-		if err := batch.Append(a.Partition, a.Seq, a.RuleID, a.RuleTitle, a.Severity,
-			a.EventTime, a.IngestTime, a.HostID, a.Source, fields, a.Raw); err != nil {
+		if err := batch.Append(rowValues(a)...); err != nil {
 			return fmt.Errorf("append partition %d seq %d rule %s: %w", a.Partition, a.Seq, a.RuleID, err)
 		}
 	}
 	return batch.Send()
+}
+
+// rowValues is a's values in Columns order.
+func rowValues(a pipe.Alert) []any {
+	fields := a.Fields
+	if fields == nil {
+		fields = map[string]string{}
+	}
+	return []any{a.Partition, a.Seq, a.RuleID, a.RuleTitle, a.Severity,
+		a.EventTime, a.IngestTime, a.HostID, a.Source, fields, a.Raw, a.Engine}
 }
 
 // Close closes the connection.

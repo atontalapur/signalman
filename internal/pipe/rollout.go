@@ -1,6 +1,11 @@
 package pipe
 
-import "hash/fnv"
+import (
+	"fmt"
+	"hash/fnv"
+	"strconv"
+	"strings"
+)
 
 // RolloutBucket is the rule's place in the rollout order: FNV-1a 32 of the
 // rule id, mod 100. It depends on nothing but the id, so routing is the
@@ -17,4 +22,28 @@ func RolloutBucket(ruleID string) int {
 // served by the shadow stays served by it as the rollout advances.
 func ServedByShadow(ruleID string, percent int) bool {
 	return RolloutBucket(ruleID) < percent
+}
+
+// ParseRollout reads a rollout file: one integer from 0 to 100, with blank
+// lines and lines starting with # ignored. signalmand -rollout reads it, and
+// the cutover game day writes it.
+func ParseRollout(b []byte) (int, error) {
+	var vals []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			vals = append(vals, line)
+		}
+	}
+	if len(vals) != 1 {
+		return 0, fmt.Errorf("rollout file holds %d values, want one percentage", len(vals))
+	}
+	n, err := strconv.Atoi(vals[0])
+	if err != nil {
+		return 0, fmt.Errorf("rollout %q is not an integer percentage", vals[0])
+	}
+	if n < 0 || n > 100 {
+		return 0, fmt.Errorf("rollout %d%% is outside 0 to 100", n)
+	}
+	return n, nil
 }

@@ -103,7 +103,11 @@ admitted but not yet committed is bounded by `(inflight + 2) x max-poll`.
 
 `signalman-sink` (`internal/pipe/chsink`) consumes `alerts` as its own
 consumer group and inserts into the `alerts` table from the spec, defined in
-`deploy/clickhouse/001_alerts.sql`. It runs as a separate process from
+`deploy/clickhouse/001_alerts.sql`. The table has one column the spec does
+not: `engine LowCardinality(String)`, the engine that served the alert, so
+alert volume per rule can be compared across engines during the rollout.
+`002_alerts_engine.sql` adds it to a table created before it existed; on an
+existing volume, run it by hand. The sink runs as a separate process from
 `signalmand` so a ClickHouse outage stops alert storage and nothing else:
 detection keeps writing to Redpanda, and the backlog waits in the topic.
 

@@ -24,6 +24,13 @@ var specColumns = [][2]string{
 	{"raw", "String CODEC(ZSTD(3))"},
 }
 
+// extensionColumns follow the spec's columns and are not in the spec. engine
+// is the engine that served the alert, which the cutover needs to tell v1's
+// alerts from v2's once both serve rules.
+var extensionColumns = [][2]string{
+	{"engine", "LowCardinality(String)"},
+}
+
 func readDDL(t *testing.T) string {
 	t.Helper()
 	b, err := os.ReadFile(ddlPath)
@@ -55,14 +62,67 @@ func ddlColumns(t *testing.T, ddl string) [][2]string {
 	return cols
 }
 
+// The spec's columns come first and in its order; the extensions follow, so
+// a reader comparing the table with the spec finds the spec as a prefix.
 func TestDDLColumnsMatchSpec(t *testing.T) {
 	cols := ddlColumns(t, readDDL(t))
-	if len(cols) != len(specColumns) {
-		t.Fatalf("%d columns, spec has %d: %v", len(cols), len(specColumns), cols)
+	want := append(append([][2]string{}, specColumns...), extensionColumns...)
+	if len(cols) != len(want) {
+		t.Fatalf("%d columns, want the spec's %d plus %d extensions: %v", len(cols), len(specColumns), len(extensionColumns), cols)
 	}
 	for i, c := range cols {
-		if c != specColumns[i] {
-			t.Errorf("column %d is %v, spec says %v", i, c, specColumns[i])
+		if c != want[i] {
+			t.Errorf("column %d is %v, want %v", i, c, want[i])
+		}
+	}
+}
+
+// The migration for a table created before the engine column adds exactly
+// the extension columns, and is safe to run on a table that has them.
+func TestEngineMigrationAddsTheExtensionColumns(t *testing.T) {
+	b, err := os.ReadFile("../../../deploy/clickhouse/002_alerts_engine.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := Statements(string(b))
+	if len(stmts) != len(extensionColumns) {
+		t.Fatalf("%d statements, want one per extension column: %q", len(stmts), stmts)
+	}
+	for i, c := range extensionColumns {
+		want := "ALTER TABLE signalman.alerts ADD COLUMN IF NOT EXISTS " + c[0] + " " + c[1]
+		if !strings.HasPrefix(stmts[i], want) {
+			t.Errorf("statement %q, want prefix %q", stmts[i], want)
+		}
+	}
+}
+
+// Insert appends one value per column in Columns order, and the engine
+// value is the alert's engine.
+func TestRowValuesFollowColumns(t *testing.T) {
+	a := genAlert(1, 2, 0)
+	a.Engine = "v2"
+	vals := rowValues(a)
+	if len(vals) != len(Columns) {
+		t.Fatalf("%d values for %d columns", len(vals), len(Columns))
+	}
+	for i, c := range Columns {
+		var want any
+		switch c {
+		case "partition":
+			want = a.Partition
+		case "seq":
+			want = a.Seq
+		case "rule_id":
+			want = a.RuleID
+		case "engine":
+			want = a.Engine
+		case "raw":
+			want = a.Raw
+		default:
+			continue
+		}
+		if vals[i] != want {
+			t.Errorf("column %s gets %v, want %v", c, vals[i], want)
 		}
 	}
 }

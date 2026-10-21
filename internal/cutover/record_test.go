@@ -1,0 +1,120 @@
+package cutover
+
+import (
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func passed(gate string, step int) Report {
+	return Report{Gate: gate, Step: step, At: checkAt, Window: 48 * time.Hour, Checks: []Check{
+		{Key: "divergences", Criterion: "no divergence", Status: Pass, Evidence: "0 over 48h"},
+		{Key: "flag-only", Criterion: "flag only", Status: Attested, Evidence: "attested: diff empty", Manual: true},
+	}}
+}
+
+func undated() string {
+	doc := ladderDoc
+	for _, d := range []string{"2026-09-01", "2026-09-10", "2026-09-12", "2026-09-16", "2026-09-18", "2026-09-19"} {
+		doc = strings.Replace(doc, " "+d+" |", " |", 1)
+	}
+	return doc
+}
+
+func TestRecordDatesTheGateAndAppendsEvidence(t *testing.T) {
+	doc := undated()
+	out, err := Record(doc, passed("G4", 0), "cutover check -gate G4 -record")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := LadderDates(out); d["G4"] != "2026-11-02" || d["G3"] != "" {
+		t.Fatalf("dates %v", d)
+	}
+	if !strings.Contains(out, "| G4 100% served by v2 | e | 2026-11-02 |") {
+		t.Fatalf("row not dated in place:\n%s", out)
+	}
+	for _, want := range []string{
+		"\n### G4 passed 2026-11-02\n",
+		"Checked over the 48h ending 2026-11-02T12:00:00Z with `cutover check -gate G4 -record`.",
+		"- `divergences` pass: no divergence. 0 over 48h\n",
+		"- `flag-only` attested: flag only. attested: diff empty\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("record lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, noEvidence) {
+		t.Error("the placeholder survived the first record")
+	}
+	if _, err := Record(out, passed("G4", 0), "again"); err == nil {
+		t.Fatal("a gate recorded twice")
+	}
+}
+
+func TestRecordRefusesAGateThatDidNotPass(t *testing.T) {
+	r := passed("G2", 0)
+	r.Checks[0].Status = Unchecked
+	if out, err := Record(undated(), r, "x"); err == nil || out != undated() {
+		t.Fatal("an unchecked gate was recorded")
+	}
+	if _, err := Record(undated(), Report{Gate: "G2", At: checkAt}, "x"); err == nil {
+		t.Fatal("a gate with no checks was recorded")
+	}
+}
+
+func TestRecordG3TakesBothStepsInOrder(t *testing.T) {
+	doc := undated()
+	if _, err := Record(doc, passed("G3", 50), "x"); err == nil {
+		t.Fatal("G3 50% recorded before 10%")
+	}
+	doc, err := Record(doc, passed("G3", 10), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if LadderDates(doc)["G3"] != "" {
+		t.Fatal("the 10% step dated G3")
+	}
+	doc, err = Record(doc, passed("G3", 50), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if LadderDates(doc)["G3"] != "2026-11-02" || !strings.Contains(doc, "### G3 10% passed") || !strings.Contains(doc, "### G3 50% passed") {
+		t.Fatalf("G3:\n%s", doc)
+	}
+}
+
+func TestRecordNeedsEvidenceLast(t *testing.T) {
+	doc := undated() + "\n## Later\n\ntext\n"
+	if _, err := Record(doc, passed("G2", 0), "x"); err == nil {
+		t.Fatal("evidence appended under the wrong section")
+	}
+}
+
+func TestOpenDivergences(t *testing.T) {
+	doc := strings.Replace(ladderDoc, "| fixed |", "| fixed |\n| 2 | 2026-09-04 | missing_verdict | r | 1/2 | | | open |", 1)
+	open, n := OpenDivergences(doc)
+	if n != 2 || len(open) != 1 || open[0] != "#2" {
+		t.Fatalf("open %v of %d", open, n)
+	}
+}
+
+// The checked-in document has every gate in its table and the evidence
+// section last, so -record has somewhere to write.
+func TestCutoverDocHasTheLadder(t *testing.T) {
+	b, err := os.ReadFile("../../docs/cutover.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(b)
+	dates := LadderDates(doc)
+	for _, g := range Gates {
+		if _, ok := dates[g]; !ok {
+			t.Errorf("no %s row in the gate ladder", g)
+		}
+	}
+	i := strings.LastIndex(doc, "\n## ")
+	if i < 0 || !strings.HasPrefix(doc[i+1:], headingEvidence+"\n") {
+		t.Fatal("the last section of docs/cutover.md is not the gate evidence")
+	}
+}

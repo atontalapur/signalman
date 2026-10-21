@@ -152,7 +152,8 @@ type Alert struct {
 	Seq       uint64 `json:"seq"`
 	RuleID    string `json:"rule_id"`
 	// Engine is the engine that served the rule for this event: v1, or v2
-	// for a rule inside the rollout.
+	// for a rule inside the rollout. It is the alert table's engine column,
+	// which extends the spec's columns.
 	Engine     string            `json:"engine"`
 	RuleTitle  string            `json:"rule_title"`
 	Severity   string            `json:"severity"`

@@ -5,7 +5,8 @@ step, and the record of every disagreement found on the way. The spec is
 phases 08 and 09 of `docs/spec/signalman-v1.html`.
 
 No gate has been passed. The dates column below is empty on purpose and is
-filled in only when a gate's criteria are met and checked.
+filled in only when a gate's criteria are met and checked, by
+`cutover check -record` (see "Checking the gates").
 
 ## The four arguments
 
@@ -22,8 +23,8 @@ built.
    prefilter soundness (prefilter rejects implies v1 is false), and
    idempotence (re-ingesting a batch changes no alert row after merge).
    The first three are in `internal/engine/v1` and `internal/engine/v2`.
-   Idempotence needs the ClickHouse alert table, which is Plan D and not
-   built.
+   Idempotence is in `internal/pipe/chsink`, against a model of
+   ReplacingMergeTree in CI and a real ClickHouse under `make integration`.
 3. **Corpus replay.** The full event corpus through both engines offline,
    compared by per-partition verdict digest. Exhaustive over a fixed input.
    `internal/engine/v2` harness tests; numbers in `docs/results.md`.
@@ -198,6 +199,93 @@ and the differ. It does not delete `internal/engine/v1`: v1 stays as the
 test oracle, and the differential, property, and replay tests keep running
 against it.
 
+## Checking the gates
+
+`cmd/cutover` checks one gate at a time and prints every criterion with its
+status and the evidence behind it. It exits 0 only when every criterion
+passed or was attested.
+
+```sh
+go run ./cmd/cutover check -gate G2 -prom http://localhost:9090 -drill g2-rollback.json
+```
+
+Nothing is written unless `-record` is given, and `-record` writes only for
+a gate that passed: it puts the date of `-at` (default now) in the table
+above and appends the checks and their evidence under "Gate evidence" at
+the end of this document. It refuses a gate that already has a date. G3 is
+recorded in two steps, `-percent 10` and then `-percent 50`; only the second
+dates the row.
+
+Where each criterion comes from:
+
+| Gate | Checked from | Not machine-checkable here |
+|---|---|---|
+| G0 | `-corpus` replayed through v1 and v2 with `-rules`, digests compared per partition (`internal/verdict`); `-fuzz-stats` summed, at least `-fuzz-min` (1e8) comparisons; `-go-test` runs `go test` over `internal/engine`, `internal/verdict`, `internal/pipe/chsink` | `fuzz-clean`: the counters do not record the fuzz run's exit status |
+| G1 | Over 7 days: rollout at 0, both engines' verdict rates never zero and their counts within `-verdict-tolerance`, differ resolving events, `signalman_divergences_counted_total` and `signalman_shadow_failures_total` flat | `v2-p99`: no per-engine match latency metric is exported; it comes from the load harness |
+| G2, G3 | Over 48 h: rollout held at 1, 10 or 50 on every instance, the G1 checks, alert volume per rule against the 48 h before within `-noise-sigma` (Poisson, default 3), and a rollback in `-drill` under 30 s | |
+| G4 | The G2 checks at 100 apart from alert volume, `signalman_alerts_total{engine="v1"}` flat, and a rollback from 100 in `-drill` | `flag-only`: no configuration change other than the rollout file |
+| G5 | `-drill` from `cutover gameday`: 100 to 0 and 0 to 100, each under 30 s; started on a weekday inside `-business-hours` in `-tz`; ingest rate at the rollback at least `-full-traffic` (0.8) of the 7 day mean | |
+| G6 | Over 14 days: rollout at 100, the G1 checks, audit violations flat, zero `version_skew`, alert volume against `-baseline-at` (a window when v1 served everything), the G5 drill, G0 to G5 dated here, no open divergence log entry | `v2-p99`; `skew-in-reloads` when there was any skew |
+
+A criterion nothing here can check is `unchecked` until an operator states
+the evidence with `-attest key=evidence`, which is recorded as `attested`
+next to the machine checks. A failed check cannot be attested. A query that
+fails, or a metric with no series where one must exist (an unscraped
+differ), is `unchecked`, never zero. `deploy/prometheus/prometheus.yml`
+scrapes the differ on `:9466` for this.
+
+## Game day
+
+G5 is a rollback at full traffic during business hours and a roll-forward,
+both measured. `cutover gameday` is the one subcommand that changes
+production: it rewrites signalmand's `-rollout` file.
+
+Before: G4 holds, the rollout file reads 100 and so does
+`signalman_rollout_percent` on every instance, the SOC knows the window,
+and someone is watching the canary and divergence panels.
+
+```sh
+go run ./cmd/cutover gameday -prom http://localhost:9090 \
+  -rollout-file /etc/signalman/rollout -out docs/gameday/$(date +%F).json
+```
+
+1. Preflight: the file and every instance's gauge must read `-from` (100).
+   Anything else stops the drill before it writes.
+2. Rollback: the file is replaced with 0 by a rename, and the write time is
+   kept.
+3. After `-observe` (90 s) the change is measured from Prometheus. It took
+   effect at the later of two samples: the first with
+   `max(signalman_rollout_percent)` at 0, and the last at which
+   `signalman_alerts_total{engine="v2"}` rose for a moved rule. A moved rule
+   is one whose `RolloutBucket` lies between the two percentages, so a
+   partial rollback is timed on the rules that actually changed hands. v1
+   must also have served at least one moved rule, and v2 must have been
+   quiet for `-quiet` (20 s) before the window ends.
+4. If the rollback is not measured the drill stops with the rollout at 0,
+   which is v1 serving: investigate before rolling forward by hand.
+5. After `-hold` (5 min from the rollback) the file is set back to 100,
+   and the roll-forward is measured the same way with the engines swapped.
+
+The result is a JSON file holding both steps; pass it to
+`cutover check -gate G5 -drill` (and later to G6). `-rollback-only` runs
+the rollback alone, for the measured rollback G2 to G4 need, with `-from`
+set to the current step. `cutover measure` times a change an operator made
+by hand from its write time, without touching the file.
+
+Each time is the first sample that showed it, so a measured duration is an
+upper bound, never shorter than the real one, and its error is at most one
+scrape interval (15 s in `deploy/prometheus`). A duration near the 30 s
+budget should be re-run with a shorter scrape interval before it is
+believed either way.
+
+### Measured durations
+
+| Date | From | To | Took effect | Measured by | Result file |
+|---|---|---|---|---|---|
+
+No game day has been run. There is no production traffic to run one
+against, and no number goes here until one is.
+
 ## Divergence log
 
 Every disagreement found in shadow mode, from the first day, with the rule,
@@ -209,3 +297,10 @@ with the event that first showed it.
 |---|---|---|---|---|---|---|---|
 
 No entries. Shadow mode has not run against production traffic.
+
+## Gate evidence
+
+What `cutover check -record` appended for each gate it recorded, newest
+last. Each entry names the command, the window, and every check.
+
+Nothing recorded. No gate has been checked against production traffic.

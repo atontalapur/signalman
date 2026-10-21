@@ -30,7 +30,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -300,28 +299,8 @@ func install(slot *pipe.Slot, rs *sigma.RuleSet, shadow bool) error {
 	return slot.StoreWithShadow(pipe.V1(rs), pipe.V2(rs))
 }
 
-// parseRollout reads a rollout file: one integer from 0 to 100, with blank
-// lines and lines starting with # ignored.
-func parseRollout(b []byte) (int, error) {
-	var vals []string
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			vals = append(vals, line)
-		}
-	}
-	if len(vals) != 1 {
-		return 0, fmt.Errorf("rollout file holds %d values, want one percentage", len(vals))
-	}
-	n, err := strconv.Atoi(vals[0])
-	if err != nil {
-		return 0, fmt.Errorf("rollout %q is not an integer percentage", vals[0])
-	}
-	if n < 0 || n > 100 {
-		return 0, fmt.Errorf("rollout %d%% is outside 0 to 100", n)
-	}
-	return n, nil
-}
+// parseRollout reads a rollout file; see pipe.ParseRollout.
+func parseRollout(b []byte) (int, error) { return pipe.ParseRollout(b) }
 
 // applyRollout reads the rollout file and, if it changed, makes it the
 // rollout from the next batch. A file that cannot be read or parsed leaves

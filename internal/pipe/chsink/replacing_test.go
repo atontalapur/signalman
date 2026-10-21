@@ -114,6 +114,7 @@ func genAlert(partition int32, seq uint64, rule int) pipe.Alert {
 		Source:     "sysmon",
 		Fields:     map[string]string{"Image": fmt.Sprintf(`C:\p%d.exe`, seq)},
 		Raw:        fmt.Sprintf(`{"seq":%d}`, seq),
+		Engine:     []string{"v1", "v2"}[rule%2],
 	}
 }
 

@@ -327,7 +327,7 @@ func TestDecodeRoundTripsThePipelineAlert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keyOf(got) != keyOf(a) || got.Raw != a.Raw || got.Fields["Image"] != a.Fields["Image"] || !got.EventTime.Equal(a.EventTime) {
+	if keyOf(got) != keyOf(a) || got.Raw != a.Raw || got.Engine != a.Engine || got.Fields["Image"] != a.Fields["Image"] || !got.EventTime.Equal(a.EventTime) {
 		t.Fatalf("decoded %+v from %+v", got, a)
 	}
 }

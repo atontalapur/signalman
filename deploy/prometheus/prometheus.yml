@@ -17,3 +17,9 @@ scrape_configs:
   - job_name: signalmand
     static_configs:
       - targets: ["host.docker.internal:9464"]
+  # cmd/differ serves the divergence counters the cutover gates read
+  # (docs/cutover.md) on :9466. Down when no differ runs, which the gate
+  # checker reports as unchecked rather than as zero divergences.
+  - job_name: differ
+    static_configs:
+      - targets: ["host.docker.internal:9466"]
