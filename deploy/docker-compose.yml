@@ -33,7 +33,8 @@ services:
   # Creates the pipeline topics, then stays up so `up --wait` can treat it as
   # healthy. Partition counts match across host_id-keyed topics so a host's
   # events, norms, and drops share a partition number. Retention follows the
-  # spec: verdicts 7 days, drops 30 days.
+  # spec: verdicts 7 days, drops 30 days. Divergences keep 30 days, like
+  # drops: each one is evidence for the cutover's divergence log.
   topics:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
     depends_on:
@@ -47,7 +48,10 @@ services:
         for t in events.raw events.norm alerts; do
           rpk topic create "$$t" -p 8 -r 1 || rpk topic describe "$$t" >/dev/null
         done
-        rpk topic create verdicts.v1 -p 8 -r 1 -c retention.ms=604800000 || rpk topic describe verdicts.v1 >/dev/null
+        for t in verdicts.v1 verdicts.v2; do
+          rpk topic create "$$t" -p 8 -r 1 -c retention.ms=604800000 || rpk topic describe "$$t" >/dev/null
+        done
+        rpk topic create divergences -p 8 -r 1 -c retention.ms=2592000000 || rpk topic describe divergences >/dev/null
         rpk topic create drops -p 8 -r 1 -c retention.ms=2592000000 || rpk topic describe drops >/dev/null
         touch /tmp/ready
         exec sleep infinity

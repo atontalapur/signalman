@@ -148,9 +148,12 @@ func NormRecord(it *Item) broker.Record {
 // sink can insert it as it stands. The table dedups on (partition, seq,
 // rule_id), which is what makes a redelivered batch harmless.
 type Alert struct {
-	Partition  int32             `json:"partition"`
-	Seq        uint64            `json:"seq"`
-	RuleID     string            `json:"rule_id"`
+	Partition int32  `json:"partition"`
+	Seq       uint64 `json:"seq"`
+	RuleID    string `json:"rule_id"`
+	// Engine is the engine that served the rule for this event: v1, or v2
+	// for a rule inside the rollout.
+	Engine     string            `json:"engine"`
 	RuleTitle  string            `json:"rule_title"`
 	Severity   string            `json:"severity"`
 	EventTime  time.Time         `json:"event_time"`
@@ -162,8 +165,9 @@ type Alert struct {
 	Raw string `json:"raw"`
 }
 
-// AlertRecord is the alerts topic record for one match, keyed by rule_id.
-func AlertRecord(r *sigma.Rule, it *Item) broker.Record {
+// AlertRecord is the alerts topic record for one match served by engine,
+// keyed by rule_id.
+func AlertRecord(r *sigma.Rule, it *Item, engine string) broker.Record {
 	ev := it.Event
 	f := make(map[string]string, len(ev.Fields))
 	for k, v := range ev.Fields {
@@ -173,6 +177,7 @@ func AlertRecord(r *sigma.Rule, it *Item) broker.Record {
 		Partition:  ev.Partition,
 		Seq:        ev.Seq,
 		RuleID:     r.ID,
+		Engine:     engine,
 		RuleTitle:  r.Title,
 		Severity:   r.Level,
 		EventTime:  ev.EventTime,
@@ -208,12 +213,18 @@ func flat(v event.Value) string {
 // per verdict keeps the topic at events times one, not events times rules,
 // and keeps an event's verdicts atomic: they are written, or redelivered,
 // together.
+//
+// Shadow, on a primary engine's record, names the shadow engine the event
+// was also handed to. It tells the differ a shadow record is owed: a
+// shadowed v1 record with no v2 record is a missing verdict, an unshadowed
+// one is not. It is empty on the shadow's own records.
 type EventVerdicts struct {
 	Partition int32         `json:"partition"`
 	Seq       uint64        `json:"seq"`
 	Engine    string        `json:"engine"`
 	RuleSetV  string        `json:"ruleset_v"`
 	TaxonomyV string        `json:"taxonomy_v"`
+	Shadow    string        `json:"shadow,omitempty"`
 	Verdicts  []RuleVerdict `json:"verdicts"`
 }
 
@@ -245,6 +256,20 @@ func (e EventVerdicts) Expand() []event.Verdict {
 // keyed by it, so a partition's verdicts stay one ordered stream for the
 // digest and the differ.
 func VerdictRecord(eng Engine, it *Item) broker.Record {
+	return verdictRecord(eng, it, it.Verdicts, "")
+}
+
+// ShadowedVerdictRecords is the primary's record, naming shadow, and the
+// shadow's own record when the shadow produced one.
+func ShadowedVerdictRecords(primary, shadow Engine, it *Item) []broker.Record {
+	recs := []broker.Record{verdictRecord(primary, it, it.Verdicts, shadow.Name())}
+	if it.Shadow != nil {
+		recs = append(recs, verdictRecord(shadow, it, it.Shadow, ""))
+	}
+	return recs
+}
+
+func verdictRecord(eng Engine, it *Item, vs []event.Verdict, shadow string) broker.Record {
 	ev := it.Event
 	rs := eng.RuleSet()
 	rec := EventVerdicts{
@@ -253,9 +278,10 @@ func VerdictRecord(eng Engine, it *Item) broker.Record {
 		Engine:    eng.Name(),
 		RuleSetV:  rs.Version,
 		TaxonomyV: rs.TaxonomyV,
-		Verdicts:  make([]RuleVerdict, len(it.Verdicts)),
+		Shadow:    shadow,
+		Verdicts:  make([]RuleVerdict, len(vs)),
 	}
-	for i, v := range it.Verdicts {
+	for i, v := range vs {
 		rec.Verdicts[i] = RuleVerdict{RuleID: v.RuleID, Matched: v.Matched}
 	}
 	b, err := json.Marshal(rec)

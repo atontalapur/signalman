@@ -42,8 +42,20 @@ with v1's one by one and by per-partition digest; over the 1,236 accepted
 `rules`-tree rules and 30.6 million generated verdicts they are identical.
 In process on an M1 Pro it is about 125 times faster than v1 on the
 benchmark event. `docs/evaluation.md` describes it and `docs/results.md`
-has the numbers. The shadow lane, differ, and rollout that make up the rest
-of Plan G need the pipeline first.
+has the numbers.
+
+The shadow lane and differ are built. `signalmand -shadow` evaluates every
+normalized event with v2 beside v1, in the same batch, and writes
+`verdicts.v2` with no alerts. `cmd/differ` joins `verdicts.v1` and
+`verdicts.v2` on `(partition, seq, rule_id)` and classifies every
+disagreement into the spec's five classes, writing each to the
+`divergences` topic and the log. `signalmand -rollout <file>` hands a
+rule's alerts to v2 when `fnv(rule_id) mod 100` is below the file's
+percentage, while v1 keeps evaluating and recording every rule; editing the
+file is the rollback, and it lands at the next batch. `docs/cutover.md` has
+the four arguments, the gate ladder, the retirement criteria, the rollout
+design, and the divergence log. No gate has been passed: shadow mode and the
+rollout have only run over the in-memory broker in tests.
 
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
@@ -139,7 +151,7 @@ detector.
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler, retro-hunt, alert schema and idempotent sink built; ClickHouse integration tests not run, gate not passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | in progress: all ten core metrics, canary, absence alerts, and dashboard built; page within 2m shown in process and with promtool; consumer kill against the compose stack not run |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
-| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
+| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, and per-rule rollout with file-driven rollback built and tested in memory; no gate G0 to G6 passed |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow has not run on a real rule PR yet and no noise corpus is configured |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
@@ -178,7 +190,7 @@ will look reasonable around week six. Adding any of them costs the cutover.
 cmd/signalman/          CLI: test, explain, lint, bench, noise, gates
 cmd/signalmand/         the pipeline daemon
 cmd/signalman-sink/     alerts topic to the ClickHouse alerts table
-cmd/differ/             shadow-mode verdict comparison
+cmd/differ/             shadow-mode verdict comparison: verdicts.v1 x verdicts.v2 -> divergences
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
 internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
@@ -189,8 +201,9 @@ internal/explain/       explain walker and renderer, held equal to v1 by test
 internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
 internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
-internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit, canary generator
+internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, shadow lane, rollout, invariant 1 audit, canary generator
 internal/pipe/chsink/   ClickHouse alert sink: batch insert, commit after insert, retry with backoff
+internal/differ/        bounded merge join of the two verdict streams, divergence classes
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
 internal/obs/           metrics, including the scrape-time staleness and canary age gauges
 internal/verdict/       verdict digest, one rolling hash per partition
@@ -207,6 +220,7 @@ docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
+docs/cutover.md         the four arguments, gate ladder G0 to G6, retirement criteria, divergence log
 docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 docs/authoring.md       writing rules: supported subset, rejections, fixtures, budgets, PR gates
@@ -252,6 +266,12 @@ that needs them.
   their promtool unit tests. It needs `promtool` on PATH (from the Prometheus
   release archive) and says so when it is missing. It is not part of
   `make check`.
+- Shadow mode: add `-shadow` to `signalmand`, then run
+  `go run ./cmd/differ` against the same brokers. The differ serves
+  `/metrics` on `:9466`; `signalman_divergences_counted_total` is the number
+  the gates watch. `-rollout <file>` (one integer, 0 to 100) sets the share
+  of rules v2 serves; the file is reread every `-rollout-poll` (5s) and on
+  `SIGHUP`.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.

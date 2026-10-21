@@ -174,6 +174,29 @@ func (m *Memory) CommittedOffsets(ctx context.Context, group, topic string) (map
 	return out, nil
 }
 
+func (m *Memory) CommitOffsets(ctx context.Context, group string, next map[TopicPartition]int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tp := range next {
+		ps, ok := m.topics[tp.Topic]
+		if !ok || tp.Partition < 0 || int(tp.Partition) >= len(ps) {
+			return fmt.Errorf("commit: no partition %s/%d", tp.Topic, tp.Partition)
+		}
+	}
+	g := m.groups[group]
+	if g == nil {
+		g = map[TopicPartition]int64{}
+		m.groups[group] = g
+	}
+	for tp, off := range next {
+		g[tp] = off
+	}
+	return nil
+}
+
 func (m *Memory) Close() {}
 
 type memConsumer struct {

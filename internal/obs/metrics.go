@@ -51,6 +51,18 @@ type Metrics struct {
 	// of the rule count. Not in the spec's table; it is the audit's output,
 	// and any increase is a P1. Labels: partition.
 	AuditViolations *prometheus.CounterVec
+	// ShadowFailures counts events on which the shadow engine panicked or
+	// broke the verdict contract, so it wrote no verdicts for them. Not in
+	// the spec's table; the differ reports each as missing verdicts, and
+	// any increase blocks the cutover. Labels: engine.
+	ShadowFailures *prometheus.CounterVec
+	// Alerts counts durable alerts by the engine that served them. Not in
+	// the spec's table; G2 compares alert volume per rule across engines.
+	// Labels: engine, rule_id.
+	Alerts *prometheus.CounterVec
+	// RolloutPercent is the share of rules whose alerts the shadow serves,
+	// for batches formed from now on.
+	RolloutPercent prometheus.Gauge
 }
 
 // RuleEvalBuckets spans 100ns to about 26ms by factors of four. A rule walk
@@ -110,6 +122,18 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 			Name: "signalman_audit_violations_total",
 			Help: "Committed events with no verdicts and no drop, with both, or with too few verdicts.",
 		}, []string{"partition"}),
+		ShadowFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_shadow_failures_total",
+			Help: "Events the shadow engine panicked on or returned a malformed verdict list for.",
+		}, []string{"engine"}),
+		Alerts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_alerts_total",
+			Help: "Alerts written durably, by the engine that served the rule.",
+		}, []string{"engine", "rule_id"}),
+		RolloutPercent: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "signalman_rollout_percent",
+			Help: "Rules served by v2: fnv(rule_id) mod 100 below this value.",
+		}),
 	}
 	reg.MustRegister(m.Collectors()...)
 	return m
@@ -118,5 +142,6 @@ func NewWithClock(reg prometheus.Registerer, now func() time.Time) *Metrics {
 // Collectors is every collector New registers.
 func (m *Metrics) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
-		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.CanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations}
+		m.Verdicts, m.RuleMatches, m.RuleEval, m.Staleness, m.CanaryAge, m.CanaryInjected, m.RuleSetVersion, m.AuditViolations,
+		m.ShadowFailures, m.Alerts, m.RolloutPercent}
 }

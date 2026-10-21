@@ -62,6 +62,14 @@ var extras = map[string]specMetric{
 	// How many canary records the generator wrote, so a stalled canary can
 	// be told apart from a generator that stopped (Plan E, S-51).
 	"signalman_canary_injected_total": {typ: "counter", labels: []string{"partition"}},
+	// Events the v2 shadow panicked on or returned a malformed verdict list
+	// for; each is a missing verdict for the differ (Plan G, S-80).
+	"signalman_shadow_failures_total": {typ: "counter", labels: []string{"engine"}},
+	// Alerts by serving engine, for G2's per-rule alert volume check
+	// (Plan G, S-81).
+	"signalman_alerts_total": {typ: "counter", labels: []string{"engine", "rule_id"}},
+	// The rollout percentage new batches are routed with (Plan G, S-81).
+	"signalman_rollout_percent": {typ: "gauge"},
 }
 
 // touch gives every vector one child, so Gather reports it.
@@ -78,6 +86,9 @@ func touch(m *Metrics) {
 	m.CanaryInjected.WithLabelValues("0").Inc()
 	m.RuleSetVersion.WithLabelValues("rs", "tx").Set(1)
 	m.AuditViolations.WithLabelValues("0").Inc()
+	m.ShadowFailures.WithLabelValues("v2").Inc()
+	m.Alerts.WithLabelValues("v1", "r").Inc()
+	m.RolloutPercent.Set(1)
 }
 
 func typeName(t dto.MetricType) string {

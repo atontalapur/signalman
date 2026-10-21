@@ -19,6 +19,7 @@ const (
 	TopicEventsNorm = "events.norm"
 	TopicAlerts     = "alerts"
 	TopicVerdictsV1 = "verdicts.v1"
+	TopicVerdictsV2 = "verdicts.v2"
 	TopicDrops      = "drops"
 )
 
@@ -34,10 +35,16 @@ const SourceUnknown = "unknown"
 // event's identity; normalize fills in the fields or a drop; match fills in
 // the verdicts. Exactly one of Drop and Verdicts is set when it reaches the
 // sink.
+//
+// When the batch has a shadow engine, match also fills Shadow with its
+// verdicts, or leaves Shadow nil and sets ShadowFailure when the shadow
+// panicked or broke the verdict contract on this event.
 type Item struct {
-	Rec      broker.Record
-	HostID   string
-	Event    *event.Event
-	Drop     *Drop
-	Verdicts []event.Verdict
+	Rec           broker.Record
+	HostID        string
+	Event         *event.Event
+	Drop          *Drop
+	Verdicts      []event.Verdict
+	Shadow        []event.Verdict
+	ShadowFailure string
 }

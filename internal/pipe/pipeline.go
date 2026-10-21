@@ -12,6 +12,7 @@ import (
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/obs"
+	"github.com/atontalapur/signalman/internal/sigma"
 	"github.com/atontalapur/signalman/internal/sigma/ast"
 )
 
@@ -183,6 +184,9 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		for w := range matchCh {
 			if w.it.Drop == nil {
 				p.match(w.b.act.eng, w.it)
+				if sh := w.b.act.shadow; sh != nil {
+					p.matchShadow(sh, w.it)
+				}
 				p.timeRules(w.b.act, w.it.Event)
 			}
 			if !send(ctx, sinkCh, w) {
@@ -261,6 +265,45 @@ func (p *Pipeline) match(eng Engine, it *Item) {
 	}
 }
 
+// matchShadow evaluates the shadow engine on an item the primary has
+// already evaluated. A shadow that panics, or returns anything but one
+// verdict per rule in rule set order stamped with this event and the
+// primary's versions, leaves no shadow verdicts for the item. The primary's
+// output is untouched, so a v2 bug cannot cost a v1 verdict or alert, and
+// the differ reports the gap as missing verdicts: a shadowed v1 record with
+// no v2 record beside it.
+func (p *Pipeline) matchShadow(eng Engine, it *Item) {
+	vs, err := evalShadow(eng, it)
+	if err != nil {
+		it.ShadowFailure = err.Error()
+		p.log.Error("shadow engine failed; its verdicts for this event are not written",
+			"engine", eng.Name(), "partition", it.Event.Partition, "seq", it.Event.Seq, "err", err)
+		return
+	}
+	it.Shadow = vs
+}
+
+func evalShadow(eng Engine, it *Item) (vs []event.Verdict, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			vs, err = nil, fmt.Errorf("panic: %v", r)
+		}
+	}()
+	vs = eng.EvaluateInto(make([]event.Verdict, 0, len(it.Verdicts)), it.Event)
+	if len(vs) != len(it.Verdicts) {
+		return nil, fmt.Errorf("%d verdicts for %d rules", len(vs), len(it.Verdicts))
+	}
+	for i := range vs {
+		got, want := vs[i], it.Verdicts[i]
+		if got.RuleID != want.RuleID || got.Seq != want.Seq || got.Partition != want.Partition ||
+			got.Engine != eng.Name() || got.RuleSetV != want.RuleSetV || got.TaxonomyV != want.TaxonomyV {
+			return nil, fmt.Errorf("verdict %d is %+v, want rule %s at partition %d seq %d under %s",
+				i, got, want.RuleID, want.Partition, want.Seq, want.RuleSetV)
+		}
+	}
+	return vs, nil
+}
+
 // timeRules observes signalman_rule_eval_seconds for every rule on a
 // sampled event. Each sample is the rule's logsource test and, when it
 // covers the event, its condition walk: what v1 does per rule. The result
@@ -326,18 +369,52 @@ func outputs(b *batch) []broker.Record {
 			recs = append(recs, DropRecord(it))
 			continue
 		}
-		recs = append(recs, NormRecord(it), VerdictRecord(b.act.eng, it))
-		for _, v := range it.Verdicts {
-			if v.Matched {
-				r, ok := b.act.rules[v.RuleID]
-				if !ok {
-					panic(fmt.Sprintf("engine %s matched rule %q, which is not in its rule set", b.act.eng.Name(), v.RuleID))
-				}
-				recs = append(recs, AlertRecord(r, it))
-			}
+		recs = append(recs, NormRecord(it))
+		if b.act.shadow != nil {
+			recs = append(recs, ShadowedVerdictRecords(b.act.eng, b.act.shadow, it)...)
+		} else {
+			recs = append(recs, VerdictRecord(b.act.eng, it))
 		}
+		alerts(b, it, func(r *sigma.Rule, eng Engine) {
+			recs = append(recs, AlertRecord(r, it, eng.Name()))
+		})
 	}
 	return recs
+}
+
+// alerts calls emit once per alert the item owes: for each matched rule,
+// from the engine serving it in this batch. The primary serves every rule
+// outside the rollout, the shadow every rule inside it. When the shadow
+// failed on this event, the primary serves its rules too, so a v2 failure
+// is a missing v2 verdict for the differ, never a lost alert. Each rule is
+// served by exactly one engine, so an event gets at most one alert per
+// rule whichever engine serves it.
+func alerts(b *batch, it *Item, emit func(*sigma.Rule, Engine)) {
+	rule := func(eng Engine, id string) *sigma.Rule {
+		r, ok := b.act.rules[id]
+		if !ok {
+			panic(fmt.Sprintf("engine %s matched rule %q, which is not in its rule set", eng.Name(), id))
+		}
+		return r
+	}
+	served := b.act.served
+	for _, v := range it.Verdicts {
+		if v.Matched && !served[v.RuleID] {
+			emit(rule(b.act.eng, v.RuleID), b.act.eng)
+		}
+	}
+	if len(served) == 0 {
+		return
+	}
+	src, eng := it.Shadow, b.act.shadow
+	if src == nil {
+		src, eng = it.Verdicts, b.act.eng
+	}
+	for _, v := range src {
+		if v.Matched && served[v.RuleID] {
+			emit(rule(eng, v.RuleID), eng)
+		}
+	}
 }
 
 // count updates the verdict and match counters for a batch that is now
@@ -355,12 +432,41 @@ func (p *Pipeline) count(b *batch) {
 			}
 		}
 	}
+	served := map[[2]string]float64{}
+	for _, it := range b.items {
+		if it.Drop == nil {
+			alerts(b, it, func(r *sigma.Rule, eng Engine) { served[[2]string{eng.Name(), r.ID}]++ })
+		}
+	}
+	for k, n := range served {
+		p.m.Alerts.WithLabelValues(k[0], k[1]).Add(n)
+	}
 	name := b.act.eng.Name()
 	p.m.Verdicts.WithLabelValues(name, "true").Add(matched)
 	p.m.Verdicts.WithLabelValues(name, "false").Add(unmatched)
 	for id, n := range perRule {
 		p.m.RuleMatches.WithLabelValues(id).Add(n)
 	}
+	if b.act.shadow == nil {
+		return
+	}
+	var sm, su, failed float64
+	for _, it := range b.items {
+		if it.ShadowFailure != "" {
+			failed++
+		}
+		for _, v := range it.Shadow {
+			if v.Matched {
+				sm++
+			} else {
+				su++
+			}
+		}
+	}
+	sn := b.act.shadow.Name()
+	p.m.Verdicts.WithLabelValues(sn, "true").Add(sm)
+	p.m.Verdicts.WithLabelValues(sn, "false").Add(su)
+	p.m.ShadowFailures.WithLabelValues(sn).Add(failed)
 }
 
 // stale advances event staleness to the newest event time in a batch that

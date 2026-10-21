@@ -204,6 +204,16 @@ func (b *Broker) CommittedOffsets(ctx context.Context, group, topic string) (map
 	return out, ferr
 }
 
+// CommitOffsets commits next for group through the admin client, outside
+// any group membership. Kafka accepts it only while the group is empty.
+func (b *Broker) CommitOffsets(ctx context.Context, group string, next map[broker.TopicPartition]int64) error {
+	os := kadm.Offsets{}
+	for tp, off := range next {
+		os.Add(kadm.Offset{Topic: tp.Topic, Partition: tp.Partition, At: off, LeaderEpoch: -1})
+	}
+	return b.admin.CommitAllOffsets(ctx, group, os)
+}
+
 // TopicSpec is one topic EnsureTopics creates.
 type TopicSpec struct {
 	Name        string

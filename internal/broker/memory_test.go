@@ -146,3 +146,18 @@ func TestMemoryRejectsUnknownTopicAndBadPartition(t *testing.T) {
 		t.Fatal("a positioned reader has no group to commit to")
 	}
 }
+
+func TestMemoryCommitOffsetsWithoutJoiningTheGroup(t *testing.T) {
+	m := NewMemory(map[string]int32{"t": 2})
+	ctx := context.Background()
+	if err := m.CommitOffsets(ctx, "differ", map[TopicPartition]int64{{"t", 1}: 7}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := m.CommittedOffsets(ctx, "differ", "t")
+	if err != nil || c[1] != 7 || len(c) != 1 {
+		t.Fatalf("committed %v %v", c, err)
+	}
+	if err := m.CommitOffsets(ctx, "differ", map[TopicPartition]int64{{"t", 2}: 1}); err == nil {
+		t.Fatal("a commit to a partition that does not exist is an error")
+	}
+}
