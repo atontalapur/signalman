@@ -86,3 +86,11 @@ func TestSinkStopsOnAPermanentInsertError(t *testing.T) {
 		t.Fatalf("committed %v after a permanent error", got)
 	}
 }
+
+// The sink commits an offset once Insert returns, so Insert must not return
+// before the part is on disk.
+func TestInsertAsksForFsync(t *testing.T) {
+	if v, ok := insertSettings["fsync_after_insert"]; !ok || v != 1 {
+		t.Fatalf("insert settings %v; want fsync_after_insert=1", insertSettings)
+	}
+}

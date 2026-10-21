@@ -154,7 +154,11 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   same PARTITION BY day), and the ReplacingMergeTree collapses the copies
   when parts merge. Until a merge runs the copies are visible: read with
   `FINAL`, or `OPTIMIZE TABLE alerts FINAL`, to see the collapsed table. A
-  failed commit is logged, not retried, as in the pipeline.
+  failed commit is logged, not retried, as in the pipeline. Every insert
+  sets `fsync_after_insert=1`, so ClickHouse acknowledges only after the part
+  is on disk; without it a host crash after the ack could lose rows whose
+  offsets are committed. The cost is one fsync per part, small at the
+  sink's batch sizes.
 - **Partitioning and TTL on ingest_time.** The spec partitions and expires
   the table on `event_time`. Here both read `ingest_time` instead, the
   `events.raw` record timestamp, which a replay reproduces. `event_time`

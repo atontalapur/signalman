@@ -140,10 +140,19 @@ func insertQuery(table string) string {
 // queries alongside the sink.
 func (c *ClickHouse) Conn() driver.Conn { return c.conn }
 
+// insertSettings apply to every insert. The sink commits an offset as soon
+// as Insert returns, and by default ClickHouse acknowledges an insert once
+// the part is written, before it is fsynced, so a host crash could lose
+// rows whose offsets are committed. fsync_after_insert makes the ack wait
+// for the fsync. It costs insert latency per part, which the sink's large,
+// infrequent batches keep small.
+var insertSettings = clickhouse.Settings{"fsync_after_insert": 1}
+
 // Insert sends rows as one INSERT. ClickHouse writes one block as one part,
 // so the rows of a successful Insert are all stored. An error that would
 // recur on retry wraps ErrPermanent; a row the client cannot encode is one.
 func (c *ClickHouse) Insert(ctx context.Context, rows []pipe.Alert) error {
+	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(insertSettings))
 	batch, err := c.conn.PrepareBatch(ctx, c.query)
 	if err != nil {
 		return classify(err)
