@@ -355,3 +355,56 @@ func TestRolloutChangeTakesEffectAtTheNextBatch(t *testing.T) {
 		t.Fatalf("%d alerts before and %d after the rollback", before, after)
 	}
 }
+
+// The canary age is reset from v1's verdicts, which exist for every event
+// whichever engine serves the alert, so a rollout that hands the canary
+// rule to v2, or a v2 failure on the canary event, cannot stall the canary.
+func TestCanaryResetsWhicheverEngineServesIt(t *testing.T) {
+	for name, shadow := range map[string]func(*rig) Engine{
+		"v2 serves": func(r *rig) Engine { return V2(r.rs) },
+		"v2 panics": func(r *rig) Engine { return failingEngine{Engine: V2(r.rs), fail: func(uint64) bool { return true }} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			clk := &fakeClock{t: time.Unix(1790000000, 0)}
+			mem := newMemory()
+			r := newRigClock(t, mem, mem, clk.Now)
+			r.rs = loadShippedRules(t)
+			slot := NewSlot(V1(r.rs), r.m)
+			if err := slot.StoreWithShadow(V1(r.rs), shadow(r)); err != nil {
+				t.Fatal(err)
+			}
+			if err := slot.SetRollout(100); err != nil {
+				t.Fatal(err)
+			}
+			if err := NewCanary(mem, r.m, clk.Now, nil).Inject(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			clk.Add(60 * time.Second)
+			p, err := New(testConfig(), r.b, r.norm, slot, r.m, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runUntilCommitted(t, p, mem)
+			clk.Add(5 * time.Second)
+			for part := int32(0); part < testPartitions; part++ {
+				if a, ok := r.m.CanaryAge.Age(part); !ok || a != 5*time.Second {
+					t.Fatalf("partition %d canary age %v (tracked %v), want 5s: the canary alert did not reset it", part, a, ok)
+				}
+			}
+			want := "v2"
+			if name == "v2 panics" {
+				want = "v1"
+			}
+			n := 0
+			for k, as := range alertsByKey(t, mem) {
+				if k.rule != CanaryRuleID || len(as) != 1 || as[0].Engine != want {
+					t.Fatalf("%v: alerts %+v, want one canary alert from %s", k, as, want)
+				}
+				n++
+			}
+			if n != testPartitions {
+				t.Fatalf("%d canary alerts for %d partitions", n, testPartitions)
+			}
+		})
+	}
+}

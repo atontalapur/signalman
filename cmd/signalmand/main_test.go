@@ -41,10 +41,10 @@ func TestStrictLoadRefusesRejections(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	// This directory holds an aggregation rule and an unmapped logsource.
 	dir := "../../internal/sigma/testdata/rules"
-	if _, err := loadRules(dir, tax, true, log); err == nil {
+	if _, err := loadRules(dir, tax, true, false, log); err == nil {
 		t.Fatal("-strict must refuse a rule set with rejections")
 	}
-	rs, err := loadRules(dir, tax, false, log)
+	rs, err := loadRules(dir, tax, false, false, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,12 +65,36 @@ func TestTopicSpecsCoverEveryPipelineTopic(t *testing.T) {
 	}
 }
 
+func TestCanaryNeedsItsRule(t *testing.T) {
+	tax, err := sigma.LoadTaxonomy("../../config/taxonomy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.DiscardHandler)
+	if _, err := loadRules("../../internal/engine/v1/testdata/rules", tax, true, true, log); err == nil {
+		t.Fatal("a rule set without signalman-canary must be refused while the canary is on")
+	}
+	if _, err := loadRules("../../internal/engine/v1/testdata/rules", tax, true, false, log); err != nil {
+		t.Fatalf("canary off: %v", err)
+	}
+	if _, err := loadRules("../../rules", tax, true, true, log); err != nil {
+		t.Fatalf("shipped rules carry the canary: %v", err)
+	}
+	f, err := parseFlags([]string{"-rules", "r"})
+	if err != nil || f.canaryInterval != 30*time.Second {
+		t.Fatalf("default canary interval %v, err %v", f.canaryInterval, err)
+	}
+	if _, err := parseFlags([]string{"-rules", "r", "-canary-interval", "-1s"}); err == nil {
+		t.Fatal("negative interval accepted")
+	}
+}
+
 func TestShadowFlagInstallsV2BesideV1(t *testing.T) {
 	tax, err := sigma.LoadTaxonomy("../../config/taxonomy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rs, err := loadRules("../../internal/engine/v1/testdata/rules", tax, true, slog.New(slog.DiscardHandler))
+	rs, err := loadRules("../../internal/engine/v1/testdata/rules", tax, true, false, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +176,7 @@ func fixtureRules(t *testing.T) *sigma.RuleSet {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rs, err := loadRules("../../internal/engine/v1/testdata/rules", tax, true, slog.New(slog.DiscardHandler))
+	rs, err := loadRules("../../internal/engine/v1/testdata/rules", tax, true, false, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

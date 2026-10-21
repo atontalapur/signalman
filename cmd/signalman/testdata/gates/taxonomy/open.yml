@@ -1,0 +1,7 @@
+# A logsource with no match criteria: the logsource test admits every
+# event, so it contributes no prefilter literal.
+logsource:
+  product: test
+  category: open
+fields:
+  CommandLine: CommandLine

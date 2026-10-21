@@ -76,14 +76,15 @@ func TestTestWithNoRulesIsAUsageError(t *testing.T) {
 	}
 }
 
-// The Plan B gate: twenty hand-written rules pass their fixtures.
+// The Plan B gate: twenty hand-written rules pass their fixtures, plus the
+// signalman-canary rule from Plan E, which is loaded like any other.
 func TestShippedRulesPassTheirFixtures(t *testing.T) {
 	code, stdout, stderr := cli(t, "test", "--taxonomy", testTaxonomy, "../../rules")
 	if code != exitOK {
 		t.Fatalf("code %d\n%s%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "20 rules, 20 passed, 0 failed") {
-		t.Fatalf("expected twenty rules:\n%s", stdout)
+	if !strings.Contains(stdout, "21 rules, 21 passed, 0 failed") {
+		t.Fatalf("expected twenty rules and the canary:\n%s", stdout)
 	}
 }
 

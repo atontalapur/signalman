@@ -1,6 +1,7 @@
 // Command signalman is the rule author's tool: it runs a rule's fixtures,
 // explains a verdict, and reports load errors, noise, and evaluation cost
-// before a rule merges.
+// before a rule merges. gates runs those checks together for a rule pull
+// request.
 //
 // Exit codes: 0 when every check passed, 1 when a check failed, 2 when the
 // command could not run (bad arguments, unreadable input).
@@ -37,6 +38,7 @@ func init() {
 		"lint":    {"load rules and print every load error", cmdLint},
 		"bench":   {"time each rule's evaluation and flag p99 over budget", cmdBench},
 		"noise":   {"report a rule's matches per 100k corpus events against its budget", cmdNoise},
+		"gates":   {"run the rule PR gates and write a markdown report", cmdGates},
 	}
 }
 

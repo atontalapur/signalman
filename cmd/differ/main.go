@@ -52,7 +52,7 @@ func parseFlags(args []string) (flags, error) {
 	fs.IntVar(&f.queue, "queue", 256, "records one side may run ahead of the other, per partition")
 	fs.IntVar(&f.maxPoll, "max-poll", 500, "records per poll")
 	fs.DurationVar(&f.commitInterval, "commit-interval", time.Second, "how often offsets are committed")
-	fs.StringVar(&f.metricsAddr, "metrics-addr", ":9465", "address serving /metrics")
+	fs.StringVar(&f.metricsAddr, "metrics-addr", ":9466", "address serving /metrics")
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}

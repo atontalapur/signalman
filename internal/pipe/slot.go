@@ -7,6 +7,7 @@ import (
 
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/sigma"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Slot holds the engine new batches are evaluated with. Store swaps it
@@ -38,6 +39,23 @@ type active struct {
 	rules   map[string]*sigma.Rule
 	percent int
 	served  map[string]bool // empty without a shadow
+
+	// evalObs is the rule_eval_seconds child per rule, in RuleSet order,
+	// made on first use so a pipeline that never samples exports none.
+	evalOnce sync.Once
+	evalObs  []prometheus.Observer
+}
+
+// observers returns the rule_eval_seconds child for every rule.
+func (a *active) observers(m *obs.Metrics) []prometheus.Observer {
+	a.evalOnce.Do(func() {
+		rs := a.eng.RuleSet()
+		a.evalObs = make([]prometheus.Observer, len(rs.Rules))
+		for i := range rs.Rules {
+			a.evalObs[i] = m.RuleEval.WithLabelValues(rs.Rules[i].ID)
+		}
+	})
+	return a.evalObs
 }
 
 // NewSlot starts with e active.
@@ -95,7 +113,32 @@ func (s *Slot) store(e, shadow Engine) {
 		s.m.RuleSetVersion.DeleteLabelValues(old.Version, old.TaxonomyV)
 	}
 	s.m.RuleSetVersion.WithLabelValues(rs.Version, rs.TaxonomyV).Set(1)
+	s.exportRules(a)
 	s.shown = a
+}
+
+// exportRules gives every rule in the new set a rule_matches_total series,
+// at zero if it is new, and removes the series of rules the reload dropped.
+//
+// The zero is what makes SignalmanRuleWentSilent work. A taxonomy change
+// needs a restart, and a rule the change silences never matches in the new
+// process; without a zero its series would end at the restart, drop out of
+// the alert's 24h window, and the alert would have nothing to compare. A
+// rule removed on purpose loses its series, so it is not reported as gone
+// silent. A batch still in flight under the old set can bring a dropped
+// rule's series back with its last matches; it then stays until restart.
+// Caller holds s.mu.
+func (s *Slot) exportRules(a *active) {
+	if s.shown != nil {
+		for id := range s.shown.rules {
+			if _, kept := a.rules[id]; !kept {
+				s.m.RuleMatches.DeleteLabelValues(id)
+			}
+		}
+	}
+	for id := range a.rules {
+		s.m.RuleMatches.WithLabelValues(id)
+	}
 }
 
 // RuleCount reports how many verdicts per event a rule set version owes.
@@ -125,10 +168,11 @@ func (s *Slot) SetRollout(percent int) error {
 	if percent > 0 && cur.shadow == nil {
 		return fmt.Errorf("rollout %d%% with no shadow engine to serve it", percent)
 	}
-	a := *cur
-	a.percent = percent
+	// A fresh active, not a copy: it holds a sync.Once. The rule_eval
+	// children it makes on first use are the same series as before.
+	a := &active{eng: cur.eng, shadow: cur.shadow, rules: cur.rules, percent: percent}
 	a.route()
-	s.cur.Store(&a)
+	s.cur.Store(a)
 	s.m.RolloutPercent.Set(float64(percent))
 	return nil
 }

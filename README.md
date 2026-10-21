@@ -60,13 +60,15 @@ rollout have only run over the in-memory broker in tests.
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
 and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
+`docs/authoring.md` is the rule author's guide that sits on top of them.
 The spec, roadmap, backlog, CI, and release tooling were in place before
 the first Go code.
 
 Plan B is done. `internal/engine/v1` evaluates every rule per event and
 `internal/verdict` folds the verdicts into a per-partition digest; the
 shuffle property test holds. `cmd/signalman` is the author CLI, and
-`rules/` holds twenty hand-written rules, each with a sibling
+`rules/` holds twenty hand-written rules (and, since Plan E, the
+`signalman-canary` rule), each with a sibling
 `<rule>.test.yml` of match and no-match cases, all passing:
 
 ```
@@ -75,6 +77,7 @@ signalman explain rules/proc_dump.yml ev.json    # condition tree, results, obse
 signalman lint    rules/                         # every LoadError, structured (--json too)
 signalman bench   rules/ [--corpus dir]          # p50/p99/max per rule, flags p99 over 50us
 signalman noise   rules/proc_dump.yml --corpus dir   # matches per 100k, ten samples, budget:
+signalman gates   --set rules rules/proc_dump.yml    # the five PR gates as a markdown report
 ```
 
 Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
@@ -95,16 +98,61 @@ topics, record formats, drop reasons, delivery, and the audit. The gate is
 not passed: the audit is green over generated load in test mode, but the
 one-hour soak against Redpanda has not been run.
 
+`internal/backend/ch` is the second execution target. It compiles a loaded
+rule into a ClickHouse WHERE clause over an events table, and `RetroHunt`
+runs it over a time window through `database/sql`. Every node type and
+modifier the frontend accepts compiles, and every rule the corpus loads
+compiles. Where ClickHouse disagrees with Go (case folding, regex dot and
+Unicode tables, NULL, number and address parsing, invalid UTF-8), the event
+is stored with the value v1 would compute, so the SQL only compares.
+`docs/backend-ch.md` lists each leak. The retro-hunt-equals-replay test is
+written but has not yet run against a server.
+
+A pull request that touches `rules/` runs `.github/workflows/rules.yml`:
+`signalman gates` checks each changed rule for parse, fixtures, noise
+budget, latency budget, and prefilter, and the report lands in one PR
+comment and the job summary. Only a failed gate fails the job; a rule the
+v2 prefilter cannot key on (the `Always` set) is a warning. The noise gate
+runs when the repository variable `SIGNALMAN_NOISE_CORPUS` names a corpus
+and is skipped otherwise. `docs/authoring.md` covers the supported Sigma
+subset, rejection codes, fixtures, explain, budgets, and the gates.
+
+The alert store is the other half of Plan D. `deploy/clickhouse/001_alerts.sql`
+is the spec's `alerts` table (ReplacingMergeTree ordered by
+`(partition, seq, rule_id)`, 90 day TTL), created by the compose ClickHouse
+on first start. `cmd/signalman-sink` consumes the `alerts` topic and inserts
+batches through clickhouse-go, committing offsets only after an insert
+succeeds; while ClickHouse is down it retries and stops polling, so the
+outage is consumer lag, not loss. A redelivered batch collapsing on merge is
+property-tested against a model of the merge; the same check against a real
+ClickHouse is an integration test that has not been run yet.
+
+Plan E's code has landed. Every metric in the spec's core metrics table is
+exported with its type and labels, and a test holds the registered set to
+the table. `signalman_event_staleness_seconds` (now minus the newest event
+time) is separate from consumer lag. A canary generator in `signalmand`
+writes a synthetic event to every `events.raw` partition every 30 seconds;
+`rules/signalman_canary.yml` turns it into an alert, which resets
+`signalman_canary_age_seconds`. `deploy/prometheus/` has the scrape config
+and the alert rules: `SignalmanCanaryStalled` and `SignalmanCanaryAbsent`
+page, `SignalmanRuleWentSilent` files a ticket. `deploy/grafana/` has the
+dashboard. In-process tests kill the consumer under a fake clock and show
+the page fires within two minutes, and show a taxonomy field rename
+silencing exactly the rules that read the field. The gate is not passed:
+killing a real consumer against Redpanda and Prometheus has not been run.
+`docs/pipeline.md` covers the metrics, the canary, and the silence
+detector.
+
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
-| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
-| E. Observability | metrics, dashboards, canary generator, silence detector | not started |
+| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler, retro-hunt, alert schema and idempotent sink built; ClickHouse integration tests not run, gate not passed |
+| E. Observability | metrics, dashboards, canary generator, silence detector | in progress: all ten core metrics, canary, absence alerts, and dashboard built; page within 2m shown in process and with promtool; consumer kill against the compose stack not run |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, and per-rule rollout with file-driven rollback built and tested in memory; no gate G0 to G6 passed |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, and `budget:` done; rule PR CI gates and `docs/authoring.md` not started |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow has not run on a real rule PR yet and no noise corpus is configured |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
@@ -139,8 +187,9 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ## Repository
 
 ```
-cmd/signalman/          CLI: test, explain, lint, bench, noise
+cmd/signalman/          CLI: test, explain, lint, bench, noise, gates
 cmd/signalmand/         the pipeline daemon
+cmd/signalman-sink/     alerts topic to the ClickHouse alerts table
 cmd/differ/             shadow-mode verdict comparison: verdicts.v1 x verdicts.v2 -> divergences
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
 internal/event/         Event, Value, Verdict
@@ -151,15 +200,19 @@ internal/fixture/       <rule>.test.yml loader and runner, through v1
 internal/explain/       explain walker and renderer, held equal to v1 by test
 internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
 internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
-internal/backend/ch/    AST to ClickHouse SQL
-internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, shadow lane, invariant 1 audit
+internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
+internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, shadow lane, rollout, invariant 1 audit, canary generator
+internal/pipe/chsink/   ClickHouse alert sink: batch insert, commit after insert, retry with backoff
 internal/differ/        bounded merge join of the two verdict streams, divergence classes
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
-internal/obs/           metrics (canary is Plan E)
+internal/obs/           metrics, including the scrape-time staleness and canary age gauges
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
 test/replay/            corpus replay, digest comparison
-deploy/                 Dockerfile; docker compose for Redpanda, topic setup, and ClickHouse
+deploy/                 Dockerfile; docker compose for Redpanda, topic setup, ClickHouse, Prometheus, Grafana
+deploy/clickhouse/      ClickHouse init SQL: the alerts table
+deploy/prometheus/      scrape config, alert rules (absence, pipeline), promtool tests
+deploy/grafana/         provisioning and the pipeline dashboard
 docs/spec/              the spec (signalman-v1.html)
 docs/modifiers.md       supported Sigma modifiers, chain rules, divergences
 docs/taxonomy.md        logsource binding, field mapping, TaxonomyV
@@ -168,13 +221,16 @@ docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
 docs/cutover.md         the four arguments, gate ladder G0 to G6, retirement criteria, divergence log
+docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
+docs/authoring.md       writing rules: supported subset, rejections, fixtures, budgets, PR gates
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
-rules/                  twenty hand-written rules, each with a .test.yml fixture
+rules/                  twenty hand-written rules and signalman-canary, each with a .test.yml fixture
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
 scripts/                backlog validator, Jira sync
+.github/workflows/      ci, nightly fuzz, release, rules (the rule PR gates)
 ```
 
 Directories under `cmd/`, `internal/`, and `test/` are created by the plan
@@ -194,16 +250,33 @@ that needs them.
   serves `/metrics` on `:9464`, reloads rules on `SIGHUP`, and by default
   refuses a rule directory with any rejection (`-strict=false` loads what it
   can). Worker pools, queue size, in-flight batches, and batch size are flags
-  with fixed defaults, not derived from the machine.
+  with fixed defaults, not derived from the machine. The canary runs every
+  `-canary-interval` (30s; 0 turns it off) and needs the
+  `signalman-canary` rule in the rule directory. Prometheus
+  (`localhost:9090`) scrapes it from the compose stack, and Grafana
+  (`localhost:3000`) shows the dashboard.
+- Run the alert sink alongside it: `go run ./cmd/signalman-sink`. It
+  reads `alerts` as group `signalman-sink`, inserts into ClickHouse
+  (`-clickhouse` DSN, defaulting to the compose stack), and serves
+  `/metrics` on `:9465`. The table is created when the ClickHouse volume is
+  first initialized; after changing the DDL, `docker compose down -v`.
+  `make integration` sets `SIGNALMAN_CLICKHOUSE_DSN` to the compose stack;
+  without it the ClickHouse tests skip.
+- `make check-alerts` validates the Prometheus config and alert rules and runs
+  their promtool unit tests. It needs `promtool` on PATH (from the Prometheus
+  release archive) and says so when it is missing. It is not part of
+  `make check`.
 - Shadow mode: add `-shadow` to `signalmand`, then run
   `go run ./cmd/differ` against the same brokers. The differ serves
-  `/metrics` on `:9465`; `signalman_divergences_counted_total` is the number
+  `/metrics` on `:9466`; `signalman_divergences_counted_total` is the number
   the gates watch. `-rollout <file>` (one integer, 0 to 100) sets the share
   of rules v2 serves; the file is reread every `-rollout-poll` (5s) and on
   `SIGHUP`.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.
+  The retro-hunt test reads a clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`
+  and skips without it.
 - `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
   one. Nightly CI runs them for 10 minutes each and uploads any crashers.
 - `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer

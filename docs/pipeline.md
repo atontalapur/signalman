@@ -2,7 +2,8 @@
 
 How `signalmand` moves an event from `events.raw` to verdicts, alerts, or
 the drop ledger, and how it proves none went missing. Code lives in
-`internal/pipe`, `internal/broker`, and `internal/obs`.
+`internal/pipe`, `internal/broker`, and `internal/obs`; the ClickHouse alert
+sink is `internal/pipe/chsink`.
 
 ```
 events.raw -> ingest -> normalize -> match (Slot: v1 [+ v2 shadow]) -> sink -> events.norm, verdicts.v1, [verdicts.v2,] alerts, drops
@@ -98,6 +99,48 @@ input fills, the workers block, the batch queue fills, and ingest stops
 polling. Consumer lag grows; nothing is dropped. The number of records
 admitted but not yet committed is bounded by `(inflight + 2) x max-poll`.
 
+## Alert sink: alerts to ClickHouse
+
+`signalman-sink` (`internal/pipe/chsink`) consumes `alerts` as its own
+consumer group and inserts into the `alerts` table from the spec, defined in
+`deploy/clickhouse/001_alerts.sql`. It runs as a separate process from
+`signalmand` so a ClickHouse outage stops alert storage and nothing else:
+detection keeps writing to Redpanda, and the backlog waits in the topic.
+
+- **Batches.** Rows are buffered until `-batch-rows` (5000) or until
+  `-flush-interval` (1s) after the first one, then sent as one INSERT.
+  ClickHouse writes a part per insert, so few large inserts beat many small
+  ones. The buffer never holds more than `batch-rows + max-poll` rows.
+- **Commit after insert.** Offsets are committed only after the INSERT
+  returns. A crash between the two redelivers the batch. A redelivered alert
+  is an exact copy (same partition, seq, rule_id, and event_time, so the
+  same PARTITION BY day), and the ReplacingMergeTree collapses the copies
+  when parts merge. Until a merge runs the copies are visible: read with
+  `FINAL`, or `OPTIMIZE TABLE alerts FINAL`, to see the collapsed table. A
+  failed commit is logged, not retried, as in the pipeline.
+- **Outage.** A failed insert is retried with the same rows, backing off
+  from 100ms to 5s, and nothing is polled meanwhile. The outage surfaces as
+  `signalman_consumer_lag_records{topic="alerts"}` on the sink's `/metrics`
+  (`:9465`), growing until ClickHouse returns, bounded by the topic's
+  retention. Nothing is dropped. signalmand itself is not slowed: the
+  acceptance line "the sink backpressures the pipeline" holds for the
+  alerts consumer, whose lag is the backpressure, not for detection.
+- **Records the table cannot hold.** The rule loader accepts any rule id
+  and any level, but the table's `rule_id` is a UUID and `severity` is an
+  Enum8 of the five Sigma levels. A record that would fail every insert of
+  its batch stops the sink with its topic, partition, and offset, and
+  nothing in that batch is committed. Skipping it would be silent loss;
+  stopping is lag an operator can see and fix.
+
+Idempotence is tested twice. `TestReingestingABatchChangesNoRow` models the
+merge (last insert wins per sorting key, within a day partition) and checks
+over 500 random histories that inserting a batch again, whole or as a
+prefix, changes no row of `FINAL` or of the merged table.
+`TestReingestCollapsesInClickHouse` (build tag `integration`, needs
+`SIGNALMAN_CLICKHOUSE_DSN`) does the same against a real ClickHouse with
+`SELECT ... FINAL` and `OPTIMIZE TABLE ... FINAL`. It has not been run yet:
+there is no Docker on the development machine.
+
 ## Rule set reload
 
 The engine sits in a `Slot`. Ingest reads the slot once per batch, when it
@@ -159,21 +202,100 @@ belongs on Redpanda.
 ## Metrics
 
 Names from the spec's core metrics table, in `internal/obs`.
+`internal/obs/metrics_test.go` parses that table out of the spec and fails if
+the registered set, types, or labels differ from it, apart from an
+allowlist of extras, each with its reason. The differ's own metrics are
+registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 
-| Metric | Labels | Set by |
-|---|---|---|
-| `signalman_events_ingested_total` | source, partition | ingest, per admitted record |
-| `signalman_events_dropped_total` | reason, source | normalizer, per drop |
-| `signalman_verdicts_total` | engine, matched | sink, once durable |
-| `signalman_rule_matches_total` | rule_id | sink, once durable |
-| `signalman_stage_queue_depth` | stage (normalize, match, sink, batches) | sampled every second |
-| `signalman_consumer_lag_records` | topic, partition | log end offset minus committed offset |
-| `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
-| `signalman_audit_violations_total` | partition | the audit; not in the spec table |
-| `signalman_shadow_failures_total` | engine | sink, per event the shadow failed on; not in the spec table |
-| `signalman_alerts_total` | engine, rule_id | sink, per durable alert, by the serving engine; not in the spec table |
-| `signalman_rollout_percent` | | the slot, on every rollout change |
+| Metric | Type | Labels | Set by |
+|---|---|---|---|
+| `signalman_events_ingested_total` | counter | source, partition | ingest, per admitted record |
+| `signalman_events_dropped_total` | counter | reason, source | normalizer, per drop |
+| `signalman_verdicts_total` | counter | engine, matched | sink, once durable |
+| `signalman_rule_matches_total` | counter | rule_id | sink, once durable |
+| `signalman_rule_eval_seconds` | histogram | rule_id | match workers, sampled (`-rule-eval-every`) |
+| `signalman_stage_queue_depth` | gauge | stage (normalize, match, sink, batches) | sampled every second |
+| `signalman_consumer_lag_records` | gauge | topic, partition | log end offset minus committed offset |
+| `signalman_event_staleness_seconds` | gauge | partition | now minus the newest durable event time, at scrape |
+| `signalman_canary_age_seconds` | gauge | partition | seconds since the last canary alert was durable, at scrape |
+| `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
+| `signalman_audit_violations_total` | counter | partition | the audit; not in the spec table |
+| `signalman_canary_injected_total` | counter | partition | the canary generator, per record written; not in the spec table |
+| `signalman_shadow_failures_total` | counter | engine | sink, per event the shadow failed on; not in the spec table |
+| `signalman_alerts_total` | counter | engine, rule_id | sink, per durable alert, by the serving engine; not in the spec table |
+| `signalman_rollout_percent` | gauge | | the slot, on every rollout change; not in the spec table |
 
-Not yet exported: `signalman_rule_eval_seconds`,
-`signalman_event_staleness_seconds`, `signalman_canary_age_seconds`. Those are
-Plan E.
+`signalman_rule_eval_seconds` is sampled: on events whose Seq is a multiple
+of `-rule-eval-every` (default 100, 0 turns it off), a match worker times
+each rule's logsource test and condition walk, the same work v1 does per
+rule, and throws the result away. The verdicts come from the engine as
+always, so sampling costs time and cannot change one. Buckets run from
+100ns to about 26ms by factors of four; exemplars are off.
+
+Lag and staleness are separate. Lag is records in `events.raw` not yet
+committed. Staleness is `now() - max(event_time)` over events whose batch is
+durable, per partition, computed when Prometheus scrapes, so it keeps rising
+while nothing arrives. An upstream that stops producing leaves lag at zero
+and staleness climbing; only staleness sees it. Canary events are left out
+of staleness, or the canary would keep it fresh. The wall clock is read
+only by the metric, never by anything a verdict depends on.
+
+## Canary
+
+`pipe.Canary` writes one synthetic event to every `events.raw` partition
+every `-canary-interval` (default 30s; 0 turns it off), pinned to the
+partition, keyed `signalman-canary`, source `sysmon`. The event matches one
+rule, `rules/signalman_canary.yml`, and nothing else in `rules/`. The rule
+loads and is evaluated like any other, so the canary takes the same path as
+a real detection: normalize, the engine slot, the sink. When a batch holding
+a canary alert is durable, the sink resets that partition's
+`signalman_canary_age_seconds`. When no alert arrives, the gauge climbs,
+because it is computed at scrape time from the last reset.
+
+The generator starts a partition's age the first time it injects there, so
+a consumer that never comes up pages too. signalmand refuses to start, or
+to reload, a rule directory without the canary rule while the canary is
+on, since that would page for a healthy pipeline.
+
+The canary event carries the generator's clock as its `event_time`. That
+is data in the event, like any event time, not a clock the engine reads, so
+verdicts stay a pure function of the event and the rule set. The generator
+only produces; it buffers nothing, and a failed injection is logged and
+left for the next tick.
+
+`deploy/prometheus/alerts/absence.yml` pages on two conditions.
+`SignalmanCanaryStalled` fires when a partition's age is over 50s for 30s.
+The spec writes it as `> 120` for `2m`, which pages three to four and a
+half minutes after a consumer dies and misses the two-minute target; the
+file has the budget (50s + one scrape + one evaluation + 30s = 110s worst
+case). `SignalmanCanaryAbsent` covers the case the age cannot: when
+signalmand itself is gone, the gauge goes with it.
+`TestCanaryStallPagesWithinTwoMinutes` runs the pipeline and the generator
+on the in-memory broker with a fake clock, kills the consumer, and evaluates
+the rule as written in the file against the gauge every scrape interval.
+
+`deploy/prometheus/` holds the scrape config and alert rules, with promtool
+unit tests in `alerts_test.yml` (`make check-alerts`).
+`deploy/grafana/dashboards/signalman.json` is the dashboard, provisioned
+into the compose stack's Grafana at `localhost:3000`.
+
+## Silent rules
+
+`SignalmanRuleWentSilent`, in `absence.yml` as the spec writes it, files a
+ticket (never a page) for a rule whose `signalman_rule_matches_total` rose in
+the last 30 days and not in the last 24 hours. The failure it is for: a
+taxonomy edit renames a field, every rule reading that field stops
+matching, and nothing errors.
+
+It only works because the slot exports every loaded rule's series at zero.
+A taxonomy change needs a restart, and in the new process a silenced rule
+never matches, so without the zero its series would end at the restart,
+leave the 24h window a day later, and the alert would compare nothing. A
+reload that drops a rule deletes its series, so a rule removed on purpose
+does not ticket. `TestTaxonomyRenameSilencesTheAffectedRule` runs the
+shipped rules for three simulated days, restarts on a taxonomy with
+`CommandLine` renamed in the sysmon binding, runs two more, and evaluates
+the alert's expression over the hourly scrapes: every rule reading
+`CommandLine` that went quiet fires, and no other rule does. Remove the
+zero series and it fails. `deploy/prometheus/alerts_silence_test.yml` is the
+promtool version.

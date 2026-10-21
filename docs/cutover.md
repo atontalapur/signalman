@@ -96,6 +96,9 @@ work and never skips it.
 
 `signalman_divergences_counted_total` is the sum of the three zero-budget
 classes. `signalman_divergences_total{class}` has all five.
+`signalman_differ_events_total` counts events resolved and
+`signalman_differ_records_read_total{engine}` records read per side. All
+four are served by `cmd/differ` on `-metrics-addr` (default `:9466`).
 
 ### Divergence record
 

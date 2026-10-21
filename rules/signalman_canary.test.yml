@@ -1,0 +1,37 @@
+rule: signalman_canary.yml
+cases:
+  - name:   the event the canary generator writes
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\signalman\signalman-canary.exe
+      CommandLine: signalman-canary partition=3
+      User:        signalman-canary
+
+  - name:   a binary of the same name somewhere else
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Users\Public\signalman-canary.exe
+      CommandLine: signalman-canary partition=3
+      User:        signalman-canary
+
+  - name:   the canary command line under a real user
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\signalman\signalman-canary.exe
+      CommandLine: signalman-canary partition=3
+      User:        CORP\alice
+
+  - name:   the canary fields on a network event
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    3
+      Image:       C:\signalman\signalman-canary.exe
+      CommandLine: signalman-canary partition=3
+      User:        signalman-canary
