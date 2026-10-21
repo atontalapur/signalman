@@ -40,6 +40,9 @@ const (
 	exitUsage = 2
 )
 
+// now is the clock -at and -record are checked against; tests set it.
+var now = time.Now
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -114,7 +117,7 @@ func cmdCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	prom := fs.String("prom", "", "Prometheus base URL (every gate but G0)")
 	fs.StringVar(&c.Gate, "gate", "", "gate to check: G0 to G6 (required)")
 	fs.IntVar(&c.Percent, "percent", 0, "G3 step: 10 or 50")
-	fs.Var(&at, "at", "end of the window checked, RFC 3339 (default now)")
+	fs.Var(&at, "at", "end of the window checked, RFC 3339 (default now; a time after now is refused)")
 	fs.DurationVar(&c.Window, "window", 0, "override the gate's hold (G1 168h, G2 to G4 48h, G6 336h)")
 	fs.Var(attest, "attest", "key=evidence for a manual check; repeatable")
 	drill := fs.String("drill", "", "game day result from cutover gameday or measure (G2 to G6)")
@@ -132,6 +135,8 @@ func cmdCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	fs.Float64Var(&c.FullTraffic, "full-traffic", 0.8, "G5: share of the 7 day mean ingest rate that counts as full traffic")
 	fs.Float64Var(&c.NoiseSigma, "noise-sigma", 3, "alert volume: standard deviations a rule's count may move")
 	fs.Float64Var(&c.VerdictTolerance, "verdict-tolerance", 0.001, "largest |v2/v1 - 1| on verdict counts")
+	fs.DurationVar(&c.ScrapeInterval, "scrape-interval", 15*time.Second, "Prometheus scrape interval, for the window coverage checks")
+	fs.Float64Var(&c.MinCoverage, "min-coverage", 0.95, "share of a window's expected samples that must exist")
 	asJSON := fs.Bool("json", false, "print the report as JSON")
 	record := fs.Bool("record", false, "if the gate passed, date it in -doc and append the evidence")
 	if err := fs.Parse(args); err != nil {
@@ -142,10 +147,7 @@ func cmdCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return exitUsage
 	}
 	c.Gate = strings.ToUpper(c.Gate)
-	c.Attest, c.BaselineAt, c.At = attest, baseline.t, at.t
-	if c.At.IsZero() {
-		c.At = time.Now()
-	}
+	c.Attest, c.BaselineAt, c.At, c.Now = attest, baseline.t, at.t, now
 	if *prom != "" {
 		c.Source = &cutover.Prom{Base: *prom}
 	}
@@ -200,7 +202,7 @@ func cmdCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return exitFail
 	}
 	if *record {
-		out, err := cutover.Record(docText, r, "cutover check "+strings.Join(args, " "))
+		out, err := cutover.Record(docText, r, "cutover check "+strings.Join(args, " "), now())
 		if err != nil {
 			fmt.Fprintln(stderr, "cutover check:", err)
 			return exitFail

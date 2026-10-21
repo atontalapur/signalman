@@ -100,10 +100,16 @@ func OpenDivergences(doc string) (open []string, n int) {
 // table, and the evidence under "## Gate evidence". It refuses a report that
 // did not pass, a gate already dated, and a step already recorded. G3 is
 // two steps: 10% records evidence only, and 50% dates the gate once 10% is
-// recorded. invocation is the command line, recorded with the evidence.
-func Record(doc string, r Report, invocation string) (string, error) {
+// recorded. It also refuses a report whose time is after now, which would
+// put a date that has not happened in the ladder. invocation is the command
+// line, recorded with the evidence.
+func Record(doc string, r Report, invocation string, now time.Time) (string, error) {
 	if !r.Passed() {
 		return doc, fmt.Errorf("%s did not pass; only a passed gate is recorded", r.Name())
+	}
+	if r.At.After(now) {
+		return doc, fmt.Errorf("%s was checked at %s, after now (%s); only a window that has ended is recorded",
+			r.Name(), r.At.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
 	}
 	if i := strings.LastIndex(doc, "\n## "); i < 0 || !strings.HasPrefix(doc[i+1:], headingEvidence+"\n") {
 		return doc, fmt.Errorf("the document's last section is not %q, which evidence is appended to", headingEvidence)

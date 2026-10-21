@@ -79,8 +79,11 @@ type Config struct {
 	Gate string
 	// Percent is the G3 step: 10 or 50.
 	Percent int
-	// At is the end of the window the gate is checked over.
+	// At is the end of the window the gate is checked over. Zero is now;
+	// a time after now is refused.
 	At time.Time
+	// Now is the clock At is checked against. Default time.Now.
+	Now func() time.Time
 	// Window overrides the gate's hold: 7d for G1, 48h for G2 to G4, 14d
 	// for G6.
 	Window time.Duration
@@ -112,6 +115,13 @@ type Config struct {
 	// RollbackBudget is the most a rollback or roll-forward may take.
 	// Default 30s.
 	RollbackBudget time.Duration
+	// ScrapeInterval is Prometheus's scrape interval, which sets how many
+	// samples a fully covered window holds. Default 15s, as
+	// deploy/prometheus/prometheus.yml has it.
+	ScrapeInterval time.Duration
+	// MinCoverage is the share of a window's expected samples that must
+	// exist for the window to count as observed. Default 0.95.
+	MinCoverage float64
 	// BaselineAt ends a window in which v1 served every rule, for G6's
 	// alert volume comparison. Zero leaves it unchecked.
 	BaselineAt time.Time
@@ -143,6 +153,15 @@ func (c *Config) defaults() {
 	if c.RollbackBudget <= 0 {
 		c.RollbackBudget = 30 * time.Second
 	}
+	if c.ScrapeInterval <= 0 {
+		c.ScrapeInterval = 15 * time.Second
+	}
+	if c.MinCoverage <= 0 {
+		c.MinCoverage = 0.95
+	}
+	if c.Now == nil {
+		c.Now = time.Now
+	}
 	if c.Location == nil {
 		c.Location = time.UTC
 	}
@@ -165,10 +184,19 @@ func (c *Config) defaults() {
 }
 
 // Evaluate checks one gate. An error means the gate could not be checked
-// at all (unknown gate, bad step); a failed query is an unchecked check.
+// at all (unknown gate, bad step, a window that ends after now); a failed
+// query is an unchecked check.
 func Evaluate(ctx context.Context, c Config) (Report, error) {
 	c.defaults()
+	now := c.Now()
+	if c.At.IsZero() {
+		c.At = now
+	}
 	r := Report{Gate: c.Gate, At: c.At.UTC(), Window: c.Window}
+	if c.At.After(now) {
+		return r, fmt.Errorf("-at %s is after now (%s): a window that has not ended cannot be checked",
+			c.At.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
+	}
 	if c.Gate != "G3" && c.Percent != 0 {
 		return r, fmt.Errorf("-percent is for G3 only")
 	}
@@ -286,6 +314,49 @@ func (e *evaluator) positive(key, criterion, metric string) {
 	e.add(key, criterion, Fail, "%g over %s (`%s`)", v, e.w(), query)
 }
 
+// coverage checks every instance exporting metric was scraped for at least
+// MinCoverage of the window ending at at. Sums, minimums and maximums over
+// a window see only the samples that exist, so without this a gate held for
+// a day of a seven-day window would pass on that day alone. metric must be
+// a series each instance exports from start-up.
+func (e *evaluator) coverage(key, what, metric string, at time.Time) {
+	crit := fmt.Sprintf("%s scraped for at least %g%% of the %s ending %s", what, 100*e.c.MinCoverage, e.w(), at.UTC().Format(time.RFC3339))
+	query := fmt.Sprintf("min(count_over_time(%s[%s]))", metric, e.w())
+	v, present, ok := e.q(key, crit, query, at)
+	if !ok {
+		return
+	}
+	want := float64(e.c.Window / e.c.ScrapeInterval)
+	if !present {
+		e.add(key, crit, Unchecked, "%s has no samples in the window: is it scraped? (`%s`)", metric, query)
+		return
+	}
+	st := Fail
+	if v >= e.c.MinCoverage*want {
+		st = Pass
+	}
+	e.add(key, crit, st, "%.0f of %.0f samples at a %s scrape (%.1f%%) (`%s`)", v, want, e.c.ScrapeInterval, 100*v/want, query)
+}
+
+// steps5m is how many 5m subquery steps the window holds.
+func (e *evaluator) steps5m() float64 { return float64(e.c.Window / (5 * time.Minute)) }
+
+// everyStep checks expr (a rate) was above zero at every 5m step of the
+// window. A subquery has no point at a step with no data, so a minimum over
+// it cannot see a gap; a count of the steps above zero can.
+func (e *evaluator) everyStep(key, crit, label, expr string) (string, Status, bool) {
+	query := fmt.Sprintf(`count_over_time((%s > 0)[%s:5m])`, expr, e.w())
+	v, _, ok := e.q(key, crit, query, e.c.At)
+	if !ok {
+		return "", "", false
+	}
+	st := Fail
+	if v >= e.steps5m() {
+		st = Pass
+	}
+	return fmt.Sprintf("%s above zero at %.0f of %.0f 5m steps", label, v, e.steps5m()), st, true
+}
+
 // held checks the rollout read exactly percent on every instance for the
 // whole window.
 func (e *evaluator) held(percent int) {
@@ -312,21 +383,22 @@ func (e *evaluator) held(percent int) {
 }
 
 // engines checks both engines evaluated every event: each one's verdict
-// rate never fell to zero in the window, and their verdict counts agree.
+// rate was above zero at every 5m step of the window, and their verdict
+// counts agree.
 func (e *evaluator) engines() {
-	key, crit := "engines-continuous", "v1 and v2 both produced verdicts throughout the window"
+	key, crit := "engines-continuous", "v1 and v2 both produced verdicts at every 5m step of the window"
 	var ev []string
 	st := Pass
 	for _, eng := range []string{engineV1, engineV2} {
-		query := fmt.Sprintf(`min_over_time(sum(rate(signalman_verdicts_total{engine=%q}[5m]))[%s:5m])`, eng, e.w())
-		v, present, ok := e.q(key, crit, query, e.c.At)
+		expr := fmt.Sprintf(`sum(rate(signalman_verdicts_total{engine=%q}[5m]))`, eng)
+		got, s, ok := e.everyStep(key, crit, eng, expr)
 		if !ok {
 			return
 		}
-		if !present || v <= 0 {
+		if s != Pass {
 			st = Fail
 		}
-		ev = append(ev, fmt.Sprintf("%s lowest 5m rate %g/s", eng, v))
+		ev = append(ev, got)
 	}
 	e.add(key, crit, st, "%s", strings.Join(ev, "; "))
 
@@ -350,6 +422,17 @@ func (e *evaluator) engines() {
 		st = Pass
 	}
 	e.add(key, crit, st, "v1 %.0f, v2 %.0f verdicts over %s: ratio %.5f", n[0], n[1], e.w(), ratio)
+}
+
+// live is the checks every windowed gate starts with: signalmand and the
+// differ scraped for the window, the rollout held, both engines evaluating,
+// and the differ clean.
+func (e *evaluator) live(percent int) {
+	e.coverage("coverage-signalmand", "signalmand", "signalman_rollout_percent", e.c.At)
+	e.coverage("coverage-differ", "the differ", "signalman_differ_events_total", e.c.At)
+	e.held(percent)
+	e.engines()
+	e.differ()
 }
 
 // differ checks the differ compared events and counted no divergence.
@@ -379,6 +462,7 @@ func (e *evaluator) alertVolume(base time.Time, against string) {
 		}
 		return m, true
 	}
+	e.coverage("coverage-baseline", "signalmand, in "+against+",", "signalman_rollout_percent", base)
 	now, ok := byRule(e.c.At)
 	if !ok {
 		return
@@ -534,9 +618,7 @@ func (e *evaluator) replay() {
 }
 
 func (e *evaluator) g1() {
-	e.held(0)
-	e.engines()
-	e.differ()
+	e.live(0)
 	e.manual("v2-p99", "v2 p99 match latency under 400 µs under production load",
 		"no per-engine match latency metric is exported; take it from the load harness run at production rate")
 }
@@ -545,9 +627,7 @@ func (e *evaluator) g1() {
 // engines evaluating, the differ clean, alert volume unchanged, and a
 // measured rollback.
 func (e *evaluator) step(percent int, full bool) {
-	e.held(percent)
-	e.engines()
-	e.differ()
+	e.live(percent)
 	if full {
 		// With v2 serving every rule, v1 serves an alert only when v2
 		// failed on the event, and shadow-failures above is zero.
@@ -602,9 +682,7 @@ func (e *evaluator) g5() {
 }
 
 func (e *evaluator) g6() {
-	e.held(100)
-	e.engines()
-	e.differ()
+	e.live(100)
 	e.zero("audit-violations", "the invariant 1 audit found nothing", "signalman_audit_violations_total", true)
 
 	key, crit := "skew-in-reloads", "every version_skew divergence falls inside a reload"

@@ -41,6 +41,14 @@ func prom(t *testing.T, vals map[string]float64) string {
 
 var tuesday = time.Date(2026, 11, 3, 14, 0, 0, 0, time.UTC)
 
+// clock sets the command's clock to t for one test.
+func clock(t *testing.T, at time.Time) {
+	t.Helper()
+	prev := now
+	now = func() time.Time { return at }
+	t.Cleanup(func() { now = prev })
+}
+
 func drillFile(t *testing.T, back, fwd float64) string {
 	t.Helper()
 	mk := func(from, to int, w time.Time, s float64) *cutover.Step {
@@ -77,6 +85,7 @@ func docCopy(t *testing.T) string {
 }
 
 func TestCheckPrintsEvidenceAndChangesNothing(t *testing.T) {
+	clock(t, tuesday.Add(time.Hour))
 	doc := docCopy(t)
 	before, _ := os.ReadFile(doc)
 	code, out, stderr := cli(t, "check", "-gate", "g5", "-prom", g5Prom(t), "-drill", drillFile(t, 8, 12), "-doc", doc)
@@ -95,6 +104,7 @@ func TestCheckPrintsEvidenceAndChangesNothing(t *testing.T) {
 }
 
 func TestCheckRecordWritesTheDateAndEvidence(t *testing.T) {
+	clock(t, tuesday.Add(2*time.Hour))
 	doc := docCopy(t)
 	code, out, stderr := cli(t, "check", "-gate", "G5", "-at", "2026-11-03T15:00:00Z", "-prom", g5Prom(t), "-drill", drillFile(t, 8, 12), "-doc", doc, "-record")
 	if code != exitOK {
@@ -110,6 +120,7 @@ func TestCheckRecordWritesTheDateAndEvidence(t *testing.T) {
 }
 
 func TestCheckRecordRefusesAFailedGate(t *testing.T) {
+	clock(t, tuesday.Add(time.Hour))
 	doc := docCopy(t)
 	before, _ := os.ReadFile(doc)
 	code, out, stderr := cli(t, "check", "-gate", "G5", "-prom", g5Prom(t), "-drill", drillFile(t, 8, 45), "-doc", doc, "-record")
@@ -163,5 +174,21 @@ func TestParseHours(t *testing.T) {
 		if _, _, err := parseHours(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// -at after now is a window that has not ended: refused before any query,
+// and nothing is recorded.
+func TestCheckRefusesAnAtInTheFuture(t *testing.T) {
+	clock(t, tuesday)
+	doc := docCopy(t)
+	before, _ := os.ReadFile(doc)
+	code, out, stderr := cli(t, "check", "-gate", "G5", "-at", "2026-11-03T15:00:00Z", "-prom", g5Prom(t), "-drill", drillFile(t, 8, 12), "-doc", doc, "-record")
+	if code != exitUsage || !strings.Contains(stderr, "after now") {
+		t.Fatalf("code %d\n%s\n%s", code, out, stderr)
+	}
+	after, _ := os.ReadFile(doc)
+	if !bytes.Equal(before, after) {
+		t.Fatal("a future -at changed the document")
 	}
 }

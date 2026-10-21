@@ -19,10 +19,17 @@ var checkAt = time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 func healthy(f *fakeSource, w string, percent float64) {
 	f.instant[fmt.Sprintf("min(min_over_time(signalman_rollout_percent[%s]))", w)] = percent
 	f.instant[fmt.Sprintf("max(max_over_time(signalman_rollout_percent[%s]))", w)] = percent
+	d, err := time.ParseDuration(w)
+	if err != nil {
+		panic(err)
+	}
 	for _, eng := range []string{"v1", "v2"} {
-		f.instant[fmt.Sprintf(`min_over_time(sum(rate(signalman_verdicts_total{engine=%q}[5m]))[%s:5m])`, eng, w)] = 5000
+		f.instant[fmt.Sprintf(`count_over_time((sum(rate(signalman_verdicts_total{engine=%q}[5m])) > 0)[%s:5m])`, eng, w)] = float64(d / (5 * time.Minute))
 		f.instant[fmt.Sprintf(`sum(increase(signalman_verdicts_total{engine=%q}[%s]))`, eng, w)] = 1e9
 	}
+	// Every scrape of the window landed.
+	f.instant[fmt.Sprintf("min(count_over_time(signalman_rollout_percent[%s]))", w)] = float64(d / (15 * time.Second))
+	f.instant[fmt.Sprintf("min(count_over_time(signalman_differ_events_total[%s]))", w)] = float64(d / (15 * time.Second))
 	f.instant[fmt.Sprintf("sum(increase(signalman_differ_events_total[%s]))", w)] = 1e6
 	f.instant[fmt.Sprintf("sum(increase(signalman_divergences_counted_total[%s]))", w)] = 0
 	f.instant[fmt.Sprintf("sum(increase(signalman_shadow_failures_total[%s]))", w)] = 0
@@ -43,6 +50,9 @@ func eval(t *testing.T, c Config) Report {
 	t.Helper()
 	if c.At.IsZero() {
 		c.At = checkAt
+	}
+	if c.Now == nil {
+		c.Now = func() time.Time { return checkAt.Add(time.Hour) }
 	}
 	r, err := Evaluate(context.Background(), c)
 	if err != nil {
@@ -107,7 +117,7 @@ func TestEnginesMustCoverEachOther(t *testing.T) {
 	f := newFake()
 	healthy(f, "168h", 0)
 	f.instant[`sum(increase(signalman_verdicts_total{engine="v2"}[168h]))`] = 0.99e9
-	f.instant[`min_over_time(sum(rate(signalman_verdicts_total{engine="v2"}[5m]))[168h:5m])`] = 0
+	f.instant[`count_over_time((sum(rate(signalman_verdicts_total{engine="v2"}[5m])) > 0)[168h:5m])`] = 2015
 	r := eval(t, Config{Gate: "G1", Source: f})
 	if statusOf(t, r, "engines-cover").Status != Fail || statusOf(t, r, "engines-continuous").Status != Fail {
 		t.Fatalf("a v2 short of v1's verdicts, with a gap, passed: %+v", r.Checks)
@@ -397,5 +407,79 @@ func TestReplayDigestsAgreeAndCount(t *testing.T) {
 	p := PartitionDigest{V1: "a", V2: "a", V1Verdicts: 3, V2Verdicts: 2}
 	if p.Equal() || len((Replay{Partitions: []PartitionDigest{p}}).Mismatched()) != 1 {
 		t.Fatal("equal digests over different verdict counts are a mismatch")
+	}
+}
+
+// A window that ends after now has not happened yet: its queries see only
+// the part that did, and -record would date the gate in the future.
+func TestAWindowEndingInTheFutureIsRefused(t *testing.T) {
+	f := newFake()
+	healthy(f, "168h", 0)
+	now := func() time.Time { return checkAt.Add(-time.Minute) }
+	if _, err := Evaluate(context.Background(), Config{Gate: "G1", At: checkAt, Now: now, Source: f}); err == nil {
+		t.Fatal("-at a minute after now accepted")
+	}
+	r, err := Evaluate(context.Background(), Config{Gate: "G1", Now: now, Source: f})
+	if err != nil || !r.At.Equal(now()) {
+		t.Fatalf("a zero -at is now: %v %v", r.At, err)
+	}
+}
+
+// Sums and extremes over a window only see the samples that exist. A
+// signalmand or differ scraped for a day of a seven-day hold would pass
+// every other check, so each gate needs the window covered.
+func TestPartialCoverageFailsTheGate(t *testing.T) {
+	for _, tc := range []struct{ query, key string }{
+		{"min(count_over_time(signalman_rollout_percent[168h]))", "coverage-signalmand"},
+		{"min(count_over_time(signalman_differ_events_total[168h]))", "coverage-differ"},
+	} {
+		f := newFake()
+		healthy(f, "168h", 0)
+		f.instant[tc.query] = 40320 * 0.9
+		r := eval(t, Config{Gate: "G1", Source: f, Attest: map[string]string{"v2-p99": "x"}})
+		if c := statusOf(t, r, tc.key); c.Status != Fail || r.Passed() {
+			t.Fatalf("%s at 90%% coverage: %+v", tc.key, c)
+		}
+		delete(f.instant, tc.query)
+		r = eval(t, Config{Gate: "G1", Source: f, Attest: map[string]string{"v2-p99": "x"}})
+		if c := statusOf(t, r, tc.key); c.Status == Pass || r.Passed() {
+			t.Fatalf("%s with no samples: %+v", tc.key, c)
+		}
+	}
+	f := newFake()
+	healthy(f, "168h", 0)
+	r := eval(t, Config{Gate: "G1", Source: f, Attest: map[string]string{"v2-p99": "x"}})
+	if !r.Passed() {
+		t.Fatalf("full coverage: %+v", r.Checks)
+	}
+}
+
+// One 5m step with no verdicts from an engine is a gap the minimum over
+// the steps that exist cannot see.
+func TestAnEngineGapFailsTheGate(t *testing.T) {
+	f := newFake()
+	healthy(f, "48h", 1)
+	alertsByRule(f, checkAt, map[string]float64{"a": 1000})
+	alertsByRule(f, checkAt.Add(-48*time.Hour), map[string]float64{"a": 1000})
+	f.instant[`count_over_time((sum(rate(signalman_verdicts_total{engine="v1"}[5m])) > 0)[48h:5m])`] = 575
+	r := eval(t, Config{Gate: "G2", Source: f, Drill: stepDrill(1, 0, 6)})
+	if c := statusOf(t, r, "engines-continuous"); c.Status != Fail || !strings.Contains(c.Evidence, "575 of 576") {
+		t.Fatalf("engines-continuous %+v", c)
+	}
+}
+
+// The alert volume baseline is a window too; a half-scraped one is not a
+// baseline.
+func TestAlertVolumeBaselineNeedsCoverage(t *testing.T) {
+	f := newFake()
+	healthy(f, "48h", 1)
+	alertsByRule(f, checkAt, map[string]float64{"a": 1000})
+	alertsByRule(f, checkAt.Add(-48*time.Hour), map[string]float64{"a": 1000})
+	q := "min(count_over_time(signalman_rollout_percent[48h]))"
+	f.instant[at(q, checkAt)] = 11520
+	f.instant[at(q, checkAt.Add(-48*time.Hour))] = 5000
+	r := eval(t, Config{Gate: "G2", Source: f, Drill: stepDrill(1, 0, 6)})
+	if c := statusOf(t, r, "coverage-baseline"); c.Status != Fail || r.Passed() {
+		t.Fatalf("coverage-baseline %+v", c)
 	}
 }

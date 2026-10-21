@@ -14,6 +14,9 @@ func passed(gate string, step int) Report {
 	}}
 }
 
+// recordNow is the clock Record checks report times against.
+var recordNow = checkAt.Add(time.Hour)
+
 func undated() string {
 	doc := ladderDoc
 	for _, d := range []string{"2026-09-01", "2026-09-10", "2026-09-12", "2026-09-16", "2026-09-18", "2026-09-19"} {
@@ -24,7 +27,7 @@ func undated() string {
 
 func TestRecordDatesTheGateAndAppendsEvidence(t *testing.T) {
 	doc := undated()
-	out, err := Record(doc, passed("G4", 0), "cutover check -gate G4 -record")
+	out, err := Record(doc, passed("G4", 0), "cutover check -gate G4 -record", recordNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +50,7 @@ func TestRecordDatesTheGateAndAppendsEvidence(t *testing.T) {
 	if strings.Contains(out, noEvidence) {
 		t.Error("the placeholder survived the first record")
 	}
-	if _, err := Record(out, passed("G4", 0), "again"); err == nil {
+	if _, err := Record(out, passed("G4", 0), "again", recordNow); err == nil {
 		t.Fatal("a gate recorded twice")
 	}
 }
@@ -55,27 +58,27 @@ func TestRecordDatesTheGateAndAppendsEvidence(t *testing.T) {
 func TestRecordRefusesAGateThatDidNotPass(t *testing.T) {
 	r := passed("G2", 0)
 	r.Checks[0].Status = Unchecked
-	if out, err := Record(undated(), r, "x"); err == nil || out != undated() {
+	if out, err := Record(undated(), r, "x", recordNow); err == nil || out != undated() {
 		t.Fatal("an unchecked gate was recorded")
 	}
-	if _, err := Record(undated(), Report{Gate: "G2", At: checkAt}, "x"); err == nil {
+	if _, err := Record(undated(), Report{Gate: "G2", At: checkAt}, "x", recordNow); err == nil {
 		t.Fatal("a gate with no checks was recorded")
 	}
 }
 
 func TestRecordG3TakesBothStepsInOrder(t *testing.T) {
 	doc := undated()
-	if _, err := Record(doc, passed("G3", 50), "x"); err == nil {
+	if _, err := Record(doc, passed("G3", 50), "x", recordNow); err == nil {
 		t.Fatal("G3 50% recorded before 10%")
 	}
-	doc, err := Record(doc, passed("G3", 10), "x")
+	doc, err := Record(doc, passed("G3", 10), "x", recordNow)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if LadderDates(doc)["G3"] != "" {
 		t.Fatal("the 10% step dated G3")
 	}
-	doc, err = Record(doc, passed("G3", 50), "x")
+	doc, err = Record(doc, passed("G3", 50), "x", recordNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +89,7 @@ func TestRecordG3TakesBothStepsInOrder(t *testing.T) {
 
 func TestRecordNeedsEvidenceLast(t *testing.T) {
 	doc := undated() + "\n## Later\n\ntext\n"
-	if _, err := Record(doc, passed("G2", 0), "x"); err == nil {
+	if _, err := Record(doc, passed("G2", 0), "x", recordNow); err == nil {
 		t.Fatal("evidence appended under the wrong section")
 	}
 }
@@ -116,5 +119,12 @@ func TestCutoverDocHasTheLadder(t *testing.T) {
 	i := strings.LastIndex(doc, "\n## ")
 	if i < 0 || !strings.HasPrefix(doc[i+1:], headingEvidence+"\n") {
 		t.Fatal("the last section of docs/cutover.md is not the gate evidence")
+	}
+}
+
+// A report dated after now would put a future date in the ladder.
+func TestRecordRefusesAReportFromTheFuture(t *testing.T) {
+	if _, err := Record(undated(), passed("G0", 0), "x", checkAt.Add(-time.Second)); err == nil {
+		t.Fatal("a report dated after now was recorded")
 	}
 }

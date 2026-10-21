@@ -263,14 +263,27 @@ a gate that passed: it puts the date of `-at` (default now) in the table
 above and appends the checks and their evidence under "Gate evidence" at
 the end of this document. It refuses a gate that already has a date. G3 is
 recorded in two steps, `-percent 10` and then `-percent 50`; only the second
-dates the row.
+dates the row. `-at` after now is refused: a window that has not ended
+cannot be checked, and its date cannot go in the table.
+
+Every gate with a window (G1 to G4, G6) first checks the window was
+observed. Sums and extremes over a window see only the samples that exist,
+so a hold scraped for one day of seven would otherwise pass on that day.
+`coverage-signalmand` and `coverage-differ` need at least 95% of the
+samples a `-scrape-interval` (15 s) scrape would give, counted with
+`min(count_over_time(...))` over `signalman_rollout_percent` and
+`signalman_differ_events_total`, which each process exports from start-up.
+`coverage-baseline` checks the same for the window alert volume is compared
+against. `engines-continuous` counts the 5m steps at which each engine's
+verdict rate was above zero and needs every one of them; a minimum over the
+steps would not see a step with no data.
 
 Where each criterion comes from:
 
 | Gate | Checked from | Not machine-checkable here |
 |---|---|---|
 | G0 | `-corpus` replayed through v1 and v2 with `-rules`, digests compared per partition (`internal/verdict`); `-fuzz-stats` summed, at least `-fuzz-min` (1e8) comparisons; `-go-test` runs `go test` over `internal/engine`, `internal/verdict`, `internal/pipe/chsink` | `fuzz-clean`: the counters do not record the fuzz run's exit status |
-| G1 | Over 7 days: rollout at 0, both engines' verdict rates never zero and their counts within `-verdict-tolerance`, differ resolving events, `signalman_divergences_counted_total` and `signalman_shadow_failures_total` flat | `v2-p99`: no per-engine match latency metric is exported; it comes from the load harness |
+| G1 | Over 7 days, covered: rollout at 0, both engines' verdict rates above zero at every 5m step and their counts within `-verdict-tolerance`, differ resolving events, `signalman_divergences_counted_total` and `signalman_shadow_failures_total` flat | `v2-p99`: no per-engine match latency metric is exported; it comes from the load harness |
 | G2, G3 | Over 48 h: rollout held at 1, 10 or 50 on every instance, the G1 checks, alert volume per rule against the 48 h before within `-noise-sigma` (Poisson, default 3), and a rollback in `-drill` under 30 s | |
 | G4 | The G2 checks at 100 apart from alert volume, `signalman_alerts_total{engine="v1"}` flat, and a rollback from 100 in `-drill` | `flag-only`: no configuration change other than the rollout file |
 | G5 | `-drill` from `cutover gameday`: 100 to 0 and 0 to 100, each under 30 s; started on a weekday inside `-business-hours` in `-tz`; ingest rate at the rollback at least `-full-traffic` (0.8) of the 7 day mean | |
