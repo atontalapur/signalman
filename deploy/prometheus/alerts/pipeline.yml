@@ -1,0 +1,16 @@
+# Pipeline correctness alerts. Absence alerts (canary, silent rules) live in
+# absence.yml.
+groups:
+  - name: signalman-pipeline
+    rules:
+      # docs/pipeline.md: any increase in audit violations is a P1. The
+      # audit names the partition and seqs in its error log.
+      - alert: SignalmanAuditViolation
+        expr: increase(signalman_audit_violations_total[5m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "Invariant 1 audit failed on partition {{ $labels.partition }}"
+          runbook: "An admitted event has no verdicts and no drop, both, or too
+            few verdicts. Find the window in signalmand's error log; assume
+            detections were missed on that partition until proven otherwise."

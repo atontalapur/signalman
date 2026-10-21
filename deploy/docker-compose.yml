@@ -1,10 +1,12 @@
-# Local Redpanda and ClickHouse for signalmand and `make integration`.
+# Local Redpanda, ClickHouse, Prometheus, and Grafana for signalmand and
+# `make integration`.
 #
 #   docker compose -f deploy/docker-compose.yml up -d --wait
 #
 # Redpanda is reachable from the host at localhost:19092, ClickHouse at
-# localhost:8123 (HTTP) and localhost:9000 (native). Images are pinned; bump
-# them deliberately.
+# localhost:8123 (HTTP) and localhost:9000 (native), Prometheus at
+# localhost:9090, Grafana at localhost:3000. Prometheus scrapes signalmand
+# on the host at :9464. Images are pinned; bump them deliberately.
 name: signalman
 
 services:
@@ -79,6 +81,54 @@ services:
       timeout: 5s
       retries: 30
 
+  # Scrapes signalmand on the host and evaluates deploy/prometheus/alerts.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # The silence detector looks back 30 days.
+      - --storage.tsdb.retention.time=35d
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - prometheus:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Local only: anonymous viewers, no login. The dashboard is provisioned
+  # from deploy/grafana/dashboards and is read only in the UI.
+  grafana:
+    image: grafana/grafana:12.1.0
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/signalman.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
 volumes:
   redpanda:
   clickhouse:
+  prometheus:
+  grafana:
