@@ -3,6 +3,37 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.9.0] - 2026-10-21
+
+### Added
+
+- `internal/engine/v2`, the compiled evaluator. It interns every leaf
+  predicate, logsource tests included, into one table, and each rule
+  becomes a tree over that table's bitset.
+- A literal prefilter: each rule's required literals feed an Aho-Corasick
+  automaton (`internal/engine/v2/aho`), and a rule none of whose literals
+  occur is settled false without a walk. Nothing under a `not` is used.
+- Presence gating: a rule whose required fields are absent is settled false
+  without a walk and still emits its verdict.
+- `EvaluateInto` makes 0 allocations per event on the fixtures and the
+  SigmaHQ corpus. On the corpus stream it runs at 17,633 ns/event against
+  v1's 938,733 (`docs/results.md`).
+- Equivalence with v1, verdict by verdict and digest by digest, over the
+  fixtures and the corpus, plus rule independence and prefilter soundness
+  tests and `FuzzPrefilterSound`.
+
+### Changed
+
+- `ast.Pred` carries the modifier chain and values its matcher was built
+  from, and `match.Build` is now `Plan` followed by `Spec.Matcher`. RuleSetV
+  is unchanged.
+
+### Fixed
+
+- The v2 equivalence tests now cover the shipped `rules/` directory in CI,
+  and fail if any shipped rule stops loading. Before, those rules were only
+  compared when the SigmaHQ corpus was present.
+
 ## [0.8.0] - 2026-10-21
 
 ### Added
