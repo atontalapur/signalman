@@ -8,6 +8,12 @@
 // batch, and v2's verdicts go to verdicts.v2 for cmd/differ. v2 emits no
 // alerts in shadow mode.
 //
+// With -rollout, v2 also serves the alerts of every rule with
+// fnv(rule_id) mod 100 below the percentage in that file; v1 keeps
+// evaluating and recording every rule. The file is reread every
+// -rollout-poll and on SIGHUP, and a change applies from the next batch, so
+// a rollback is an edit to one file.
+//
 // SIGHUP reloads the rule directory. The new rule set applies from the next
 // batch on; a batch in flight finishes under the rules it started with. A
 // taxonomy change needs a restart, because the normalizer is built from it.
@@ -22,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -59,7 +66,13 @@ type flags struct {
 	auditInterval    time.Duration
 	auditWindow      int64
 	shadow           bool
+	rollout          string
+	rolloutPoll      time.Duration
 }
+
+// defaultRolloutPoll bounds how long a rollout file change waits to be
+// read without a SIGHUP. The spec's rollback budget is 30 seconds.
+const defaultRolloutPoll = 5 * time.Second
 
 func parseFlags(args []string) (flags, error) {
 	var f flags
@@ -83,11 +96,19 @@ func parseFlags(args []string) (flags, error) {
 	fs.DurationVar(&f.auditInterval, "audit-interval", 10*time.Second, "how often the invariant 1 audit runs; 0 disables it")
 	fs.Int64Var(&f.auditWindow, "audit-window", 10000, "widest seq range the audit checks at once")
 	fs.BoolVar(&f.shadow, "shadow", false, "also evaluate every event with v2 and write verdicts.v2 (no alerts)")
+	fs.StringVar(&f.rollout, "rollout", "", "file holding the percentage of rules v2 serves alerts for; implies -shadow")
+	fs.DurationVar(&f.rolloutPoll, "rollout-poll", defaultRolloutPoll, "how often the -rollout file is reread")
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}
 	if f.rules == "" {
 		return f, errors.New("-rules is required")
+	}
+	if f.rollout != "" {
+		f.shadow = true
+		if f.rolloutPoll <= 0 {
+			return f, errors.New("-rollout-poll must be positive")
+		}
 	}
 	return f, nil
 }
@@ -172,6 +193,12 @@ func run(f flags, log *slog.Logger) error {
 	if err := install(slot, rs, f.shadow); err != nil {
 		return err
 	}
+	if f.rollout != "" {
+		if err := applyRollout(f.rollout, slot, log); err != nil {
+			return err
+		}
+		go watchRollout(ctx, f.rollout, f.rolloutPoll, slot, log)
+	}
 	go reloadOnHUP(ctx, f, tax, slot, log)
 
 	// The audit snapshots its starting point before the pipeline produces
@@ -214,6 +241,13 @@ func reloadOnHUP(ctx context.Context, f flags, tax *sigma.Taxonomy, slot *pipe.S
 		case <-ctx.Done():
 			return
 		case <-hup:
+			// The rollout first: a rollback must not wait on, or fail
+			// with, a rule reload.
+			if f.rollout != "" {
+				if err := applyRollout(f.rollout, slot, log); err != nil {
+					log.Error("rollout reload refused; keeping the current rollout", "err", err)
+				}
+			}
 			rs, err := loadRules(f.rules, tax, f.strict, log)
 			if err != nil {
 				log.Error("reload refused; keeping the active rule set", "err", err)
@@ -237,6 +271,68 @@ func install(slot *pipe.Slot, rs *sigma.RuleSet, shadow bool) error {
 		return nil
 	}
 	return slot.StoreWithShadow(pipe.V1(rs), pipe.V2(rs))
+}
+
+// parseRollout reads a rollout file: one integer from 0 to 100, with blank
+// lines and lines starting with # ignored.
+func parseRollout(b []byte) (int, error) {
+	var vals []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			vals = append(vals, line)
+		}
+	}
+	if len(vals) != 1 {
+		return 0, fmt.Errorf("rollout file holds %d values, want one percentage", len(vals))
+	}
+	n, err := strconv.Atoi(vals[0])
+	if err != nil {
+		return 0, fmt.Errorf("rollout %q is not an integer percentage", vals[0])
+	}
+	if n < 0 || n > 100 {
+		return 0, fmt.Errorf("rollout %d%% is outside 0 to 100", n)
+	}
+	return n, nil
+}
+
+// applyRollout reads the rollout file and, if it changed, makes it the
+// rollout from the next batch. A file that cannot be read or parsed leaves
+// the current rollout in place.
+func applyRollout(path string, slot *pipe.Slot, log *slog.Logger) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	n, err := parseRollout(b)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	old := slot.Rollout()
+	if n == old {
+		return nil
+	}
+	if err := slot.SetRollout(n); err != nil {
+		return err
+	}
+	log.Info("rollout changed; applies from the next batch", "from_percent", old, "to_percent", n)
+	return nil
+}
+
+// watchRollout rereads the rollout file every interval until ctx ends.
+func watchRollout(ctx context.Context, path string, every time.Duration, slot *pipe.Slot, log *slog.Logger) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := applyRollout(path, slot, log); err != nil {
+				log.Error("rollout reload refused; keeping the current rollout", "err", err)
+			}
+		}
+	}
 }
 
 // topicSpecs mirrors deploy/docker-compose.yml.

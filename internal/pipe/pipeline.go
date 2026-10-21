@@ -12,6 +12,7 @@ import (
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/obs"
+	"github.com/atontalapur/signalman/internal/sigma"
 )
 
 // Stage labels for signalman_stage_queue_depth. Each names the bounded
@@ -343,17 +344,46 @@ func outputs(b *batch) []broker.Record {
 		} else {
 			recs = append(recs, VerdictRecord(b.act.eng, it))
 		}
-		for _, v := range it.Verdicts {
-			if v.Matched {
-				r, ok := b.act.rules[v.RuleID]
-				if !ok {
-					panic(fmt.Sprintf("engine %s matched rule %q, which is not in its rule set", b.act.eng.Name(), v.RuleID))
-				}
-				recs = append(recs, AlertRecord(r, it))
-			}
-		}
+		alerts(b, it, func(r *sigma.Rule, eng Engine) {
+			recs = append(recs, AlertRecord(r, it, eng.Name()))
+		})
 	}
 	return recs
+}
+
+// alerts calls emit once per alert the item owes: for each matched rule,
+// from the engine serving it in this batch. The primary serves every rule
+// outside the rollout, the shadow every rule inside it. When the shadow
+// failed on this event, the primary serves its rules too, so a v2 failure
+// is a missing v2 verdict for the differ, never a lost alert. Each rule is
+// served by exactly one engine, so an event gets at most one alert per
+// rule whichever engine serves it.
+func alerts(b *batch, it *Item, emit func(*sigma.Rule, Engine)) {
+	rule := func(eng Engine, id string) *sigma.Rule {
+		r, ok := b.act.rules[id]
+		if !ok {
+			panic(fmt.Sprintf("engine %s matched rule %q, which is not in its rule set", eng.Name(), id))
+		}
+		return r
+	}
+	served := b.act.served
+	for _, v := range it.Verdicts {
+		if v.Matched && !served[v.RuleID] {
+			emit(rule(b.act.eng, v.RuleID), b.act.eng)
+		}
+	}
+	if len(served) == 0 {
+		return
+	}
+	src, eng := it.Shadow, b.act.shadow
+	if src == nil {
+		src, eng = it.Verdicts, b.act.eng
+	}
+	for _, v := range src {
+		if v.Matched && served[v.RuleID] {
+			emit(rule(eng, v.RuleID), eng)
+		}
+	}
 }
 
 // count updates the verdict and match counters for a batch that is now
@@ -370,6 +400,15 @@ func (p *Pipeline) count(b *batch) {
 				unmatched++
 			}
 		}
+	}
+	served := map[[2]string]float64{}
+	for _, it := range b.items {
+		if it.Drop == nil {
+			alerts(b, it, func(r *sigma.Rule, eng Engine) { served[[2]string{eng.Name(), r.ID}]++ })
+		}
+	}
+	for k, n := range served {
+		p.m.Alerts.WithLabelValues(k[0], k[1]).Add(n)
 	}
 	name := b.act.eng.Name()
 	p.m.Verdicts.WithLabelValues(name, "true").Add(matched)

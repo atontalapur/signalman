@@ -148,9 +148,12 @@ func NormRecord(it *Item) broker.Record {
 // sink can insert it as it stands. The table dedups on (partition, seq,
 // rule_id), which is what makes a redelivered batch harmless.
 type Alert struct {
-	Partition  int32             `json:"partition"`
-	Seq        uint64            `json:"seq"`
-	RuleID     string            `json:"rule_id"`
+	Partition int32  `json:"partition"`
+	Seq       uint64 `json:"seq"`
+	RuleID    string `json:"rule_id"`
+	// Engine is the engine that served the rule for this event: v1, or v2
+	// for a rule inside the rollout.
+	Engine     string            `json:"engine"`
 	RuleTitle  string            `json:"rule_title"`
 	Severity   string            `json:"severity"`
 	EventTime  time.Time         `json:"event_time"`
@@ -162,8 +165,9 @@ type Alert struct {
 	Raw string `json:"raw"`
 }
 
-// AlertRecord is the alerts topic record for one match, keyed by rule_id.
-func AlertRecord(r *sigma.Rule, it *Item) broker.Record {
+// AlertRecord is the alerts topic record for one match served by engine,
+// keyed by rule_id.
+func AlertRecord(r *sigma.Rule, it *Item, engine string) broker.Record {
 	ev := it.Event
 	f := make(map[string]string, len(ev.Fields))
 	for k, v := range ev.Fields {
@@ -173,6 +177,7 @@ func AlertRecord(r *sigma.Rule, it *Item) broker.Record {
 		Partition:  ev.Partition,
 		Seq:        ev.Seq,
 		RuleID:     r.ID,
+		Engine:     engine,
 		RuleTitle:  r.Title,
 		Severity:   r.Level,
 		EventTime:  ev.EventTime,

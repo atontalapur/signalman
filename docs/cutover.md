@@ -115,6 +115,42 @@ skew):
 event's offset in its `events.raw` partition, so the raw record is one
 fetch away.
 
+## Rollout and rollback
+
+A rule's alerts are served by v2 when `fnv(rule_id) mod 100 < percent`
+(FNV-1a 32 over the rule id bytes; `pipe.RolloutBucket`). The bucket depends
+on nothing but the id, so routing is the same after a restart and on every
+node, and raising the percentage only adds rules: a rule served by v2 stays
+served by v2 as the rollout advances. `TestRolloutBucketIsPinned` fixes the
+hash, so a change to it fails a test instead of quietly moving rules.
+
+Both engines evaluate every rule at every percentage. v1 keeps writing
+`verdicts.v1` with `shadow: "v2"` on every record, so the differ stays armed
+on exactly the rules v2 is serving. Only the alerts change hands.
+
+The rollout is read from the slot once per batch, with the engines, so each
+event's alerts come from one routing decision. Each matched rule is served
+by exactly one engine for that event, so there is one alert per
+`(partition, seq, rule_id)` that the serving engine matched, never one from
+each. If v2 fails on an event, v1 serves that event's v2 rules, so a v2
+failure costs a v2 verdict (which the differ reports as missing) and never
+an alert. Every alert carries `engine`, the engine that served it.
+
+Rollback is a config change. `signalmand -rollout <file>` reads one integer,
+0 to 100, from the file at startup, every `-rollout-poll` (default 5 s), and
+on `SIGHUP`. A changed value applies from the next batch formed; batches
+already in flight finish under the old one. A file that does not parse is
+refused and the current rollout stays. Write the file with a rename, not in
+place, so the poller never reads half of it.
+
+Measured in `TestRollbackTakesEffectWithin30Seconds`
+(`cmd/signalmand`), in memory, with the default poll interval and no
+`SIGHUP`: from rewriting the file from 100 to 0 until the first alert served
+by v1, 5.2 to 5.4 s over four runs on an Apple M1 Pro, and every later
+alert came from v1. Most of that is the poll interval. This is the
+in-memory test, not the G2 measurement, which has to be taken against
+Redpanda under production load.
+
 ## Gate ladder
 
 | Gate | Criteria | Date passed |

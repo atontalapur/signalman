@@ -27,10 +27,17 @@ type Slot struct {
 // and the rule metadata alerts need. The pair is one value, so a reload
 // swaps both at once and no event is evaluated by v1 under one RuleSetV
 // and by its shadow under another.
+//
+// percent is the rollout, and served the rules the shadow serves alerts
+// for under it. Both are read with the engines, once per batch, so a
+// rollout change also lands between batches and every event's alerts come
+// from one routing decision.
 type active struct {
-	eng    Engine
-	shadow Engine // nil: no shadow lane
-	rules  map[string]*sigma.Rule
+	eng     Engine
+	shadow  Engine // nil: no shadow lane
+	rules   map[string]*sigma.Rule
+	percent int
+	served  map[string]bool // empty without a shadow
 }
 
 // NewSlot starts with e active.
@@ -76,6 +83,11 @@ func (s *Slot) store(e, shadow Engine) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A reload changes rules, not routing: the rollout carries over.
+	if cur := s.cur.Load(); cur != nil {
+		a.percent = cur.percent
+	}
+	a.route()
 	s.counts[rs.Version] = len(rs.Rules)
 	s.cur.Store(a)
 	if s.shown != nil {
@@ -97,3 +109,43 @@ func (s *Slot) RuleCount(rulesetV string) (int, bool) {
 }
 
 func (s *Slot) load() *active { return s.cur.Load() }
+
+// SetRollout makes percent the rollout for every batch formed from now on:
+// the shadow engine serves the alerts of every rule with
+// RolloutBucket(rule) < percent, and the primary serves the rest. Both
+// engines keep evaluating every rule. A rollback is SetRollout with a lower
+// percent, and it lands at the next batch.
+func (s *Slot) SetRollout(percent int) error {
+	if percent < 0 || percent > 100 {
+		return fmt.Errorf("rollout %d%% is outside 0 to 100", percent)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.cur.Load()
+	if percent > 0 && cur.shadow == nil {
+		return fmt.Errorf("rollout %d%% with no shadow engine to serve it", percent)
+	}
+	a := *cur
+	a.percent = percent
+	a.route()
+	s.cur.Store(&a)
+	s.m.RolloutPercent.Set(float64(percent))
+	return nil
+}
+
+// Rollout is the percentage the next batch will be routed with.
+func (s *Slot) Rollout() int { return s.cur.Load().percent }
+
+// route fills served from percent. Without a shadow nothing is served by
+// it, whatever the percent.
+func (a *active) route() {
+	a.served = map[string]bool{}
+	if a.shadow == nil {
+		return
+	}
+	for id := range a.rules {
+		if ServedByShadow(id, a.percent) {
+			a.served[id] = true
+		}
+	}
+}

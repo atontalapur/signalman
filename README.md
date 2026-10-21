@@ -49,10 +49,13 @@ normalized event with v2 beside v1, in the same batch, and writes
 `verdicts.v2` with no alerts. `cmd/differ` joins `verdicts.v1` and
 `verdicts.v2` on `(partition, seq, rule_id)` and classifies every
 disagreement into the spec's five classes, writing each to the
-`divergences` topic and the log. `docs/cutover.md` has the four arguments,
-the gate ladder, the retirement criteria, and the divergence log. No gate
-has been passed: shadow mode has only run over the in-memory broker in
-tests.
+`divergences` topic and the log. `signalmand -rollout <file>` hands a
+rule's alerts to v2 when `fnv(rule_id) mod 100` is below the file's
+percentage, while v1 keeps evaluating and recording every rule; editing the
+file is the rollback, and it lands at the next batch. `docs/cutover.md` has
+the four arguments, the gate ladder, the retirement criteria, the rollout
+design, and the divergence log. No gate has been passed: shadow mode and the
+rollout have only run over the in-memory broker in tests.
 
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
@@ -100,7 +103,7 @@ one-hour soak against Redpanda has not been run.
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
-| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane and differ built and tested in memory; rollout not started; no gate G0 to G6 passed |
+| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, and per-rule rollout with file-driven rollback built and tested in memory; no gate G0 to G6 passed |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, and `budget:` done; rule PR CI gates and `docs/authoring.md` not started |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
@@ -195,7 +198,9 @@ that needs them.
 - Shadow mode: add `-shadow` to `signalmand`, then run
   `go run ./cmd/differ` against the same brokers. The differ serves
   `/metrics` on `:9465`; `signalman_divergences_counted_total` is the number
-  the gates watch.
+  the gates watch. `-rollout <file>` (one integer, 0 to 100) sets the share
+  of rules v2 serves; the file is reread every `-rollout-poll` (5s) and on
+  `SIGHUP`.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.

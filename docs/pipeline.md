@@ -24,7 +24,7 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 | `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions; `shadow` names the shadow engine when there is one |
 | `verdicts.v2` | partition, pinned | `EventVerdicts` from the shadow engine, written only with `-shadow` |
 | `divergences` | partition, pinned | `differ.Divergence`: one per `(partition, seq, rule_id)` the engines disagree on (`docs/cutover.md`) |
-| `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table |
+| `alerts` | rule_id | `Alert`: one per match by the engine serving the rule, shaped like the spec's ClickHouse alert table plus `engine` |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
 
 `verdicts.v1` holds one record per event rather than one per verdict, so the
@@ -122,6 +122,13 @@ that event, and counts in `signalman_shadow_failures_total`. Why the shadow
 reads the batch instead of consuming `events.norm`, and how `cmd/differ`
 compares the two streams, is in `docs/cutover.md`.
 
+`-rollout <file>` routes alerts per rule: v2 serves a rule when
+`fnv(rule_id) mod 100` is below the file's percentage, v1 serves the rest,
+and both keep writing verdicts for every rule. The percentage lives in the
+slot beside the engines, so a change lands between batches like a reload.
+The file is reread every `-rollout-poll` and on `SIGHUP`; see
+`docs/cutover.md` for the rollback measurement.
+
 ## Invariant 1 audit
 
 `pipe.Auditor` reads `verdicts.v1` and `drops` and checks, for every
@@ -164,6 +171,8 @@ Names from the spec's core metrics table, in `internal/obs`.
 | `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | partition | the audit; not in the spec table |
 | `signalman_shadow_failures_total` | engine | sink, per event the shadow failed on; not in the spec table |
+| `signalman_alerts_total` | engine, rule_id | sink, per durable alert, by the serving engine; not in the spec table |
+| `signalman_rollout_percent` | | the slot, on every rollout change |
 
 Not yet exported: `signalman_rule_eval_seconds`,
 `signalman_event_staleness_seconds`, `signalman_canary_age_seconds`. Those are
