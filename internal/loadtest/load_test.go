@@ -233,7 +233,7 @@ func TestLoadBaseline(t *testing.T) {
 		rep.Latency = append(rep.Latency, LatencyAtLoad{
 			Fraction: frac, Rate: ph.Rate, For: dur.String(), Sent: st.Sent,
 			Latency: lat, Correct: ck.OK() && ck.Dropped == 0 && ck.Evaluated == st.Sent,
-			Resources: ResourcesOf(h.Samples()), Replay: st,
+			Resources: h.Resources(h.Samples()), Replay: st,
 		})
 		h.Close()
 		if !ck.OK() {

@@ -417,3 +417,41 @@ func TestTapCountsAnIdenticalRedeliveryAsADuplicate(t *testing.T) {
 		t.Fatalf("correctness %+v", got)
 	}
 }
+
+func TestTapCountsSendsThatWaitForTheCheckingPool(t *testing.T) {
+	mem := broker.NewMemory(map[string]int32{pipe.TopicEventsRaw: 1})
+	tap := NewTap(mem, 1, 1)
+	defer tap.Close()
+	rec := []broker.Record{{Topic: pipe.TopicDrops, Value: []byte(`{}`)}}
+	if err := tap.Produce(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	tap.Flush()
+	if n := tap.Blocked(); n != 0 {
+		t.Fatalf("blocked %d with an idle pool", n)
+	}
+	// Hold the worker: process takes tap.mu. With a queue of one, the
+	// third call at the latest has to wait for the pool.
+	tap.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		for range 3 {
+			if err := tap.Produce(context.Background(), rec); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for tap.Blocked() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	tap.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := tap.Blocked(); n < 1 {
+		t.Fatalf("blocked %d; a send that waited for a full queue was not counted", n)
+	}
+}

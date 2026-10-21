@@ -147,7 +147,7 @@ func (e *experiment) finish(compare bool) *ExperimentReport {
 	r.LagCurve = LagCurve(ss, scaled(10*time.Second))
 	r.LoadLatency = Summarize(lat, e.t0+5*time.Second, e.t1)
 	r.AllLatency = Summarize(lat, 0, 0)
-	r.Resources = ResourcesOf(ss)
+	r.Resources = e.h.Resources(ss)
 	r.Correctness = ck
 	if compare {
 		ref, err := e.h.ReferenceDigests(context.Background(), pipe.V1(e.set.rs))

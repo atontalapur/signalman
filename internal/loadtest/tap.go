@@ -51,6 +51,7 @@ type Tap struct {
 
 	outage       atomic.Bool
 	outageErrors atomic.Int64
+	blocked      atomic.Int64
 
 	hookMu sync.Mutex
 	after  func()
@@ -194,6 +195,10 @@ func (t *Tap) Queue() int { return len(t.work) }
 // Flush waits until every accepted call has been checked.
 func (t *Tap) Flush() { t.pending.Wait() }
 
+// Blocked counts output calls that found the checking queue full and had
+// to wait for the pool. Zero means the tap never slowed the pipeline.
+func (t *Tap) Blocked() int64 { return t.blocked.Load() }
+
 // Close flushes and stops the checking pool.
 func (t *Tap) Close() {
 	t.Flush()
@@ -216,9 +221,17 @@ func (t *Tap) Produce(ctx context.Context, recs []broker.Record) error {
 	t.pending.Add(1)
 	select {
 	case t.work <- c:
-	case <-ctx.Done():
-		t.pending.Done()
-		return ctx.Err()
+	default:
+		// The checking pool is behind: this send waits, which the
+		// pipeline sees as a slow sink. Counted, not sampled, so a short
+		// wait between samples still shows.
+		t.blocked.Add(1)
+		select {
+		case t.work <- c:
+		case <-ctx.Done():
+			t.pending.Done()
+			return ctx.Err()
+		}
 	}
 	t.hookMu.Lock()
 	h := t.after

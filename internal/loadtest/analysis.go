@@ -130,7 +130,13 @@ type Resources struct {
 	PeakHeapMB float64 `json:"peak_heap_mb"`
 	GCs        uint32  `json:"gcs"`
 	GCPauseMs  float64 `json:"gc_pause_ms"`
-	PeakTapQ   int     `json:"peak_tap_queue"`
+	// PeakTapQ is the deepest tap queue seen at a sample; a queue that
+	// filled and emptied between samples does not show here.
+	PeakTapQ int `json:"peak_tap_queue"`
+	// TapBlocked counts output calls that waited for the tap's checking
+	// pool, over the harness's life. It is counted, not sampled: zero
+	// means the tap never slowed the pipeline.
+	TapBlocked int64 `json:"tap_blocked_sends"`
 }
 
 func ResourcesOf(ss []Sample) Resources {

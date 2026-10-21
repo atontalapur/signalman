@@ -383,6 +383,13 @@ func (h *Harness) sampleLoop(ctx context.Context) {
 	}
 }
 
+// Resources is ResourcesOf(ss) with the tap's blocked send count.
+func (h *Harness) Resources(ss []Sample) Resources {
+	r := ResourcesOf(ss)
+	r.TapBlocked = h.Tap.Blocked()
+	return r
+}
+
 func (h *Harness) sampleOnce() {
 	end, com := h.Produced(), h.Committed()
 	s := Sample{
@@ -558,6 +565,6 @@ func MeasureCapacity(ctx context.Context, cfg Config, c *Corpus, n int, timeout 
 		Rate:        float64(n) / el.Seconds(),
 		Steady:      Throughput(ss, t0+el/10, t1-el/10),
 		Saturations: Saturations(ss, hc.Pipe.QueueSize, hc.Pipe.MaxInflightBatches),
-		Resources:   ResourcesOf(ss),
+		Resources:   h.Resources(ss),
 	}, nil
 }
