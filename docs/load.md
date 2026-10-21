@@ -55,8 +55,10 @@ SIGNALMAN_LOAD=1 SIGNALMAN_CORPUS=/path/to/sigmahq SIGNALMAN_LOAD_BASELINE=2465 
   the broker. It accepts each batch's outputs as durable, then checks them:
   one verdict per rule of the batch's RuleSetV, one RuleSetV per batch,
   alerts equal to matched verdicts, and at the end exactly one outcome per
-  offset. Its queue never held a call in any run (peak 0), so it never
-  slowed the sink it stands in for.
+  offset. Its queue was empty at every sample in the recorded run (peak 0).
+  That is sampled, so a queue that filled and emptied between samples
+  would not show; the tap now counts every call that had to wait for it
+  (`tap_blocked_sends` in each report).
 - "Digest equals replay" means the run's verdicts, one copy per event,
   fold to the same per-partition digest as reading `events.raw` back and
   evaluating each record once with v1 outside the pipeline.
@@ -111,8 +113,9 @@ with 409 ms of total pause.
 
 **Still needs Redpanda.** The 30-minute duration; broker fetch and disk
 behavior with a quarter-million-record lag; the lag and staleness metrics as
-Prometheus would scrape them. The ClickHouse sink is not on this branch, so
-alert inserts were not part of the sink's cost.
+Prometheus would scrape them. `signalman-sink` reads the `alerts` topic as
+a separate process and is not in the harness, so alert inserts were not
+part of the sink's cost.
 
 ## Sustained 5x capacity
 
@@ -163,8 +166,10 @@ and drained 1 s after the last restart.
 
 **Duplicates and the sink.** The replay produced duplicates, as
 at-least-once delivery promises: 500 duplicate verdict records and 467
-duplicate alerts, every one byte-for-byte equal to its first write in
-verdicts (none changed on redelivery). 110,098 alert records collapse on
+duplicate alerts. The recorded run compared each redelivered verdict
+record with its first write by rule set and matched rules, and none
+differed; since then the tap compares the record bytes (see "Since the
+recorded run"). 110,098 alert records collapse on
 `(partition, seq, rule_id)` to 109,631 distinct alerts. That is exactly the
 109,631 matches the partition offline run, which replayed the same 118,320
 events with no kill, produced.
@@ -176,8 +181,8 @@ events with no kill, produced.
 tree; a real `kill -9` of `signalmand` also loses the producer's buffered
 records and needs the group to notice a dead member (session timeout,
 rebalance). That the alert table's ReplacingMergeTree collapses the
-duplicates was checked by counting distinct keys, not by ClickHouse; the
-ClickHouse alert sink is not on this branch. Not run.
+duplicates was checked by counting distinct keys, not by ClickHouse;
+`signalman-sink` was not part of the run. Not run.
 
 ## Poison record
 
@@ -232,8 +237,8 @@ were not exercised. The batch boundary does not depend on the broker.
 
 ## ClickHouse unavailable
 
-**The ClickHouse experiment itself: not run.** The ClickHouse alert sink is
-not on this branch, and there is no ClickHouse here. What ran instead is
+**The ClickHouse experiment itself: not run.** `signalman-sink` was not
+part of the run, and there is no ClickHouse here. What ran instead is
 its in-process analogue: every output write the pipeline's sink makes
 failed for 30 s (from 20 s to 50 s of a 90 s run at 0.8x, spec: 10 minutes).
 From the pipeline's side that is the same event: its sink cannot make a
@@ -287,7 +292,7 @@ run's worst latencies (p99 26.5 s, max 30.5 s), which is the outage length.
 digest equals replay.
 
 **Whether the canary alerts on the dead partition.** Not run. The canary
-and silence detector are Plan E, built on another branch. From the
+and silence detector (Plan E) were not part of the harness. From the
 partition's commit and lag, this run shows what the canary has to see: a
 partition whose committed offset stops moving while its lag grows.
 
@@ -295,6 +300,38 @@ partition whose committed offset stops moving while its lag grows.
 generator or source writing to that partition blocks or errors, which this
 simulation does not model. A rebalance and the consumer's fetch error
 handling are also untested. Not run.
+
+## Since the recorded run
+
+The figures above come from the run of 2026-10-21, on the load harness
+branch before the review fixes of the pipeline, sink, observability,
+shadow and cutover work (stack layers 3 to 9) were merged into it: the
+output record size cap and its two drop reasons (`record-too-large`,
+`output-too-large`), permanent produce errors, `StartOffsets` for the
+audit floor, the rebalance commit fix, and the rest. The seven experiments
+were not re-run in full afterwards. After the merge, sustained 2x (scale
+0.05, 29,580 events) and sustained 5x and partition offline (scale 0.1)
+ran on the 1,236 SigmaHQ rules: no drops, no missing offsets, no
+duplicates, digest equal to replay.
+
+Assertions added after the recorded run, which the recorded numbers were
+not checked against:
+
+- `Correctness.OK` fails on any redelivered verdict record whose bytes
+  differ from its first write (`redelivery_changed`); before, a
+  redelivery was compared on rule set and matched rule indices, and the
+  count was reported but not asserted. The reload experiment uses
+  `OKAcrossReloads`, where a redelivery under the other rule set is
+  allowed.
+- Sustained 5x asserts that its digest equals the replay. The recorded
+  run reported it (equal) but did not fail on it.
+- Partition offline asserts no duplicate verdict records, alerts or drops.
+- The tap counts output calls that waited for its checking pool
+  (`tap_blocked_sends`), where the recorded run sampled the queue depth.
+- `Replay` stops on a permanent produce error and counts records resent
+  after a failed call (`Resent`): a Kafka produce can write part of a call
+  before it fails, so up to that many records may be duplicates in
+  `events.raw`. In process, the broker writes all of a call or none.
 
 ## What is not answered yet
 
