@@ -146,6 +146,86 @@ about 2.9 microseconds and 15 allocations per rule per event. v1 is the
 reference oracle and is never optimized, so this is the baseline v2 is
 measured against, not a performance claim.
 
+## v2 compiled engine
+
+Run of 2026-10-21 on branch `feat/SIG-38-v2-engine`. Apple M1 Pro, 8
+cores, 16 GB, Go 1.27.1. This is a laptop, not the spec's 8-core reference
+machine, and every number is in-process: no pipeline, no Kafka, no sink.
+v1 was re-measured in the same session so the two columns share a machine.
+
+### Equivalence with v1
+
+Every verdict is compared field by field, then each partition's digest.
+Events come from `genEvents` in `internal/engine/v2/harness_test.go`: for
+each rule, an event built to satisfy its condition, sometimes perturbed or
+mixed with another rule's fields, plus a few null and list edge cases.
+Aimed events are what make true verdicts common enough for a disagreement
+to show; they are not real traffic.
+
+| Rule set | Rules | Events | Verdicts | Matched | Digests equal |
+|---|---|---|---|---|---|
+| `internal/sigma/testdata` | 2 | 83 | 166 | 42 | 4 of 4 partitions |
+| `internal/engine/v1/testdata` | 3 | 123 | 369 | 78 | 4 of 4 |
+| SigmaHQ `rules` tree | 1,236 | 1,239 | 1,531,404 | 1,163 | 4 of 4 |
+| SigmaHQ `rules`, `SIGNALMAN_EQUIV_PER_RULE=20` | 1,236 | 24,723 | 30,557,628 | 22,952 | 4 of 4 |
+| All four live trees merged | 1,478 | 1,481 | 2,188,918 | 1,461 | 4 of 4 |
+
+```bash
+SIGNALMAN_CORPUS=/path/to/sigmahq SIGNALMAN_EQUIV_PER_RULE=20 \
+  go test -run TestEquivalenceOnCorpus -v ./internal/engine/v2/
+```
+
+`FuzzPrefilterSound` compares v2 with v1 on generated rules (every
+modifier chain the loader accepts, negated and disjunctive conditions,
+string, int, null and list event values) and checks prefilter soundness
+on each case: 761,304 executions in 120 s, no failure.
+
+### Prefilter and gating on the corpus
+
+Over the 1,236-rule set: 1,226 rules are keyed on a literal from their
+condition, 10 only on their logsource literal, and `Always` is empty;
+7,927 distinct literals. On the 1,239-event stream the prefilter rejected
+1,513,077 of 1,531,404 (rule, event) pairs, and presence gating settled
+801,541 pairs on a stream of the same size. Neither rejected a pair v1
+matched.
+
+### Speed
+
+`go test -bench . -benchtime 3s -benchmem`, v1 in `./internal/engine/v1/`,
+v2 in `./internal/engine/v2/`. "Single event" is the Sysmon process
+creation event both benchmarks use; "stream" cycles the 1,239-event
+generated stream.
+
+| Benchmark | Rules | v1 ns/event | v1 allocs/event | v2 ns/event | v2 allocs/event |
+|---|---|---|---|---|---|
+| Fixtures, single event | 3 | 1,017 | 7 | 936 | 0 |
+| Corpus, single event | 1,236 | 3,469,928 | 18,593 | 27,845 | 0 |
+| Corpus, stream | 1,236 | 938,733 | 4,192 | 17,633 | 0 |
+
+The corpus stream benchmark reports 1 B/op for v2: averaged over 222,340
+events, that is the scratch being rebuilt after a GC empties the
+`sync.Pool`, not a per-event allocation. `TestEvaluateIntoDoesNotAllocate`
+asserts zero with `testing.AllocsPerRun` on the fixtures and the corpus.
+
+| v2 measure | Value | Spec target |
+|---|---|---|
+| Throughput, one goroutine, stream | 56,710 events/s | |
+| Throughput, 8 goroutines sharing one evaluator | 413,337 events/s | 50k ev/s on 8 cores |
+| Latency, one goroutine, 4,947 events | p50 16.0 µs, p90 24.4 µs, p99 39.3 µs, max 94 µs | p99 < 400 µs |
+| v1 latency, same events | p50 767 µs, p90 2.14 ms, p99 4.34 ms, max 15.5 ms | |
+| Compile, 1,478 rules (largest set) | 57.5 ms/op benchmark, 76.6 ms one-shot | < 2 s |
+
+The 1,478-rule program has 8,562 leaves interned to 3,925 predicates over
+29 fields, and 9,464 literals.
+
+```bash
+SIGNALMAN_CORPUS=/path/to/sigmahq go test -run '^$' -bench . -benchtime 3s -benchmem ./internal/engine/v2/
+SIGNALMAN_CORPUS=/path/to/sigmahq SIGNALMAN_LATENCY=1 go test -run TestCorpusLatency -v ./internal/engine/v2/
+```
+
+The v1 benchmark looks for the corpus at `corpora/sigmahq` in the module
+root only.
+
 ## Codebase
 
 As of commit `365ed2d`: about 7,400 lines of Go, of which about 4,200 are
@@ -157,8 +237,8 @@ From the spec. These are goals, not results.
 
 - 50,000 events/s against a 1,500 rule corpus on one 8-core node, p99
   end-to-end latency under 250ms. Measured in Plan F.
-- v2 throughput relative to v1 with identical verdict digests. Measured in
-  Plan G.
+- v2 throughput on the reference machine and end to end through the
+  pipeline. The in-process numbers above are from a laptop.
 
 ## Summary line
 

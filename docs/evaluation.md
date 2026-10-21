@@ -114,12 +114,11 @@ accepted corpus. v1 has no index and no prefilter by design, so the cost is a
 linear scan and the per-rule figure is what matters: about 2.9 microseconds
 and 15 allocations per rule per event.
 
-Fifteen allocations per rule is the number v2 has to attack, and it is
+Fifteen allocations per rule was the number v2 had to attack, and it is
 evidence rather than a guess: `Value.Text` allocates a string for int and
 bool values, and the wildcard matcher lowercases and rune-decodes its input
-on every call. Both sit on the per-field, per-rule path. The entry in
-`TODOS.md` carries the options; the decision belongs to Plan G, with these
-numbers as the baseline.
+on every call. Both sit on the per-field, per-rule path. v2's answer is
+below; v1 keeps both, on purpose.
 
 This is not a pipeline throughput figure. There is no ingest, no
 normalization, and no sink yet, and events per second under real traffic is
@@ -133,6 +132,62 @@ orders, produce identical per-partition digests. Its companion,
 `TestDigestMovesWhenOneRuleChanges`, asserts the other half, since a digest
 that never moved would pass the first test trivially.
 
+## The v2 compiled engine
+
+`internal/engine/v2` has v1's shape (`New`, `Evaluate`, `EvaluateInto`,
+verdicts stamped `v2`) and must produce v1's verdicts exactly. `Compile`
+turns the rule set into a `Program`:
+
+- **Interning.** Every leaf, logsource tests included, is deduplicated into
+  `Program.Preds` on a canonical key built from the field, the keyword flag,
+  the modifier chain, and the typed values. `ast.Pred` carries those, so the
+  key never depends on a closure or on `Desc`. Each rule becomes a `Tree`
+  over predicate indices, with the logsource as its first conjunct.
+- **Presence gating.** Each rule has a required-field mask: And unions its
+  children, Or intersects them, Not and null tests require nothing. An
+  event's present fields are a bitset; a rule whose mask is not covered is
+  false without a walk.
+- **Literal prefilter.** `requiredLiterals` derives, per rule, alternatives
+  of which at least one must occur in the event. Wildcard leaves give their
+  longest literal run, And takes its best child, Or the union of all arms or
+  nothing, Not never anything. A rule with no condition literal falls back
+  to its logsource literal; one with neither goes in `Always`
+  (`AlwaysSize`). One Aho-Corasick automaton (`internal/engine/v2/aho`)
+  scans each event field's folded text once.
+- **Lazy bitset.** Trees read a per-event predicate bitset, filled on first
+  use. Predicates have no side effects, so laziness cannot move a result.
+
+Per event, one pass over the field map caches each program field's value
+and folded text, sets the presence bits, and feeds the automaton. That map
+is ranged in Go's order, which is safe because every effect is a bit set or
+a slot written once. Rules are then visited in rule id order, and every rule
+emits a verdict, `false` when the gate or the prefilter settles it.
+
+Leaves are evaluated from `match.Plan`, the same resolved modifier chain
+`match.Build` turns into v1's closure, against the folded cache, with no
+allocation: `match.Folded` handles exact, prefix, suffix and contains as
+byte comparisons and runs MatchString's walk otherwise; integer text comes
+from `strconv.AppendInt`; numeric parsing and the cidr precheck avoid the
+error values `strconv` and `netip` allocate. Scratch state comes from a
+`sync.Pool`, so one evaluator is safe across goroutines.
+
+### How v2 is held to v1
+
+- Verdict by verdict and digest by digest over the fixtures and, when
+  `SIGNALMAN_CORPUS` or `corpora/sigmahq` exists, the SigmaHQ corpus
+  (`TestEquivalenceOnCorpus`, `TestCompileLargestRuleSet`).
+- Rule independence: sampled rules compiled alone, and the whole set
+  shuffled, give the same verdicts (`TestRuleIndependence`).
+- Soundness of each shortcut: prefilter rejects implies v1 false
+  (`TestPrefilterSound*`, `FuzzPrefilterSound`), gated out implies v1 false
+  (`TestGatingSound`).
+- The pieces against their reference: `Folded` against `MatchString`,
+  `AppendFold` against `strings.ToLower`, `parseInt10` against
+  `strconv.ParseInt`, the automaton against `bytes.Contains`, each by test
+  and fuzz target.
+
+Numbers are in `docs/results.md`.
+
 ## Where this is enforced
 
 - `internal/engine/v1/evaluator.go` — the walk, the logsource gate, verdicts
@@ -140,3 +195,4 @@ that never moved would pass the first test trivially.
 - `internal/engine/v1/digest_property_test.go` — the gate property
 - `internal/fixture/` — rule fixtures, run through v1
 - `internal/explain/` — the explain walker and its v1 equivalence test
+- `internal/engine/v2/` — compile, gate, prefilter, and the equivalence tests

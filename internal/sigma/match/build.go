@@ -51,7 +51,21 @@ const (
 // comparison, then the combination across values (Any unless all is
 // present). Every transform may fan out into several variants, and any
 // variant matching is a match.
+//
+// Build is Plan followed by Spec.Matcher, so the closure and the plan a
+// compiled engine reads can never describe two different tests.
 func Build(mods []string, vals []event.Value) (Matcher, error) {
+	s, err := Plan(mods, vals)
+	if err != nil {
+		return nil, err
+	}
+	return s.Matcher(), nil
+}
+
+// Plan validates a detection entry and resolves it into a Spec: every
+// modifier applied, every transform expanded, every regex and prefix
+// parsed. It fails exactly when Build fails, with the same error.
+func Plan(mods []string, vals []event.Value) (Spec, error) {
 	var (
 		transforms  []transform
 		comparison  = modEquals
@@ -89,29 +103,26 @@ func Build(mods []string, vals []event.Value) (Matcher, error) {
 		case modWinDash:
 			transforms = append(transforms, WinDashVariants)
 		default:
-			return nil, fmt.Errorf("%w %q", ErrUnsupportedModifier, m)
+			return Spec{}, fmt.Errorf("%w %q", ErrUnsupportedModifier, m)
 		}
 	}
 
 	if err := validateChain(mods, comparison, comparisons, reInsens, fieldref, len(transforms) > 0); err != nil {
-		return nil, err
+		return Spec{}, err
 	}
 
 	if len(vals) == 0 {
-		return nil, errors.New("detection entry has no values")
+		return Spec{}, errors.New("detection entry has no values")
 	}
-	perValue := make([]Matcher, 0, len(vals))
+	spec := Spec{All: conjoin, Values: make([]ValueSpec, 0, len(vals))}
 	for _, v := range vals {
-		m, err := buildOne(v, transforms, comparison, reInsens, fieldref)
+		vs, err := planOne(v, transforms, comparison, reInsens, fieldref)
 		if err != nil {
-			return nil, err
+			return Spec{}, err
 		}
-		perValue = append(perValue, m)
+		spec.Values = append(spec.Values, vs)
 	}
-	if conjoin {
-		return All(perValue), nil
-	}
-	return Any(perValue), nil
+	return spec, nil
 }
 
 // transform is one encoding step. It returns every variant of its input,
@@ -152,61 +163,69 @@ func validateChain(mods []string, comparison string, comparisons int, reInsens, 
 	return nil
 }
 
-func buildOne(v event.Value, transforms []transform, comparison string, reInsens, fieldref bool) (Matcher, error) {
+func planOne(v event.Value, transforms []transform, comparison string, reInsens, fieldref bool) (ValueSpec, error) {
 	if v.Kind == event.KindNull {
 		// "field: null" is the only null form. A comparison, a transform, or
 		// a field reference on null is a rule error, as it is in pySigma.
 		if comparison != modEquals || fieldref || len(transforms) > 0 {
-			return nil, fmt.Errorf("%w: a modifier chain on a null value", ErrUnsupportedModifier)
+			return ValueSpec{}, fmt.Errorf("%w: a modifier chain on a null value", ErrUnsupportedModifier)
 		}
-		return Null(), nil
+		return ValueSpec{Kind: SpecNull}, nil
 	}
 	text, ok := v.Text()
 	if !ok {
-		return nil, fmt.Errorf("a detection value must be a scalar, got %s", v.Kind)
+		return ValueSpec{}, fmt.Errorf("a detection value must be a scalar, got %s", v.Kind)
 	}
 
 	if fieldref {
-		return FieldRef(text), nil
+		return ValueSpec{Kind: SpecFieldRef, Field: text}, nil
 	}
 
 	switch comparison {
 	case modRe:
-		return Regex(text, reInsens)
+		re, err := compileRegex(text, reInsens)
+		if err != nil {
+			return ValueSpec{}, err
+		}
+		return ValueSpec{Kind: SpecRegex, Regex: re}, nil
 	case modCidr:
-		return CIDR(text)
+		p, err := parseCIDR(text)
+		if err != nil {
+			return ValueSpec{}, err
+		}
+		return ValueSpec{Kind: SpecCIDR, Prefix: p}, nil
 	case modLt, modLte, modGt, modGte:
 		n, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("%s modifier needs an integer, got %q", comparison, text)
+			return ValueSpec{}, fmt.Errorf("%s modifier needs an integer, got %q", comparison, text)
 		}
-		return Compare(comparison, n)
+		return ValueSpec{Kind: SpecCompare, Op: comparison, N: n}, nil
 	}
 
 	variants, err := expand(text, transforms)
 	if err != nil {
-		return nil, err
+		return ValueSpec{}, err
 	}
-	ms := make([]Matcher, 0, len(variants))
+	pats := make([]string, 0, len(variants))
 	for _, s := range variants {
 		switch comparison {
 		case modContains:
-			ms = append(ms, Contains(s))
+			pats = append(pats, "*"+padTrailingBackslash(s)+"*")
 		case modStartsWith:
-			ms = append(ms, StartsWith(s))
+			pats = append(pats, padTrailingBackslash(s)+"*")
 		case modEndsWith:
-			ms = append(ms, EndsWith(s))
+			pats = append(pats, "*"+padTrailingBackslash(s))
 		default:
-			ms = append(ms, Equals(s))
+			pats = append(pats, s)
 		}
 	}
-	if len(ms) == 0 {
+	if len(pats) == 0 {
 		// Every variant was empty, which base64offset can produce for a very
 		// short plaintext. An entry that can never match is a rule bug.
-		return nil, fmt.Errorf("%w: the modifier chain produced no value to match",
+		return ValueSpec{}, fmt.Errorf("%w: the modifier chain produced no value to match",
 			ErrUnsupportedModifier)
 	}
-	return Any(ms), nil
+	return ValueSpec{Kind: SpecPattern, Patterns: pats}, nil
 }
 
 // maxVariants bounds the whole chain, not one transform. Each transform caps
