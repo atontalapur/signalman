@@ -9,6 +9,7 @@ import (
 
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/event"
+	"github.com/atontalapur/signalman/internal/sigma"
 )
 
 // WireValue is an event.Value in JSON. Each Value kind maps to exactly one
@@ -140,6 +141,66 @@ func NormRecord(it *Item) broker.Record {
 		panic(err)
 	}
 	return broker.Record{Topic: TopicEventsNorm, Partition: broker.AnyPartition, Key: []byte(it.HostID), Value: b}
+}
+
+// Alert is the alerts topic record body, one per matched verdict. Its
+// fields follow the ClickHouse alert table in the spec (phase 04), so the
+// sink can insert it as it stands. The table dedups on (partition, seq,
+// rule_id), which is what makes a redelivered batch harmless.
+type Alert struct {
+	Partition  int32             `json:"partition"`
+	Seq        uint64            `json:"seq"`
+	RuleID     string            `json:"rule_id"`
+	RuleTitle  string            `json:"rule_title"`
+	Severity   string            `json:"severity"`
+	EventTime  time.Time         `json:"event_time"`
+	IngestTime time.Time         `json:"ingest_time"`
+	HostID     string            `json:"host_id"`
+	Source     string            `json:"source"`
+	Fields     map[string]string `json:"fields"`
+	// Raw is a string: a normalized record is valid UTF-8 by construction.
+	Raw string `json:"raw"`
+}
+
+// AlertRecord is the alerts topic record for one match, keyed by rule_id.
+func AlertRecord(r *sigma.Rule, it *Item) broker.Record {
+	ev := it.Event
+	f := make(map[string]string, len(ev.Fields))
+	for k, v := range ev.Fields {
+		f[k] = flat(v)
+	}
+	b, err := json.Marshal(Alert{
+		Partition:  ev.Partition,
+		Seq:        ev.Seq,
+		RuleID:     r.ID,
+		RuleTitle:  r.Title,
+		Severity:   r.Level,
+		EventTime:  ev.EventTime,
+		IngestTime: ev.IngestAt,
+		HostID:     it.HostID,
+		Source:     ev.Source,
+		Fields:     f,
+		Raw:        string(ev.Raw),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return broker.Record{Topic: TopicAlerts, Partition: broker.AnyPartition, Key: []byte(r.ID), Value: b}
+}
+
+// flat renders a value for the alert table's Map(String, String): scalars
+// as their Sigma text, null as empty, a list as its JSON array.
+func flat(v event.Value) string {
+	if s, ok := v.Text(); ok {
+		return s
+	}
+	if v.Kind == event.KindList {
+		b, err := json.Marshal(WireValue(v))
+		if err == nil {
+			return string(b)
+		}
+	}
+	return ""
 }
 
 // EventVerdicts is a verdict topic record body: every verdict for one event,

@@ -19,6 +19,13 @@ type Metrics struct {
 	// ConsumerLag is records in the log not yet committed by the group.
 	// Labels: topic, partition.
 	ConsumerLag *prometheus.GaugeVec
+	// Verdicts counts durable verdicts. Labels: engine, matched.
+	Verdicts *prometheus.CounterVec
+	// RuleMatches counts durable matches per rule. Labels: rule_id.
+	RuleMatches *prometheus.CounterVec
+	// RuleSetVersion is 1 for the rule set the next batch will use.
+	// Labels: ruleset_v, taxonomy_v.
+	RuleSetVersion *prometheus.GaugeVec
 }
 
 // New registers the metrics on reg.
@@ -40,7 +47,20 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "signalman_consumer_lag_records",
 			Help: "Log end offset minus the committed offset, per partition.",
 		}, []string{"topic", "partition"}),
+		Verdicts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_verdicts_total",
+			Help: "Verdicts written durably, one per event per enabled rule.",
+		}, []string{"engine", "matched"}),
+		RuleMatches: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "signalman_rule_matches_total",
+			Help: "Matched verdicts written durably, per rule.",
+		}, []string{"rule_id"}),
+		RuleSetVersion: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "signalman_ruleset_version_info",
+			Help: "1 for the rule set and taxonomy versions new batches are evaluated under.",
+		}, []string{"ruleset_v", "taxonomy_v"}),
 	}
-	reg.MustRegister(m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag)
+	reg.MustRegister(m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
+		m.Verdicts, m.RuleMatches, m.RuleSetVersion)
 	return m
 }

@@ -16,7 +16,7 @@ import (
 
 func newPipeline(t testing.TB, r *rig, cfg Config) *Pipeline {
 	t.Helper()
-	p, err := New(cfg, r.b, r.norm, V1(r.rs), r.m, nil)
+	p, err := New(cfg, r.b, r.norm, NewSlot(V1(r.rs), r.m), r.m, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestConfigWorkerPoolsAreConfiguredNotComputed(t *testing.T) {
 	} {
 		cfg := testConfig()
 		mutate(&cfg)
-		if _, err := New(cfg, r.b, r.norm, V1(r.rs), r.m, nil); err == nil {
+		if _, err := New(cfg, r.b, r.norm, NewSlot(V1(r.rs), r.m), r.m, nil); err == nil {
 			t.Fatalf("config %+v accepted; sizes are stated, never defaulted from the machine", cfg)
 		}
 	}

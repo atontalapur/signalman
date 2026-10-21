@@ -67,9 +67,9 @@ func (c Config) validate() error {
 // Pipeline is ingest -> normalize -> match -> sink over one consumer group.
 //
 // Delivery is at-least-once. A batch is one poll's records. The sink writes
-// a batch's outputs (events.norm, verdicts, drops), waits until every one is
-// durable, and only then commits the batch's offsets; batches commit in poll
-// order. A crash anywhere before the commit redelivers the batch. The
+// a batch's outputs (events.norm, verdicts, alerts, drops), waits until
+// every one is durable, and only then commits the batch's offsets; batches
+// commit in poll order. A crash anywhere before the commit redelivers the batch. The
 // redelivered records get the same Seq (it is the offset), so the
 // duplicates are exact copies, which the alert sink's ReplacingMergeTree
 // collapses on (partition, seq, rule_id). The other choice, commit before
@@ -85,7 +85,7 @@ type Pipeline struct {
 	b    broker.Broker
 	in   *Ingest
 	norm *Normalizer
-	eng  Engine
+	slot *Slot
 	m    *obs.Metrics
 	log  *slog.Logger
 
@@ -94,8 +94,8 @@ type Pipeline struct {
 	committed map[broker.TopicPartition]int64
 }
 
-// New builds a pipeline. log may be nil.
-func New(cfg Config, b broker.Broker, norm *Normalizer, eng Engine, m *obs.Metrics, log *slog.Logger) (*Pipeline, error) {
+// New builds a pipeline evaluating with whatever slot holds. log may be nil.
+func New(cfg Config, b broker.Broker, norm *Normalizer, slot *Slot, m *obs.Metrics, log *slog.Logger) (*Pipeline, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("pipeline config: %w", err)
 	}
@@ -113,7 +113,7 @@ func New(cfg Config, b broker.Broker, norm *Normalizer, eng Engine, m *obs.Metri
 		b:         b,
 		in:        NewIngest(m),
 		norm:      norm,
-		eng:       eng,
+		slot:      slot,
 		m:         m,
 		log:       log,
 		hw:        map[broker.TopicPartition]int64{},
@@ -124,7 +124,7 @@ func New(cfg Config, b broker.Broker, norm *Normalizer, eng Engine, m *obs.Metri
 // batch is one poll. remaining is decremented by the sink goroutine only.
 type batch struct {
 	items     []*Item
-	eng       Engine
+	act       *active // read from the slot once, when the batch is formed
 	remaining int
 }
 
@@ -173,7 +173,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	pool(&wg, p.cfg.MatchWorkers, func() {
 		for w := range matchCh {
 			if w.it.Drop == nil {
-				p.match(w.b.eng, w.it)
+				p.match(w.b.act.eng, w.it)
 			}
 			if !send(ctx, sinkCh, w) {
 				return
@@ -223,7 +223,7 @@ func (p *Pipeline) ingest(ctx context.Context, cons broker.Consumer, normCh chan
 			continue
 		}
 		p.observe(f.HighWatermarks)
-		b := &batch{eng: p.eng, items: make([]*Item, len(f.Records)), remaining: len(f.Records)}
+		b := &batch{act: p.slot.load(), items: make([]*Item, len(f.Records)), remaining: len(f.Records)}
 		for i, r := range f.Records {
 			b.items[i] = p.in.Admit(r)
 		}
@@ -279,13 +279,15 @@ func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-cha
 		if err := p.write(ctx, b); err != nil {
 			return err
 		}
+		p.count(b)
 		p.commit(ctx, cons, b)
 	}
 }
 
-// outputs builds a batch's records. Items are in poll order, which is offset
-// order within a partition, so each output topic gets a partition's records
-// in Seq order.
+// outputs builds a batch's records: events.norm, verdicts, and an alert per
+// match, or a drop. Items are in poll order, which is offset order within a
+// partition, so a partition's records reach every topic in Seq order, which
+// is the ordering invariant for alerts.
 func outputs(b *batch) []broker.Record {
 	recs := make([]broker.Record, 0, 2*len(b.items))
 	for _, it := range b.items {
@@ -293,9 +295,41 @@ func outputs(b *batch) []broker.Record {
 			recs = append(recs, DropRecord(it))
 			continue
 		}
-		recs = append(recs, NormRecord(it), VerdictRecord(b.eng, it))
+		recs = append(recs, NormRecord(it), VerdictRecord(b.act.eng, it))
+		for _, v := range it.Verdicts {
+			if v.Matched {
+				r, ok := b.act.rules[v.RuleID]
+				if !ok {
+					panic(fmt.Sprintf("engine %s matched rule %q, which is not in its rule set", b.act.eng.Name(), v.RuleID))
+				}
+				recs = append(recs, AlertRecord(r, it))
+			}
+		}
 	}
 	return recs
+}
+
+// count updates the verdict and match counters for a batch that is now
+// durable, so the counters never run ahead of what a consumer can read.
+func (p *Pipeline) count(b *batch) {
+	var matched, unmatched float64
+	perRule := map[string]float64{}
+	for _, it := range b.items {
+		for _, v := range it.Verdicts {
+			if v.Matched {
+				matched++
+				perRule[v.RuleID]++
+			} else {
+				unmatched++
+			}
+		}
+	}
+	name := b.act.eng.Name()
+	p.m.Verdicts.WithLabelValues(name, "true").Add(matched)
+	p.m.Verdicts.WithLabelValues(name, "false").Add(unmatched)
+	for id, n := range perRule {
+		p.m.RuleMatches.WithLabelValues(id).Add(n)
+	}
 }
 
 // write produces a batch's outputs, retrying until they are durable or ctx
