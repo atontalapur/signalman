@@ -227,6 +227,65 @@ SIGNALMAN_CORPUS=/path/to/sigmahq SIGNALMAN_LATENCY=1 go test -run TestCorpusLat
 The v1 benchmark looks for the corpus at `corpora/sigmahq` in the module
 root only.
 
+## Pipeline baseline (Plan F, S-60)
+
+Run of 2026-10-21 on branch `feat/SIG-36-load-harness`. Apple M1 Pro, 8
+cores, 16 GB, Go 1.27.1. In-process, in-memory broker: `pipe.Pipeline`
+over `broker.Memory` behind the `internal/loadtest` tap, which accepts the
+output topics instead of storing them and checks invariant 1 on every
+batch. No Redpanda, no ClickHouse, no network, and the generator, the
+pipeline, and the checker share the same eight cores. It is a floor on
+per-node cost and a ceiling on throughput, not a deployment number.
+
+Pipeline configuration is `signalmand`'s defaults: 8 partitions, max poll
+500, 8 normalize and 8 match workers, queue 1024, 4 in-flight batches.
+Engine v1. The corpus is generated from the rule set by
+`loadtest.FromRules` (20 events per rule, seed 1, aimed at the rules the
+way the v2 equivalence harness aims them) and cycled.
+
+Capacity is a backlog drained from cold: the records are produced first,
+then the pipeline starts, and the clock stops at the last commit.
+Latency is from the `events.raw` produce to the moment the event's outputs
+are accepted as durable, with the pipeline offered a fixed fraction of
+capacity for 30 s, first 5 s left out.
+
+| Rule set | Rules | Capacity (events/s) | Backlog | Stage that fills | Offered | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|---|---|---|---|
+| SigmaHQ `rules` tree | 1,236 | 2,465 | 40,000 in 16.2 s | match (normalize and batches behind it) | 0.5x, 1,232/s | 43 ms | 97 ms | 284 ms | 346 ms |
+| | | | | | 0.8x, 1,972/s | 624 ms | 1.48 s | 1.69 s | 2.04 s |
+| `rules/` | 20 | 121,287 | 1,000,000 in 8.2 s | sink and match together | 0.5x, 60,644/s | 1.1 ms | 6.7 ms | 87 ms | 184 ms |
+| | | | | | 0.8x, 97,030/s | 25 ms | 542 ms | 640 ms | 706 ms |
+
+Every run accounted for every event: one verdict record per event with
+one verdict per rule, zero drops, zero straddled batches.
+
+What the numbers say:
+
+- The SigmaHQ baseline is 2,465 events/s. v1 costs about 0.94 ms per
+  event on this rule set (the v1 stream benchmark above), so eight match
+  workers alone could evaluate about 8,500 events/s; the pipeline gets 29%
+  of that. The gap has not been profiled. The likely costs are v1's 4,192
+  allocations per event under eight workers (GC), the normalizer, and the
+  single sink goroutine marshalling a 1,236-verdict record per event. The
+  spec's 50,000 events/s is 20 times this baseline; v1 is the oracle and is
+  not expected to reach it.
+- p99 under 250 ms holds at neither load on the SigmaHQ set. At 0.8x the
+  pipeline is close enough to saturation that the bounded queues fill and
+  latency is their drain time: up to `(inflight + 2) x max-poll` = 3,000
+  admitted records at about 2,500/s is 1.2 s, plus the stage channels.
+- With 20 rules the match stage is no longer the limit; the single sink
+  goroutine, which builds and writes every output record, fills first.
+
+```bash
+SIGNALMAN_LOAD=1 SIGNALMAN_CORPUS=/path/to/sigmahq SIGNALMAN_LOAD_OUT=out \
+  go test -run TestLoadBaseline -v -timeout 1h ./internal/loadtest/
+# without SIGNALMAN_CORPUS (or corpora/sigmahq) it uses rules/
+```
+
+`cmd/loadgen -measure-baseline N` runs the same capacity measurement before
+replaying into Kafka, and `-baseline R -multiple X` replays at a stated
+multiple without measuring.
+
 ## Codebase
 
 As of commit `365ed2d`: about 7,400 lines of Go, of which about 4,200 are
@@ -237,7 +296,9 @@ tests.
 From the spec. These are goals, not results.
 
 - 50,000 events/s against a 1,500 rule corpus on one 8-core node, p99
-  end-to-end latency under 250ms. Measured in Plan F.
+  end-to-end latency under 250ms. The in-process v1 baseline above is
+  2,465 events/s on 1,236 rules; the target belongs to v2 through the
+  pipeline against Redpanda, which has not been run.
 - v2 throughput on the reference machine and end to end through the
   pipeline. The in-process numbers above are from a laptop.
 

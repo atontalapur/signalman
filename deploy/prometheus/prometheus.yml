@@ -1,5 +1,5 @@
-# Scrapes signalmand and signalman-sink and evaluates the alert rules under
-# alerts/.
+# Scrapes signalmand, signalman-sink, and cmd/differ and evaluates the alert
+# rules under alerts/.
 #
 # Both run on the host (`go run ./cmd/signalmand ...`, `go run
 # ./cmd/signalman-sink ...`). signalmand serves /metrics on :9464 and
@@ -22,3 +22,9 @@ scrape_configs:
   - job_name: signalman-sink
     static_configs:
       - targets: ["host.docker.internal:9465"]
+  # cmd/differ serves the divergence counters the cutover gates read
+  # (docs/cutover.md) on :9466. Down when no differ runs, which the gate
+  # checker reports as unchecked rather than as zero divergences.
+  - job_name: differ
+    static_configs:
+      - targets: ["host.docker.internal:9466"]

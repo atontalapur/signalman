@@ -59,6 +59,9 @@ func coreMetricsTable(t *testing.T) map[string]specMetric {
 var extras = map[string]specMetric{
 	// The invariant 1 audit's output (Plan C); any increase is a P1.
 	"signalman_audit_violations_total": {typ: "counter", labels: []string{"partition"}},
+	// Windows the invariant 1 audit closed, so G6 can tell an audit that
+	// ran and found nothing from one that never ran (Plan H, SIG-43).
+	"signalman_audit_windows_total": {typ: "counter"},
 	// How many canary records the generator wrote, so a stalled canary can
 	// be told apart from a generator that stopped (Plan E, S-51).
 	"signalman_canary_injected_total": {typ: "counter", labels: []string{"partition"}},
@@ -67,6 +70,14 @@ var extras = map[string]specMetric{
 	// (Plan E, S-51). The spec's canary age is the same reading taken at
 	// the sink; signalman_canary_age_seconds stays as the pipeline's half.
 	"signalman_sink_canary_age_seconds": {typ: "gauge", labels: []string{"partition"}},
+	// Events the v2 shadow panicked on or returned a malformed verdict list
+	// for; each is a missing verdict for the differ (Plan G, S-80).
+	"signalman_shadow_failures_total": {typ: "counter", labels: []string{"engine"}},
+	// Alerts by serving engine, for G2's per-rule alert volume check
+	// (Plan G, S-81).
+	"signalman_alerts_total": {typ: "counter", labels: []string{"engine", "rule_id"}},
+	// The rollout percentage new batches are routed with (Plan G, S-81).
+	"signalman_rollout_percent": {typ: "gauge"},
 	// Alerts records signalman-sink wrote to alerts.dead because the table
 	// cannot hold them (Plan D); any increase is an alert stored nowhere
 	// queryable.
@@ -92,6 +103,10 @@ func touch(m *Metrics) {
 	m.CanaryInjected.WithLabelValues("0").Inc()
 	m.RuleSetVersion.WithLabelValues("rs", "tx").Set(1)
 	m.AuditViolations.WithLabelValues("0").Inc()
+	m.AuditWindows.Inc()
+	m.ShadowFailures.WithLabelValues("v2").Inc()
+	m.Alerts.WithLabelValues("v1", "r").Inc()
+	m.RolloutPercent.Set(1)
 	m.SinkDeadLetters.Inc()
 	m.EventTimeFuture.WithLabelValues("0").Inc()
 }

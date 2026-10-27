@@ -12,15 +12,22 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/atontalapur/signalman/internal/broker"
+	"github.com/atontalapur/signalman/internal/engine/v1"
+	"github.com/atontalapur/signalman/internal/engine/v2"
 	"github.com/atontalapur/signalman/internal/pipe"
 	"github.com/google/uuid"
 )
 
 // Columns is the alerts table's columns in table order, which is the order
 // Insert appends values in. schema_test.go holds it equal to the DDL.
+//
+// The first eleven are the spec's (phase 04). engine is an extension: the
+// engine that served the alert, v1 or v2, so alert volume per rule can be
+// compared across engines during the rollout.
 var Columns = []string{
 	"partition", "seq", "rule_id", "rule_title", "severity",
 	"event_time", "ingest_time", "host_id", "source", "fields", "raw",
+	"engine",
 }
 
 // severities are the Enum8 values of the severity column.
@@ -57,6 +64,10 @@ func checkTime(name string, t, lo, hi time.Time) error {
 // refused here, with a reason, rather than retried forever; the sink
 // dead-letters it.
 //
+// The engine must be v1 or v2: the column exists to compare alert volume
+// per engine during the cutover, and a row with any other value would be
+// counted under neither.
+//
 // The rule loader rejects a non-UUID id and a missing or unknown level
 // (codes invalid-id and level), so a loaded rule cannot produce such an
 // alert. These checks stay as a backstop for records from elsewhere: an
@@ -71,6 +82,10 @@ func Decode(r broker.Record) (pipe.Alert, error) {
 	}
 	if !validSeverity(a.Severity) {
 		return a, fmt.Errorf("rule %s severity %q is not one of informational, low, medium, high, critical", a.RuleID, a.Severity)
+	}
+	if a.Engine != v1.Name && a.Engine != v2.Name {
+		return a, fmt.Errorf("partition %d seq %d rule %s engine %q is not %s or %s; per-engine alert volume needs it",
+			a.Partition, a.Seq, a.RuleID, a.Engine, v1.Name, v2.Name)
 	}
 	if err := checkTime("event_time", a.EventTime, minEventTime, maxEventTime); err != nil {
 		return a, err
@@ -164,16 +179,21 @@ func (c *ClickHouse) Insert(ctx context.Context, rows []pipe.Alert) error {
 	}
 	defer func() { _ = batch.Close() }()
 	for _, a := range rows {
-		fields := a.Fields
-		if fields == nil {
-			fields = map[string]string{}
-		}
-		if err := batch.Append(a.Partition, a.Seq, a.RuleID, a.RuleTitle, a.Severity,
-			a.EventTime, a.IngestTime, a.HostID, a.Source, fields, a.Raw); err != nil {
+		if err := batch.Append(rowValues(a)...); err != nil {
 			return fmt.Errorf("%w: append partition %d seq %d rule %s: %w", ErrPermanent, a.Partition, a.Seq, a.RuleID, err)
 		}
 	}
 	return classify(batch.Send())
+}
+
+// rowValues is a's values in Columns order.
+func rowValues(a pipe.Alert) []any {
+	fields := a.Fields
+	if fields == nil {
+		fields = map[string]string{}
+	}
+	return []any{a.Partition, a.Seq, a.RuleID, a.RuleTitle, a.Severity,
+		a.EventTime, a.IngestTime, a.HostID, a.Source, fields, a.Raw, a.Engine}
 }
 
 // Close closes the connection.

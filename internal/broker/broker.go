@@ -122,5 +122,23 @@ type Broker interface {
 	// CommittedOffsets returns the group's committed next offset per
 	// partition. A partition with no commit is absent.
 	CommittedOffsets(ctx context.Context, group, topic string) (map[int32]int64, error)
+	// Checkpoints returns the group's committed checkpoints for topic: the
+	// next offset and the metadata committed with it. A partition with no
+	// commit is absent.
+	Checkpoints(ctx context.Context, group, topic string) (map[int32]Checkpoint, error)
+	// CommitCheckpoints records cps as group's committed offsets, each with
+	// its metadata, without joining the group. It is for a reader that
+	// positions itself with ReadFrom and checkpoints by hand, like the
+	// differ; the group must have no active members.
+	CommitCheckpoints(ctx context.Context, group string, cps map[TopicPartition]Checkpoint) error
 	Close()
+}
+
+// Checkpoint is a committed next offset and the metadata string stored
+// beside it. Kafka keeps the metadata with the offset, so a reader can
+// save the state that goes with a position in the same commit. Kafka's
+// default limit on it is 4096 bytes.
+type Checkpoint struct {
+	Next int64
+	Meta string
 }

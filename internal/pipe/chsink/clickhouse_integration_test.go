@@ -36,13 +36,16 @@ func TestReingestCollapsesInClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = ch.Close() }()
-	ddl, err := os.ReadFile(ddlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range Statements(string(ddl)) {
-		if err := ch.Conn().Exec(ctx, s); err != nil {
-			t.Fatalf("%s: %v", s, err)
+	// 002 adds the engine column to a table an older 001 created.
+	for _, path := range []string{ddlPath, "../../../deploy/clickhouse/002_alerts_engine.sql"} {
+		ddl, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range Statements(string(ddl)) {
+			if err := ch.Conn().Exec(ctx, s); err != nil {
+				t.Fatalf("%s: %v", s, err)
+			}
 		}
 	}
 
@@ -67,6 +70,11 @@ func TestReingestCollapsesInClickHouse(t *testing.T) {
 	once := selectFinal(ctx, t, ch, part)
 	if len(once) != len(batch) {
 		t.Fatalf("%d rows after one insert of %d", len(once), len(batch))
+	}
+	for i, r := range once {
+		if r.Engine != batch[i].Engine {
+			t.Fatalf("row %d engine %q, inserted %q", i, r.Engine, batch[i].Engine)
+		}
 	}
 
 	if err := ch.Insert(ctx, batch); err != nil {
@@ -102,12 +110,13 @@ type row struct {
 	Source     string
 	Fields     map[string]string
 	Raw        string
+	Engine     string
 }
 
 func selectFinal(ctx context.Context, t *testing.T, ch *ClickHouse, part int32) []row {
 	t.Helper()
 	rows, err := ch.Conn().Query(ctx, `SELECT partition, seq, toString(rule_id), rule_title, toString(severity),
-		event_time, ingest_time, host_id, source, fields, raw
+		event_time, ingest_time, host_id, source, fields, raw, engine
 		FROM signalman.alerts FINAL WHERE partition = ? ORDER BY seq, rule_id`, part)
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +127,7 @@ func selectFinal(ctx context.Context, t *testing.T, ch *ClickHouse, part int32) 
 		var r row
 		var et, it time.Time
 		if err := rows.Scan(&r.Partition, &r.Seq, &r.RuleID, &r.RuleTitle, &r.Severity,
-			&et, &it, &r.HostID, &r.Source, &r.Fields, &r.Raw); err != nil {
+			&et, &it, &r.HostID, &r.Source, &r.Fields, &r.Raw, &r.Engine); err != nil {
 			t.Fatal(err)
 		}
 		r.EventTime, r.IngestTime = et.UnixMilli(), it.UnixMilli()

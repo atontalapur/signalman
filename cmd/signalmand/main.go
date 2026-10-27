@@ -6,6 +6,23 @@
 // events.raw partition every -canary-interval, which the signalman-canary
 // rule must turn into an alert.
 //
+// With -shadow, every normalized event is also evaluated by v2 in the same
+// batch, and v2's verdicts go to verdicts.v2 for cmd/differ. v2 emits no
+// alerts in shadow mode.
+//
+// With -rollout, v2 also serves the alerts of every rule with
+// fnv(rule_id) mod 100 below the percentage in that file; v1 keeps
+// evaluating and recording every rule. The file is reread every
+// -rollout-poll and on SIGHUP, and a change applies from the next batch, so
+// a rollback is an edit to one file.
+//
+// With -serve v2, v2 is the serving engine for every rule and v1 leaves the
+// serving path: the configuration after gate G6. v2's verdicts go to
+// verdicts.v2 and its alerts to alerts. With -shadow as well, v1 evaluates
+// every event beside it as the oracle and writes verdicts.v1 for the differ
+// (run with -primary v2), and never serves an alert. -rollout is refused:
+// there is nothing left to roll out. The default is -serve v1.
+//
 // SIGHUP reloads the rule directory. The new rule set applies from the next
 // batch on; a batch in flight finishes under the rules it started with. A
 // taxonomy change needs a restart, because the normalizer is built from it.
@@ -27,6 +44,8 @@ import (
 
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/broker/kafka"
+	"github.com/atontalapur/signalman/internal/differ"
+	"github.com/atontalapur/signalman/internal/engine/v2"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/pipe"
 	"github.com/atontalapur/signalman/internal/sigma"
@@ -57,9 +76,17 @@ type flags struct {
 	partitions       int
 	auditInterval    time.Duration
 	auditWindow      int64
+	serve            string
+	shadow           bool
+	rollout          string
+	rolloutPoll      time.Duration
 	ruleEvalEvery    int
 	canaryInterval   time.Duration
 }
+
+// defaultRolloutPoll bounds how long a rollout file change waits to be
+// read without a SIGHUP. The spec's rollback budget is 30 seconds.
+const defaultRolloutPoll = 5 * time.Second
 
 func parseFlags(args []string) (flags, error) {
 	var f flags
@@ -82,6 +109,10 @@ func parseFlags(args []string) (flags, error) {
 	fs.IntVar(&f.partitions, "partitions", 8, "partitions per topic for -create-topics")
 	fs.DurationVar(&f.auditInterval, "audit-interval", 10*time.Second, "how often the invariant 1 audit runs; 0 disables it")
 	fs.Int64Var(&f.auditWindow, "audit-window", 10000, "widest seq range the audit checks at once")
+	fs.StringVar(&f.serve, "serve", "v1", "engine that serves alerts for every rule outside the rollout: v1, or v2 once G6 has passed")
+	fs.BoolVar(&f.shadow, "shadow", false, "also evaluate every event with the other engine and write its verdict topic (no alerts)")
+	fs.StringVar(&f.rollout, "rollout", "", "file holding the percentage of rules v2 serves alerts for; implies -shadow")
+	fs.DurationVar(&f.rolloutPoll, "rollout-poll", defaultRolloutPoll, "how often the -rollout file is reread")
 	fs.IntVar(&f.ruleEvalEvery, "rule-eval-every", 100, "time every rule on events whose seq is a multiple of this, for signalman_rule_eval_seconds; 0 disables")
 	fs.DurationVar(&f.canaryInterval, "canary-interval", 30*time.Second, "how often a canary event is written to every events.raw partition; 0 disables the canary")
 	if err := fs.Parse(args); err != nil {
@@ -92,6 +123,21 @@ func parseFlags(args []string) (flags, error) {
 	}
 	if f.rules == "" {
 		return f, errors.New("-rules is required")
+	}
+	switch f.serve {
+	case "v1":
+	case "v2":
+		if f.rollout != "" {
+			return f, errors.New("-rollout with -serve v2: v2 already serves every rule, and a rollout would hand rules back to v1")
+		}
+	default:
+		return f, fmt.Errorf("-serve %q, want v1 or v2", f.serve)
+	}
+	if f.rollout != "" {
+		f.shadow = true
+		if f.rolloutPoll <= 0 {
+			return f, errors.New("-rollout-poll must be positive")
+		}
 	}
 	return f, nil
 }
@@ -186,13 +232,22 @@ func run(f flags, log *slog.Logger) error {
 		}
 	}
 
-	slot := pipe.NewSlot(pipe.V1(rs), m)
+	slot := pipe.NewSlot(primaryEngine(f.serve, rs), m)
+	if err := install(slot, rs, f.serve, f.shadow); err != nil {
+		return err
+	}
+	if f.rollout != "" {
+		if err := applyRollout(f.rollout, slot, log); err != nil {
+			return err
+		}
+		go watchRollout(ctx, f.rollout, f.rolloutPoll, slot, log)
+	}
 	go reloadOnHUP(ctx, f, tax, slot, log)
 
 	// The audit snapshots its starting point before the pipeline produces
 	// anything, so it must be built first.
 	if f.auditInterval > 0 {
-		a, err := pipe.NewAuditor(ctx, b, pipe.AuditConfig{Group: f.group, Window: f.auditWindow}, slot.RuleCount, m, log)
+		a, err := pipe.NewAuditor(ctx, b, pipe.AuditConfig{Group: f.group, VerdictTopic: servingTopic(f.serve), Window: f.auditWindow}, slot.RuleCount, m, log)
 		if err != nil {
 			return err
 		}
@@ -214,7 +269,7 @@ func run(f flags, log *slog.Logger) error {
 	if f.canaryInterval > 0 {
 		go pipe.NewCanary(b, m, time.Now, log).Run(ctx, f.canaryInterval)
 	}
-	log.Info("signalmand started", "version", version, "commit", commit, "brokers", f.brokers, "group", f.group)
+	log.Info("signalmand started", "version", version, "commit", commit, "brokers", f.brokers, "group", f.group, "serve", f.serve, "shadow", f.shadow)
 	return p.Run(ctx)
 }
 
@@ -233,13 +288,99 @@ func reloadOnHUP(ctx context.Context, f flags, tax *sigma.Taxonomy, slot *pipe.S
 		case <-ctx.Done():
 			return
 		case <-hup:
+			// The rollout first: a rollback must not wait on, or fail
+			// with, a rule reload.
+			if f.rollout != "" {
+				if err := applyRollout(f.rollout, slot, log); err != nil {
+					log.Error("rollout reload refused; keeping the current rollout", "err", err)
+				}
+			}
 			rs, err := loadRules(f.rules, tax, f.strict, f.canaryInterval > 0, log)
 			if err != nil {
 				log.Error("reload refused; keeping the active rule set", "err", err)
 				continue
 			}
-			slot.Store(pipe.V1(rs))
-			log.Info("rule set reloaded; applies from the next batch", "ruleset_v", rs.Version)
+			if err := install(slot, rs, f.serve, f.shadow); err != nil {
+				log.Error("reload refused; keeping the active rule set", "err", err)
+				continue
+			}
+			log.Info("rule set reloaded; applies from the next batch", "ruleset_v", rs.Version, "shadow", f.shadow)
+		}
+	}
+}
+
+// install makes rs active from the next batch: the serving engine alone, or
+// with the other engine compiled from the same rule set beside it as the
+// shadow. The pair is stored as one value, so no batch sees v1 and v2 under
+// different RuleSetV. With serve v2 the shadow is v1, the oracle, which the
+// slot never lets serve an alert.
+func install(slot *pipe.Slot, rs *sigma.RuleSet, serve string, shadow bool) error {
+	primary := primaryEngine(serve, rs)
+	if !shadow {
+		slot.Store(primary)
+		return nil
+	}
+	if serve == v2.Name {
+		return slot.StoreWithShadow(primary, pipe.V1(rs))
+	}
+	return slot.StoreWithShadow(primary, pipe.V2(rs))
+}
+
+// primaryEngine is the serving engine for rs.
+func primaryEngine(serve string, rs *sigma.RuleSet) pipe.Engine {
+	if serve == v2.Name {
+		return pipe.V2(rs)
+	}
+	return pipe.V1(rs)
+}
+
+// servingTopic is the serving engine's verdict topic, which the invariant 1
+// audit checks.
+func servingTopic(serve string) string {
+	if serve == v2.Name {
+		return pipe.TopicVerdictsV2
+	}
+	return pipe.TopicVerdictsV1
+}
+
+// parseRollout reads a rollout file; see pipe.ParseRollout.
+func parseRollout(b []byte) (int, error) { return pipe.ParseRollout(b) }
+
+// applyRollout reads the rollout file and, if it changed, makes it the
+// rollout from the next batch. A file that cannot be read or parsed leaves
+// the current rollout in place.
+func applyRollout(path string, slot *pipe.Slot, log *slog.Logger) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	n, err := parseRollout(b)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	old := slot.Rollout()
+	if n == old {
+		return nil
+	}
+	if err := slot.SetRollout(n); err != nil {
+		return err
+	}
+	log.Info("rollout changed; applies from the next batch", "from_percent", old, "to_percent", n)
+	return nil
+}
+
+// watchRollout rereads the rollout file every interval until ctx ends.
+func watchRollout(ctx context.Context, path string, every time.Duration, slot *pipe.Slot, log *slog.Logger) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := applyRollout(path, slot, log); err != nil {
+				log.Error("rollout reload refused; keeping the current rollout", "err", err)
+			}
 		}
 	}
 }
@@ -253,7 +394,9 @@ func topicSpecs(partitions int32) []kafka.TopicSpec {
 		{Name: pipe.TopicEventsNorm},
 		{Name: pipe.TopicAlerts},
 		{Name: pipe.TopicVerdictsV1, Configs: map[string]string{"retention.ms": week}},
+		{Name: pipe.TopicVerdictsV2, Configs: map[string]string{"retention.ms": week}},
 		{Name: pipe.TopicDrops, Configs: map[string]string{"retention.ms": month}},
+		{Name: differ.TopicDivergences, Configs: map[string]string{"retention.ms": month}},
 		// signalman-sink's dead letters; created here so one flag sets up
 		// the whole stack.
 		{Name: pipe.TopicAlertsDead, Configs: map[string]string{"retention.ms": month}},

@@ -33,10 +33,12 @@ services:
 
   # Creates the pipeline topics, then stays up so `up --wait` can treat it as
   # healthy. Partition counts match across host_id-keyed topics so a host's
-  # events, norms, and drops share a partition number; verdicts.v1 must have
-  # at least as many partitions as events.raw (signalmand checks at startup).
-  # Retention follows the spec: verdicts 7 days, drops 30 days. alerts.dead
-  # (signalman-sink's dead letters, not in the spec) keeps 30 days like drops.
+  # events, norms, and drops share a partition number; verdicts.v1 and
+  # verdicts.v2 must have at least as many partitions as events.raw
+  # (signalmand checks at startup). Retention follows the spec: verdicts 7
+  # days, drops 30 days. Divergences keep 30 days, like drops: each one is
+  # evidence for the cutover's divergence log. alerts.dead (signalman-sink's
+  # dead letters, not in the spec) keeps 30 days like drops.
   # max.message.bytes is 1 MiB on every topic, equal to the producer's batch
   # limit (broker.MaxMessageBytes); change both together.
   topics:
@@ -52,9 +54,12 @@ services:
         for t in events.raw events.norm alerts; do
           rpk topic create "$$t" -p 8 -r 1 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
         done
-        rpk topic create verdicts.v1 -p 8 -r 1 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe verdicts.v1 >/dev/null
-        rpk topic create drops -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe drops >/dev/null
-        rpk topic create alerts.dead -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe alerts.dead >/dev/null
+        for t in verdicts.v1 verdicts.v2; do
+          rpk topic create "$$t" -p 8 -r 1 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
+        done
+        for t in divergences drops alerts.dead; do
+          rpk topic create "$$t" -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
+        done
         touch /tmp/ready
         exec sleep infinity
     healthcheck:

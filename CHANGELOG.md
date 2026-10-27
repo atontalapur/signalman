@@ -3,6 +3,146 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.17.0] - 2026-10-21
+
+### Added
+
+- `internal/loadtest` runs the pipeline in process over the in-memory
+  broker behind a tap that checks every batch's outputs: one verdict per
+  rule of one RuleSetV, alerts equal to matched verdicts, and exactly one
+  verdict record or drop per `events.raw` offset. It paces a corpus at a
+  multiple of a measured baseline and injects consumer kills, poison
+  records, rule reloads, an output outage and an offline partition.
+- The seven spec phase 05 experiments run under `SIGNALMAN_LOAD=1`, each
+  writing a JSON report. `docs/load.md` records the in-process run on the
+  1,236 SigmaHQ rules and what still needs Redpanda and ClickHouse.
+- `cmd/loadgen` replays an ndjson corpus, or events generated from a rule
+  directory, into `events.raw` on Kafka at a multiple of a baseline.
+- `pipe.Normalizer.SetFault` for failure injection in tests.
+
+### Changed
+
+- `Correctness.OK` fails on any redelivered verdict record whose bytes
+  differ from its first write. The reload experiment uses
+  `OKAcrossReloads`.
+- Sustained 5x asserts its digest equals a clean replay; partition offline
+  asserts no duplicates.
+- Reports carry `tap_blocked_sends`, counted, in place of relying on the
+  sampled tap queue depth.
+
+### Fixed
+
+- A redelivery was compared on rule set and matched rule indices only, and
+  a changed one was reported but never failed a run.
+- `Replay` resent a whole failed batch with no record of it; it now counts
+  `Resent` records (possible duplicates on Kafka) and stops on a permanent
+  produce error instead of retrying it forever.
+
+## [0.16.0] - 2026-10-21
+
+### Added
+
+- `cmd/cutover check` evaluates one gate of the G0 to G6 ladder and prints
+  every criterion with its status and evidence: a corpus replay digested
+  per partition through v1 and v2, the differential fuzzer's summed
+  counters and the property tests for G0, Prometheus for G1 to G6, and a
+  game day result for the rollback timings. A criterion nothing here can
+  check stays unchecked until attested with `-attest`. `-record` dates a
+  passed gate in `docs/cutover.md` and appends its evidence.
+- `cmd/cutover gameday` rolls the `-rollout` file back and forward with a
+  rename and times each change from `signalman_rollout_percent` and
+  `signalman_alerts_total`; `cutover measure` times a change made by hand.
+- `signalmand -serve v2` makes v2 the serving engine for every rule, with
+  v1 as the oracle under `-shadow`; `cmd/differ -primary v2` joins on v2's
+  records. The default stays `-serve v1`.
+- The ClickHouse `alerts` table and the sink carry the serving `engine`
+  column, with `002_alerts_engine.sql` for an existing table.
+- `signalman_audit_windows_total` counts the windows the invariant 1 audit
+  closed.
+
+### Changed
+
+- The corpus reader moves to `internal/corpus` and the rollout file parser
+  to `internal/pipe`. Prometheus also scrapes the differ.
+- `chsink.Decode` refuses an alert whose engine is not v1 or v2, and the
+  sink dead-letters it.
+
+### Fixed
+
+- Gates passed on a window only partly scraped. Every gate with a window
+  now needs signalmand and the differ scraped for 95% of it (and of the
+  alert volume baseline), and each engine's verdict rate above zero at
+  every 5m step.
+- `-at` could be in the future and `-record` could write a future date.
+  Both are refused.
+- G6 passed audit-violations when the audit never ran. It now needs
+  `signalman_audit_windows_total` rising at every 5m step.
+- A rollback drill counted for any step at any time. G2 to G4 now need one
+  from the gate's step, written within `-drill-slack` (24h) of the hold.
+  `-rollback-only` used to leave production at the rollback target; it now
+  writes `-from` back and checks the gauge, or exits non-zero.
+- `-record` dated a gate with earlier gates undated. It now refuses.
+- G6 audit-violations, G4 v1-serves-none and shadow-failures missed a
+  counter's first count: those series were made by it, and `increase()`
+  ignores a series' first sample. signalmand now exports them at zero (per
+  partition from the auditor's start, per rule and engine and per shadow
+  when engines are stored), and the gates treat no series as unchecked.
+- differ-running passed on any differ activity in the window, so a differ
+  that stalled after an hour, or fell far behind, passed G1 to G4 and G6
+  with divergences flat. It now needs differ resolutions at every 5m step,
+  and the new differ-keeps-up needs the differ to have resolved the events
+  signalmand evaluated, within `-verdict-tolerance`.
+
+## [0.15.0] - 2026-10-21
+
+### Added
+
+- `signalmand -shadow` evaluates every event with v2 beside v1 in the same
+  batch and writes `verdicts.v2` with no alerts. The slot stores the pair as
+  one value, so a reload never splits them across RuleSetV. A v2 panic or
+  malformed verdict list leaves v1 untouched, writes no v2 record, and
+  counts in `signalman_shadow_failures_total`.
+- `cmd/differ` merge-joins `verdicts.v1` and `verdicts.v2` per partition on
+  (partition, seq, rule_id), classifies disagreements into the spec's five
+  classes, and writes each to the `divergences` topic and the JSON log.
+  Memory is bounded by one head per side and a bounded channel.
+- Per-rule rollout: v2 serves a rule's alerts when fnv(rule_id) mod 100 is
+  below the rollout percentage, read once per batch, so each match gets
+  exactly one alert from its serving engine. `signalmand -rollout` rereads
+  the percentage from a file every `-rollout-poll` (5s) and on SIGHUP.
+  Alerts carry the serving engine; `signalman_alerts_total` and
+  `signalman_rollout_percent` are exported.
+- `docs/cutover.md`: the four arguments, the gate ladder, retirement
+  criteria, and an empty divergence log.
+- `broker.Checkpoint`: a committed offset with its commit metadata.
+
+### Changed
+
+- The differ commits each side's repeat-dropping state as offset commit
+  metadata (`CommitCheckpoints` replaces `CommitOffsets` on the broker).
+- `-create-topics` and the compose stack create `verdicts.v2` and
+  `divergences`, with the same 1 MiB `max.message.bytes` as every topic.
+
+### Fixed
+
+- A 20 MB `signalmand` binary was committed at the repository root. It is
+  removed, and the cmd binary names are ignored there.
+- signalmand now refuses at startup a `verdicts.v2` with fewer partitions
+  than `events.raw` when the shadow is on, and a `verdicts.v2` record over
+  the output limit stops the pipeline like a `verdicts.v1` one.
+- A differ restart inside a redelivered batch could report false missing
+  verdicts, because its repeat state started empty.
+- A shadowed redelivery of events first written without `-shadow` was
+  passed over as a repeat, so its v2 records were reported missing.
+- A v2 record for an event v1 wrote unshadowed is no longer counted as a
+  missing v1 verdict.
+- A shadowed v1 record whose v2 record never arrives no longer blocks its
+  partition forever: once a later unshadowed v1 record shows signalmand
+  moved on, it is reported missing after v2 is read to its end offset.
+- The canary age and `signalman_rule_matches_total` follow the alerts
+  actually served, so a v2 that wrongly stops matching the canary while it
+  serves the rule now pages.
+
 ## [0.14.0] - 2026-10-21
 
 ### Added

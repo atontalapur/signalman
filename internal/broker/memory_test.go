@@ -147,6 +147,31 @@ func TestMemoryRejectsUnknownTopicAndBadPartition(t *testing.T) {
 	}
 }
 
+func TestMemoryCommitCheckpointsWithoutJoiningTheGroup(t *testing.T) {
+	m := NewMemory(map[string]int32{"t": 2})
+	ctx := context.Background()
+	if err := m.CommitCheckpoints(ctx, "differ", map[TopicPartition]Checkpoint{{"t", 1}: {Next: 7, Meta: "m"}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := m.CommittedOffsets(ctx, "differ", "t")
+	if err != nil || c[1] != 7 || len(c) != 1 {
+		t.Fatalf("committed %v %v", c, err)
+	}
+	cp, err := m.Checkpoints(ctx, "differ", "t")
+	if err != nil || len(cp) != 1 || cp[1] != (Checkpoint{Next: 7, Meta: "m"}) {
+		t.Fatalf("checkpoints %v %v", cp, err)
+	}
+	if err := m.CommitCheckpoints(ctx, "differ", map[TopicPartition]Checkpoint{{"t", 1}: {Next: 8}}); err != nil {
+		t.Fatal(err)
+	}
+	if cp, _ := m.Checkpoints(ctx, "differ", "t"); cp[1] != (Checkpoint{Next: 8}) {
+		t.Fatalf("a commit replaces the metadata too: %v", cp)
+	}
+	if err := m.CommitCheckpoints(ctx, "differ", map[TopicPartition]Checkpoint{{"t", 2}: {Next: 1}}); err == nil {
+		t.Fatal("a commit to a partition that does not exist is an error")
+	}
+}
+
 func TestMemoryProduceErrorsThatCannotSucceedArePermanent(t *testing.T) {
 	m := NewMemory(map[string]int32{"t": 1}, WithMaxRecordBytes(100))
 	for name, rec := range map[string]Record{
