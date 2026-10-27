@@ -159,7 +159,11 @@ admitted but not yet committed is bounded by `(inflight + 2) x max-poll`.
 
 `signalman-sink` (`internal/pipe/chsink`) consumes `alerts` as its own
 consumer group and inserts into the `alerts` table from the spec, defined in
-`deploy/clickhouse/001_alerts.sql`. It runs as a separate process from
+`deploy/clickhouse/001_alerts.sql`. The table has one column the spec does
+not: `engine LowCardinality(String)`, the engine that served the alert, so
+alert volume per rule can be compared across engines during the rollout.
+`002_alerts_engine.sql` adds it to a table created before it existed; on an
+existing volume, run it by hand. The sink runs as a separate process from
 `signalmand` so a ClickHouse outage stops alert storage and nothing else:
 detection keeps writing to Redpanda, and the backlog waits in the topic.
 
@@ -203,8 +207,8 @@ detection keeps writing to Redpanda, and the backlog waits in the topic.
   acceptance line "the sink backpressures the pipeline" holds for the
   alerts consumer, whose lag is the backpressure, not for detection.
 - **Records the table cannot hold.** The table's `rule_id` is a UUID,
-  `severity` is an Enum8 of the five Sigma levels, and the times are
-  DateTime64(3). The rule loader now rejects a non-UUID id and a missing or
+  `severity` is an Enum8 of the five Sigma levels, the times are
+  DateTime64(3), and `engine` must be `v1` or `v2`. The rule loader now rejects a non-UUID id and a missing or
   unknown level (codes `invalid-id` and `level`), so these come from a
   hand-written record, an older rule set, or a bug, but a record that would
   fail every insert of its batch would still stop the sink for every
@@ -291,6 +295,13 @@ offset. Windows slide forward with the committed offset, at most
 `-audit-window` seqs at a time. A failing window is logged at error level,
 names the partition and seqs, and increments
 `signalman_audit_violations_total{partition}`; any increase is a P1.
+Every closed window, passing or failing, increments
+`signalman_audit_windows_total`, so a flat violations counter can be told
+apart from an audit that is not running (`-audit-interval 0`, or stuck).
+The auditor exports every events.raw partition's violations series at 0
+when it starts, and a partition added later at the next step:
+`increase()` never counts a series' first sample, so a series made by its
+first violation would read as no increase.
 
 Each partition's audit starts at the later of the group's committed offset
 and the log start of `events.raw`, so offsets retention removed before the
@@ -333,10 +344,11 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_event_staleness_seconds` | gauge | partition | now minus the newest durable event time, at scrape |
 | `signalman_canary_age_seconds` | gauge | partition | signalmand: seconds since the last canary alert was durable on `alerts`, at scrape |
 | `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |
-| `signalman_audit_violations_total` | counter | partition | the audit; not in the spec table |
+| `signalman_audit_violations_total` | counter | partition | the audit; 0 for every events.raw partition from its start; not in the spec table |
+| `signalman_audit_windows_total` | counter | none | the audit, per window closed; not in the spec table; G6 requires it rising |
 | `signalman_canary_injected_total` | counter | partition | the canary generator, per record written; not in the spec table |
-| `signalman_shadow_failures_total` | counter | engine | sink, per event the shadow failed on; not in the spec table |
-| `signalman_alerts_total` | counter | engine, rule_id | sink, per durable alert, by the serving engine; not in the spec table |
+| `signalman_shadow_failures_total` | counter | engine | sink, per event the shadow failed on; 0 for the shadow from when it is stored; not in the spec table |
+| `signalman_alerts_total` | counter | engine, rule_id | sink, per durable alert, by the serving engine; 0 per rule for each stored engine, removed with the rule on reload; not in the spec table |
 | `signalman_rollout_percent` | gauge | | the slot, on every rollout change; not in the spec table |
 | `signalman_event_time_future_total` | counter | partition | sink, per durable event whose event time is ahead of the clock; not in the spec table |
 | `signalman_sink_canary_age_seconds` | gauge | partition | signalman-sink: seconds since the last canary alert was stored in ClickHouse, at scrape; not in the spec table |

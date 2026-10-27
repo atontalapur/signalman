@@ -59,6 +59,9 @@ func coreMetricsTable(t *testing.T) map[string]specMetric {
 var extras = map[string]specMetric{
 	// The invariant 1 audit's output (Plan C); any increase is a P1.
 	"signalman_audit_violations_total": {typ: "counter", labels: []string{"partition"}},
+	// Windows the invariant 1 audit closed, so G6 can tell an audit that
+	// ran and found nothing from one that never ran (Plan H, SIG-43).
+	"signalman_audit_windows_total": {typ: "counter"},
 	// How many canary records the generator wrote, so a stalled canary can
 	// be told apart from a generator that stopped (Plan E, S-51).
 	"signalman_canary_injected_total": {typ: "counter", labels: []string{"partition"}},
@@ -100,6 +103,7 @@ func touch(m *Metrics) {
 	m.CanaryInjected.WithLabelValues("0").Inc()
 	m.RuleSetVersion.WithLabelValues("rs", "tx").Set(1)
 	m.AuditViolations.WithLabelValues("0").Inc()
+	m.AuditWindows.Inc()
 	m.ShadowFailures.WithLabelValues("v2").Inc()
 	m.Alerts.WithLabelValues("v1", "r").Inc()
 	m.RolloutPercent.Set(1)

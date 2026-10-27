@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/atontalapur/signalman/internal/engine/v2"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/sigma"
 	"github.com/prometheus/client_golang/prometheus"
@@ -101,11 +102,14 @@ func (s *Slot) store(e, shadow Engine) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A reload changes rules, not routing: the rollout carries over.
-	if cur := s.cur.Load(); cur != nil {
+	// A reload changes rules, not routing: the rollout carries over. With
+	// v2 serving there is no rollout: a percentage would hand the rules
+	// inside it to the v1 shadow.
+	if cur := s.cur.Load(); cur != nil && !v2Serves(e) {
 		a.percent = cur.percent
 	}
 	a.route()
+	s.m.RolloutPercent.Set(rolloutGauge(a))
 	s.counts[rs.Version] = len(rs.Rules)
 	s.cur.Store(a)
 	if s.shown != nil {
@@ -127,17 +131,32 @@ func (s *Slot) store(e, shadow Engine) {
 // rule removed on purpose loses its series, so it is not reported as gone
 // silent. A batch still in flight under the old set can bring a dropped
 // rule's series back with its last matches; it then stays until restart.
+//
+// alerts_total gets the same treatment, per rule and per engine stored,
+// and shadow_failures_total a zero for the shadow. increase() never counts
+// a series' first sample, so without the zeros a rule's first alert from an
+// engine, or the shadow's first failure, would read as no increase: G4's
+// v1-serves-none and the gates' shadow-failures would pass over it.
 // Caller holds s.mu.
 func (s *Slot) exportRules(a *active) {
 	if s.shown != nil {
 		for id := range s.shown.rules {
 			if _, kept := a.rules[id]; !kept {
 				s.m.RuleMatches.DeleteLabelValues(id)
+				s.m.Alerts.DeletePartialMatch(prometheus.Labels{"rule_id": id})
 			}
 		}
 	}
+	engines := []string{a.eng.Name()}
+	if a.shadow != nil {
+		engines = append(engines, a.shadow.Name())
+		s.m.ShadowFailures.WithLabelValues(a.shadow.Name())
+	}
 	for id := range a.rules {
 		s.m.RuleMatches.WithLabelValues(id)
+		for _, eng := range engines {
+			s.m.Alerts.WithLabelValues(eng, id)
+		}
 	}
 }
 
@@ -165,6 +184,9 @@ func (s *Slot) SetRollout(percent int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.cur.Load()
+	if percent > 0 && v2Serves(cur.eng) {
+		return fmt.Errorf("rollout %d%% with v2 serving every rule: v1 is out of the serving path, and a rollout would hand rules back to it", percent)
+	}
 	if percent > 0 && cur.shadow == nil {
 		return fmt.Errorf("rollout %d%% with no shadow engine to serve it", percent)
 	}
@@ -173,8 +195,21 @@ func (s *Slot) SetRollout(percent int) error {
 	a := &active{eng: cur.eng, shadow: cur.shadow, rules: cur.rules, percent: percent}
 	a.route()
 	s.cur.Store(a)
-	s.m.RolloutPercent.Set(float64(percent))
+	s.m.RolloutPercent.Set(rolloutGauge(a))
 	return nil
+}
+
+// v2Serves reports whether e is v2 as the primary: the configuration after
+// G6, in which v2 serves every rule and v1, if present, only shadows.
+func v2Serves(e Engine) bool { return e.Name() == v2.Name }
+
+// rolloutGauge is signalman_rollout_percent for a: the share of rules whose
+// alerts v2 serves. With v2 primary that is all of them.
+func rolloutGauge(a *active) float64 {
+	if v2Serves(a.eng) {
+		return 100
+	}
+	return float64(a.percent)
 }
 
 // Rollout is the percentage the next batch will be routed with.

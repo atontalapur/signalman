@@ -31,6 +31,11 @@ type Config struct {
 	// RetryBackoff is the first wait after a failed produce or poll. Waits
 	// double up to 5s. Default 100ms.
 	RetryBackoff time.Duration
+	// Primary is the serving engine, whose records name the shadow they
+	// were evaluated beside and so drive the join: "v1" (the default) while
+	// v1 serves, "v2" once v2 serves and v1 shadows as the oracle.
+	// Divergence classes stay relative to v1 either way.
+	Primary string
 }
 
 // Metrics is what the differ exports. The cutover gates read Counted:
@@ -88,8 +93,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 // are the whole buffer, so memory is bounded by Queue and the poll size,
 // not by how far one side falls behind.
 //
-// A v1 record names the shadow it was evaluated alongside. A v1 record
-// with no shadow owes no v2 record and is passed over without waiting.
+// A primary record names the shadow it was evaluated alongside. A primary
+// record with no shadow owes no shadow record and is passed over without
+// waiting. The primary is v1 unless Config.Primary says v2.
 //
 // Divergence records are produced before the offsets that cover them are
 // committed, so a restart repeats work rather than skipping it: a
@@ -110,6 +116,13 @@ func New(cfg Config, b broker.Broker, m *Metrics, log *slog.Logger) (*Differ, er
 	}
 	if cfg.Queue < 0 {
 		return nil, fmt.Errorf("differ: queue %d", cfg.Queue)
+	}
+	switch cfg.Primary {
+	case "":
+		cfg.Primary = v1.Name
+	case v1.Name, v2.Name:
+	default:
+		return nil, fmt.Errorf("differ: primary %q, want %s or %s", cfg.Primary, v1.Name, v2.Name)
 	}
 	if cfg.Queue == 0 {
 		cfg.Queue = 256
@@ -161,7 +174,7 @@ func (d *Differ) Run(ctx context.Context) error {
 	for p := range n {
 		a := make(chan record, d.cfg.Queue)
 		b := make(chan record, d.cfg.Queue)
-		j := &joiner{d: d, part: p,
+		j := &joiner{d: d, part: p, primary: primaryIndex(d.cfg.Primary),
 			sides: [2]*sideState{
 				{ch: a, tp: broker.TopicPartition{Topic: pipe.TopicVerdictsV1, Partition: p}},
 				{ch: b, tp: broker.TopicPartition{Topic: pipe.TopicVerdictsV2, Partition: p}},
@@ -246,9 +259,9 @@ type sideState struct {
 	ch   <-chan record
 	tp   broker.TopicPartition
 	head *record
-	// peek is v1's record after head, read while head waits on v2, and
-	// skip the offset after the repeats read ahead of it, which next moves
-	// to once head is handled.
+	// peek is the primary's record after head, read while head waits on
+	// the shadow, and skip the offset after the repeats read ahead of it,
+	// which next moves to once head is handled.
 	peek *record
 	skip int64
 	cur  cursor // what the records below next leave behind
@@ -258,7 +271,7 @@ type sideState struct {
 }
 
 // cursor is the repeat-dropping state of one side: the highest seq handled
-// and, on v1, the highest seq handled with a shadow beside it. It covers
+// and, on the primary, the highest seq handled with a shadow beside it. It covers
 // exactly the records below the side's next offset, and is committed with
 // that offset as its metadata, so a restart drops the same repeats a
 // running differ would. Without it, a commit that lands inside a
@@ -271,10 +284,11 @@ type cursor struct {
 	HasShadowed bool   `json:"has_shadowed,omitempty"`
 }
 
-// repeat reports whether r was handled already. On v1 a shadowed record is
-// a repeat only of an earlier shadowed one: when signalmand restarts with
-// -shadow and redelivers events it first evaluated without it, the shadowed
-// copies are the ones v2 has records for, and they are compared.
+// repeat reports whether r was handled already. On the primary a shadowed
+// record is a repeat only of an earlier shadowed one: when signalmand
+// restarts with -shadow and redelivers events it first evaluated without
+// it, the shadowed copies are the ones the shadow has records for, and they
+// are compared.
 func (c cursor) repeat(r *record) bool {
 	if r.ev.Shadow != "" {
 		return c.HasShadowed && r.ev.Seq <= c.Shadowed
@@ -315,14 +329,32 @@ func (s *sideState) checkpoint() broker.Checkpoint {
 type joiner struct {
 	d     *Differ
 	part  int32
-	sides [2]*sideState
-	tick  *time.Ticker
+	sides [2]*sideState // v1, v2
+	// primary indexes the side whose records drive the join.
+	primary int
+	tick    *time.Ticker
+}
+
+func primaryIndex(name string) int {
+	if name == v2.Name {
+		return 1
+	}
+	return 0
+}
+
+// compare classifies one event from the primary's and the shadow's record,
+// either of which may be nil, in Compare's v1, v2 order.
+func (j *joiner) compare(p, sh *pipe.EventVerdicts) []Divergence {
+	if j.primary == 1 {
+		return Compare(sh, p)
+	}
+	return Compare(p, sh)
 }
 
 func (j *joiner) run(ctx context.Context) error {
 	j.tick = time.NewTicker(j.d.cfg.CommitInterval)
 	defer j.tick.Stop()
-	a, b := j.sides[0], j.sides[1]
+	a, b := j.sides[j.primary], j.sides[1-j.primary]
 	for {
 		if err := j.pull(ctx, a); err != nil {
 			return err
@@ -331,12 +363,12 @@ func (j *joiner) run(ctx context.Context) error {
 			j.consume(a)
 			continue
 		}
-		gone, err := j.pullV2(ctx)
+		gone, err := j.pullShadow(ctx)
 		if err != nil {
 			return err
 		}
 		if gone {
-			if err := j.emit(ctx, Compare(&a.head.ev, nil)); err != nil {
+			if err := j.emit(ctx, j.compare(&a.head.ev, nil)); err != nil {
 				return err
 			}
 			j.consume(a)
@@ -346,27 +378,28 @@ func (j *joiner) run(ctx context.Context) error {
 		h1, h2 := &a.head.ev, &b.head.ev
 		switch {
 		case h1.Seq == h2.Seq:
-			err := j.emit(ctx, Compare(h1, h2))
+			err := j.emit(ctx, j.compare(h1, h2))
 			if err != nil {
 				return err
 			}
 			j.consume(a)
 			j.consume(b)
 		case h1.Seq < h2.Seq:
-			if err := j.emit(ctx, Compare(h1, nil)); err != nil {
+			if err := j.emit(ctx, j.compare(h1, nil)); err != nil {
 				return err
 			}
 			j.consume(a)
 		case a.cur.HasLast && h2.Seq <= a.cur.Last:
-			// v1 has moved past h2's seq without a shadowed record for it,
-			// so it wrote that event unshadowed (or dropped it, which v2
-			// could not have evaluated). v1 has its verdict; v2's record
-			// is a leftover of an attempt v1's side did not keep, not a
-			// missing verdict.
-			j.d.log.Debug("differ: v2 record for an event v1 wrote unshadowed", "partition", j.part, "seq", h2.Seq)
+			// The primary has moved past h2's seq without a shadowed
+			// record for it, so it wrote that event unshadowed (or dropped
+			// it, which the shadow could not have evaluated). The primary
+			// has its verdict; the shadow's record is a leftover of an
+			// attempt the primary's side did not keep, not a missing
+			// verdict.
+			j.d.log.Debug("differ: shadow record for an event the primary wrote unshadowed", "partition", j.part, "seq", h2.Seq)
 			j.consume(b)
 		default:
-			if err := j.emit(ctx, Compare(nil, h2)); err != nil {
+			if err := j.emit(ctx, j.compare(nil, h2)); err != nil {
 				return err
 			}
 			j.consume(b)
@@ -402,20 +435,22 @@ func (j *joiner) pull(ctx context.Context, s *sideState) error {
 	return nil
 }
 
-// pullV2 gets a v2 head for v1's shadowed head, or reports that v2 will
-// never write one. While it waits it reads ahead on v1. A v1 record past
-// the head's seq with no shadow means signalmand moved on without the v2
-// lane, and v2 records are written in the same produce as their v1 record
-// and before any later one, so once that record is seen, every v2 record
-// for the head's seq that will ever exist is below v2's end offset. When
-// the joiner has handled v2 up to that offset without finding it, it is
-// missing. A shadowed v1 record past the head proves nothing yet: its own
-// v2 record will resolve the head when it arrives.
-func (j *joiner) pullV2(ctx context.Context) (gone bool, err error) {
-	a, b := j.sides[0], j.sides[1]
+// pullShadow gets a shadow head for the primary's shadowed head, or
+// reports that the shadow will never write one. While it waits it reads
+// ahead on the primary. A primary record past the head's seq with no
+// shadow means signalmand moved on without the shadow lane, and shadow
+// records are written in the same produce as their primary record and
+// before any later one, so once that record is seen, every shadow record
+// for the head's seq that will ever exist is below the shadow's end
+// offset. When the joiner has handled the shadow up to that offset without
+// finding it, it is missing. A shadowed primary record past the head
+// proves nothing yet: its own shadow record will resolve the head when it
+// arrives.
+func (j *joiner) pullShadow(ctx context.Context) (gone bool, err error) {
+	a, b := j.sides[j.primary], j.sides[1-j.primary]
 	ahead := a.cur
-	ahead.handle(a.head) // what v1 will have handled once head is
-	proof := int64(-1)   // v2's end offset once a later unshadowed v1 record is seen
+	ahead.handle(a.head) // what the primary will have handled once head is
+	proof := int64(-1)   // the shadow's end offset once a later unshadowed primary record is seen
 	for b.head == nil {
 		if proof < 0 && a.peek != nil && a.peek.ev.Shadow == "" {
 			end, err := j.d.b.EndOffsets(ctx, b.tp.Topic)
@@ -431,12 +466,12 @@ func (j *joiner) pullV2(ctx context.Context) (gone bool, err error) {
 		if proof >= 0 && b.next >= proof {
 			return true, nil
 		}
-		var v1 <-chan record
+		var primary <-chan record
 		if a.peek == nil {
-			v1 = a.ch
+			primary = a.ch
 		}
 		select {
-		case r := <-v1:
+		case r := <-primary:
 			if ahead.repeat(&r) {
 				// A repeat once head is handled; next moves past it then.
 				a.skip = r.off + 1

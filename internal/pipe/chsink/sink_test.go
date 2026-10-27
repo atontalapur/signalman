@@ -307,6 +307,8 @@ func badRecords(t *testing.T) map[string]broker.Record {
 		"empty severity":      func(a *pipe.Alert) []byte { a.Severity = ""; return nil },
 		"unknown severity":    func(a *pipe.Alert) []byte { a.Severity = "severe"; return nil },
 		"event_time too late": func(a *pipe.Alert) []byte { a.EventTime = time.Date(2400, 1, 1, 0, 0, 0, 0, time.UTC); return nil },
+		"empty engine":        func(a *pipe.Alert) []byte { a.Engine = ""; return nil },
+		"unknown engine":      func(a *pipe.Alert) []byte { a.Engine = "v3"; return nil },
 	}
 	out := map[string]broker.Record{}
 	for name, mut := range cases {
@@ -641,7 +643,7 @@ func TestDecodeRoundTripsThePipelineAlert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keyOf(got) != keyOf(a) || got.Raw != a.Raw || got.Fields["Image"] != a.Fields["Image"] || !got.EventTime.Equal(a.EventTime) {
+	if keyOf(got) != keyOf(a) || got.Raw != a.Raw || got.Engine != a.Engine || got.Fields["Image"] != a.Fields["Image"] || !got.EventTime.Equal(a.EventTime) {
 		t.Fatalf("decoded %+v from %+v", got, a)
 	}
 }

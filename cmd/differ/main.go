@@ -42,6 +42,7 @@ type flags struct {
 	maxPoll        int
 	commitInterval time.Duration
 	metricsAddr    string
+	primary        string
 }
 
 func parseFlags(args []string) (flags, error) {
@@ -53,11 +54,15 @@ func parseFlags(args []string) (flags, error) {
 	fs.IntVar(&f.maxPoll, "max-poll", 500, "records per poll")
 	fs.DurationVar(&f.commitInterval, "commit-interval", time.Second, "how often offsets are committed")
 	fs.StringVar(&f.metricsAddr, "metrics-addr", ":9466", "address serving /metrics")
+	fs.StringVar(&f.primary, "primary", "v1", "the serving engine, whose records drive the join: v1, or v2 under signalmand -serve v2 -shadow")
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}
 	if f.queue <= 0 || f.maxPoll <= 0 {
 		return f, errors.New("-queue and -max-poll must be positive")
+	}
+	if f.primary != "v1" && f.primary != "v2" {
+		return f, fmt.Errorf("-primary %q, want v1 or v2", f.primary)
 	}
 	return f, nil
 }
@@ -104,10 +109,10 @@ func run(f flags, log *slog.Logger) error {
 		return err
 	}
 	defer b.Close()
-	d, err := differ.New(differ.Config{Group: f.group, Queue: f.queue, CommitInterval: f.commitInterval}, b, m, log)
+	d, err := differ.New(differ.Config{Group: f.group, Queue: f.queue, CommitInterval: f.commitInterval, Primary: f.primary}, b, m, log)
 	if err != nil {
 		return err
 	}
-	log.Info("differ started", "version", version, "commit", commit, "brokers", f.brokers, "group", f.group)
+	log.Info("differ started", "version", version, "commit", commit, "brokers", f.brokers, "group", f.group, "primary", f.primary)
 	return d.Run(ctx)
 }

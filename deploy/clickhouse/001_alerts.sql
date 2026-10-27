@@ -16,6 +16,13 @@
 -- insert, after the offset is committed, and a batch with skewed times
 -- would span more than the 100 partitions one insert may touch.
 -- docs/pipeline.md records the deviation.
+--
+-- engine is not in the spec's table. It is the engine that served the
+-- alert (v1, or v2 for a rule inside the rollout), so alert volume per rule
+-- can be compared across engines. A batch redelivered after a rollout
+-- change can be served by the other engine; the copy then replaces the
+-- row with the same key, and the last insert's engine is the one kept.
+-- 002_alerts_engine.sql adds it to a table created before it existed.
 CREATE DATABASE IF NOT EXISTS signalman;
 
 CREATE TABLE IF NOT EXISTS signalman.alerts (
@@ -29,7 +36,8 @@ CREATE TABLE IF NOT EXISTS signalman.alerts (
   host_id     LowCardinality(String),
   source      LowCardinality(String),
   fields      Map(String, String),
-  raw         String CODEC(ZSTD(3))
+  raw         String CODEC(ZSTD(3)),
+  engine      LowCardinality(String)
 ) ENGINE = ReplacingMergeTree
 ORDER BY (partition, seq, rule_id)
 PARTITION BY toYYYYMMDD(ingest_time)

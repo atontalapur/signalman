@@ -57,6 +57,19 @@ the four arguments, the gate ladder, the retirement criteria, the rollout
 design, and the divergence log. No gate has been passed: shadow mode and the
 rollout have only run over the in-memory broker in tests.
 
+The gate tooling is built. `cmd/cutover check` evaluates one gate from its
+sources (a corpus replay and the fuzzer's counters for G0, Prometheus for
+G1 to G6, a game day result for the rollback timings) and prints every
+criterion with its evidence. A gate with a window also checks the window
+was scraped for at least 95% of it, and G6 checks the invariant 1 audit ran
+throughout. With `-record` it dates a passed gate in `docs/cutover.md`, in
+ladder order and never for a window that has not ended. `cmd/cutover gameday` rolls the rollout file back and
+forward and times both from metrics. `signalmand -serve v2` is the
+configuration after G6: v2 serves every rule, and v1 either shadows as the
+oracle or is out of the pipeline. The default is still v1. None of this has
+run against real traffic, so no gate has a date and no game day has been
+measured.
+
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
 and `docs/rule-loading.md` (the load pipeline, error codes, RuleSetV).
@@ -87,6 +100,17 @@ line, with field names as they appear after the taxonomy. An event with a
 key given twice in one object is rejected, and an empty object `{}` adds no
 fields. A fixture file is one YAML document. A rule may
 declare `budget:` in matches per 100k events; noise exits 1 above it.
+
+Plan F has started. `internal/loadtest` runs the pipeline in process over
+the in-memory broker behind a tap that checks every batch's outputs, and
+`cmd/loadgen` replays a corpus (ndjson, or events generated from a rule
+directory) into `events.raw` on Kafka at a multiple of a measured baseline.
+All seven spec experiments ran in process: under 2x and 5x overload, a
+consumer killed between durable outputs and commit, poison records, rule
+reloads every 250 ms, a 30 s output outage, and an offline partition, every
+event ended as verdicts or a drop, and the verdict digest matched a clean
+replay wherever one is comparable. Overload showed up as broker lag,
+never as loss. `docs/load.md` has the answers and lists what still needs Redpanda and ClickHouse.
 
 Plan C's code has landed. `cmd/signalmand` consumes `events.raw`, assigns Seq
 from the offset, normalizes through the taxonomy, evaluates with v1, and
@@ -161,8 +185,8 @@ detector.
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler, retro-hunt, alert schema and idempotent sink built; ClickHouse integration tests not run, gate not passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | in progress: all ten core metrics, canary, absence alerts, and dashboard built; page within 2m shown in process and with promtool; consumer kill against the compose stack not run |
-| F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
-| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, and per-rule rollout with file-driven rollback built and tested in memory; no gate G0 to G6 passed |
+| F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); Redpanda and ClickHouse runs not done |
+| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; no gate G0 to G6 run against traffic or passed, no game day run |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow has not run on a real rule PR yet and no noise corpus is configured |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
@@ -200,8 +224,10 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ```
 cmd/signalman/          CLI: test, explain, lint, bench, noise, gates
 cmd/signalmand/         the pipeline daemon
+cmd/loadgen/            replays a corpus into events.raw at a multiple of a baseline rate
 cmd/signalman-sink/     alerts topic to the ClickHouse alerts table
 cmd/differ/             shadow-mode verdict comparison: verdicts.v1 x verdicts.v2 -> divergences
+cmd/cutover/            gate ladder checker (check -record) and rollback game day (gameday, measure)
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
 internal/event/         Event, Value, Verdict
 internal/sigma/         lexer, parser, ast, detection, taxonomy, rule loader
@@ -215,13 +241,16 @@ internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
 internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, shadow lane, rollout, invariant 1 audit, canary generator
 internal/pipe/chsink/   ClickHouse alert sink: batch insert, commit after insert, retry with backoff
 internal/differ/        bounded merge join of the two verdict streams, divergence classes
+internal/cutover/       gate criteria G0 to G6, Prometheus source, corpus replay, game day measurement, docs/cutover.md recording
+internal/corpus/        NDJSON event corpus reader shared by noise, bench and the G0 replay
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
+internal/loadtest/      in-process load harness: pacer, output tap, failure injection, the seven experiments
 internal/obs/           metrics, including the scrape-time staleness and canary age gauges
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
 test/replay/            corpus replay, digest comparison
 deploy/                 Dockerfile; docker compose for Redpanda, topic setup, ClickHouse, Prometheus, Grafana
-deploy/clickhouse/      ClickHouse init SQL: the alerts table
+deploy/clickhouse/      ClickHouse init SQL: the alerts table (spec columns plus engine), and its migration
 deploy/prometheus/      scrape config, alert rules (absence, pipeline), promtool tests
 deploy/grafana/         provisioning and the pipeline dashboard
 docs/spec/              the spec (signalman-v1.html)
@@ -231,9 +260,10 @@ docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
-docs/cutover.md         the four arguments, gate ladder G0 to G6, retirement criteria, divergence log
+docs/cutover.md         the four arguments, gate ladder G0 to G6, retirement criteria, gate checker, game day, divergence log
 docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
-docs/results.md         measured numbers: fuzzer, corpus, benchmarks
+docs/load.md            the seven load experiments: where work queued, what fell behind, correctness
+docs/results.md         measured numbers: fuzzer, corpus, benchmarks, pipeline baseline
 docs/authoring.md       writing rules: supported subset, rejections, fixtures, budgets, PR gates
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
@@ -290,9 +320,19 @@ that needs them.
   the gates watch. `-rollout <file>` (one integer, 0 to 100) sets the share
   of rules v2 serves; the file is reread every `-rollout-poll` (5s) and on
   `SIGHUP`.
+- Gates: `go run ./cmd/cutover check -gate G1 -prom http://localhost:9090`
+  prints each criterion with its evidence and exits 0 only if the gate
+  passed; `-record` dates a passed gate in `docs/cutover.md`.
+  `cutover gameday -prom ... -rollout-file <file> -out <json>` runs the G5
+  rollback and roll-forward. After G6, `signalmand -serve v2` makes v2 the
+  serving engine; with `-shadow`, run the differ with `-primary v2`.
+  `docs/cutover.md` has the procedure.
 - `TestEndToEndUnderGeneratedLoad` in `internal/pipe` is the test-mode audit
   run; `SIGNALMAN_SOAK_DURATION=1h go test -timeout 2h -run EndToEnd ./internal/pipe`
   lengthens it, memory permitting.
+- Load runs skip unless `SIGNALMAN_LOAD=1`:
+  `SIGNALMAN_LOAD=1 go test -run 'TestLoadBaseline|TestLoadExperiment' -v -timeout 2h ./internal/loadtest/`.
+  `docs/load.md` lists the knobs.
 - `make fuzz FUZZTIME=30s` runs every fuzz target except the differential
   one. Nightly CI runs them for 10 minutes each and uploads any crashers.
 - `make fuzz-differential FUZZTIME=30m` runs the pySigma differential fuzzer
