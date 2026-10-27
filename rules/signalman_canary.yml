@@ -1,0 +1,21 @@
+title: Signalman Canary
+id: fbb72593-085d-4c15-8571-908e2b2d257c
+status: stable
+description: >-
+  Matches only the synthetic event signalmand's canary generator writes to
+  every events.raw partition every 30 seconds. Each match resets
+  signalman_canary_age_seconds for its partition; when the matches stop,
+  SignalmanCanaryStalled pages. It is an ordinary rule on purpose, so the
+  canary exercises the same load, normalize, evaluate, and sink path as
+  every other detection. Do not route its alerts to analysts.
+author: signalman
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image: 'C:\signalman\signalman-canary.exe'
+    CommandLine|startswith: 'signalman-canary partition='
+    User: 'signalman-canary'
+  condition: selection
+level: informational
