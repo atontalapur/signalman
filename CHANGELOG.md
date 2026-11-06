@@ -3,6 +3,60 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.10.0] - 2026-10-21
+
+### Added
+
+- `cmd/signalmand`, the pipeline daemon. It consumes `events.raw`, assigns
+  Seq from the record offset, normalizes through the taxonomy, evaluates
+  with v1, and writes `events.norm`, `verdicts.v1`, `alerts`, and `drops`.
+  It serves `/metrics` and reloads rules on `SIGHUP`.
+- `internal/broker`: the broker interface, an in-memory implementation for
+  unit tests, and a franz-go implementation for Redpanda.
+  `deploy/docker-compose.yml` runs pinned Redpanda and ClickHouse and
+  creates the topics.
+- The normalizer and drop ledger: every decode failure becomes a drop with
+  a closed reason code and the raw bytes, a normalizer panic included.
+- Bounded stages and a sink that commits a batch's offsets only after its
+  outputs are durable. Delivery is at-least-once; a stuck sink is lag,
+  never loss.
+- Rule set reloads through a slot read once per batch, so no batch
+  straddles two RuleSetV values.
+- The invariant 1 audit, which checks every committed `events.raw` offset
+  against `verdicts.v1` and `drops`, and `docs/pipeline.md`.
+
+### Changed
+
+- Every pipeline topic has `max.message.bytes` of 1 MiB, the same as the
+  producer's batch limit.
+- Drop entries carry `raw_bytes`, and `truncated` for a record that was cut.
+
+### Fixed
+
+- Outputs could exceed the broker's size limit and were retried forever,
+  wedging every partition. Records over 128 KiB are dropped as
+  `record-too-large`, and an event whose outputs would not fit is dropped as
+  `output-too-large`.
+- A produce error that cannot succeed on retry (message too large, unknown
+  topic or partition) now stops the pipeline with the batch uncommitted.
+  Startup refuses a missing output topic or a `verdicts.v1` with fewer
+  partitions than `events.raw`.
+- The audit counted offsets removed by retention as missing verdicts when
+  a partition had no committed offset. It now starts at the log start.
+- A batch in flight during a rebalance could commit for a partition this
+  member had lost and move the group offset backwards. Those commits are
+  dropped.
+- A `source` header that was not valid UTF-8 panicked ingest through its
+  Prometheus label, and redelivery panicked it again. The header was also an
+  unbounded label. Labels now map to `auditd`, `cloudtrail`, `sysmon`,
+  `unknown`, or `other`, and a source outside that set is an
+  `unknown-source` drop.
+- A matched event whose alert record would be over the output limit was
+  dropped as `output-too-large` with its verdicts, so escape-heavy fields
+  could suppress a detection. The alert now leaves `fields` empty and sets
+  the new optional `fields_omitted`; `output-too-large` covers only
+  `events.norm`.
+
 ## [0.9.0] - 2026-10-21
 
 ### Added

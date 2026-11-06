@@ -20,22 +20,6 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P4
 **Depends on:** Plan F load numbers
 
-### Decide event value limits at decode time
-**What:** The decoder (Plan C) needs three stated decisions: a maximum field value length, what to do with invalid UTF-8 (reject, replace, or pass through), and whether nested lists are flattened or rejected.
-**Why:** From the SIG-15 adversarial review. `Wildcard.MatchString` is O(input x longest literal run), so a 1 MiB value against a rule with a 2000-character `contains` costs seconds and nothing upstream caps it. `strings.ToLower` maps invalid bytes to U+FFFD on both sides, so `Equals("a\xff")` matches `"a\xfe"` by accident. A list nested in a list never matches and never reaches the drop ledger, which the verdict invariant forbids.
-**Context:** All three are ingest-side rules, not matcher rules; the matcher must stay a pure function of the value it is given. Write the decisions into the spec's data contract section when Plan C lands.
-**Effort:** S
-**Priority:** P2
-**Depends on:** Plan C
-
-### Add integration test entrypoint when compose lands
-**What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.
-**Why:** The job is wired now so Plan C only has to add the compose file and tagged tests.
-**Context:** See `.github/workflows/ci.yml` `integration` job and `Makefile` `integration` target.
-**Effort:** S
-**Priority:** P2
-**Depends on:** Plan C (S-02)
-
 ### Case folding applied to base64 text widens matching
 **What:** `Equals` lowercases both sides, and encoding transforms run before that fold, so a `base64offset|contains` matcher compares lowercased base64. Two different plaintext bytes can encode to base64 characters that differ only in case (`A` and `a`), so a value can match a blob it did not encode.
 **Why:** Sigma string matching is case insensitive by default and pySigma's backends fold case the same way, so following the spec here is right and the fuzzer will confirm it. The cost is a wider match on encoded values, which is a false positive, never a missed detection.
@@ -53,6 +37,24 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Depends on:** None
 
 ## Completed
+
+### Decide event value limits at decode time
+**What:** The decoder (Plan C) needs three stated decisions: a maximum field value length, what to do with invalid UTF-8 (reject, replace, or pass through), and whether nested lists are flattened or rejected.
+**Why:** From the SIG-15 adversarial review. `Wildcard.MatchString` is O(input x longest literal run), so a 1 MiB value against a rule with a 2000-character `contains` costs seconds and nothing upstream caps it. `strings.ToLower` maps invalid bytes to U+FFFD on both sides, so `Equals("a\xff")` matches `"a\xfe"` by accident. A list nested in a list never matches and never reaches the drop ledger, which the verdict invariant forbids.
+**Context:** All three are ingest-side rules, not matcher rules; the matcher must stay a pure function of the value it is given. Write the decisions into the spec's data contract section when Plan C lands.
+**Effort:** S
+**Priority:** P2
+**Depends on:** Plan C
+**Completed:** SIG-27. All three are drops with their own reason code: a string over `MaxValueLen` (64 KiB default) is `value-too-long`, invalid UTF-8 anywhere in the record is `invalid-utf8` (checked before decoding, so nothing is replaced), and a list holding a list or an object is `nested-value`. Codes and rationale are in `internal/pipe/drop.go`.
+
+### Add integration test entrypoint when compose lands
+**What:** `make integration` and the `integration` CI job expect `deploy/docker-compose.yml` and a `-tags integration` build tag.
+**Why:** The job is wired now so Plan C only has to add the compose file and tagged tests.
+**Context:** See `.github/workflows/ci.yml` `integration` job and `Makefile` `integration` target.
+**Effort:** S
+**Priority:** P2
+**Depends on:** Plan C (S-02)
+**Completed:** SIG-26. `deploy/docker-compose.yml` runs Redpanda, a topic setup service, and ClickHouse; `internal/broker/kafka` carries the first `integration`-tagged tests.
 
 ### Stop an oracle subprocess that outlives its fuzz worker
 **What:** If a fuzz worker is SIGKILLed while its pySigma subprocess is stuck in a backtracking regex, the subprocess keeps running until the regex finishes. When Python is idle, stdin EOF ends it, so only the stuck case leaks.

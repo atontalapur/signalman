@@ -131,6 +131,28 @@ func (t *Taxonomy) Resolve(ls LogSource) (*TaxonomyEntry, bool) {
 	return nil, false
 }
 
+// FieldNames returns every concrete field name the taxonomy refers to: the
+// keys of every match block and the event-side name of every field mapping,
+// sorted and deduplicated. These are the names a rule reads off an event
+// once it is bound, so they are the spelling the normalizer must produce.
+func (t *Taxonomy) FieldNames() []string {
+	seen := map[string]bool{}
+	for _, e := range t.entries {
+		for k := range e.Match {
+			seen[k] = true
+		}
+		for _, v := range e.Fields {
+			seen[v] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // LogSourceMatcher is the logsource test, kept separate from the condition
 // tree so that a logsource mismatch can emit an explicit false verdict
 // without walking the condition. The zero value admits every event, which is
