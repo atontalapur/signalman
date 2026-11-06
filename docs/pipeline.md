@@ -242,8 +242,8 @@ the way the model does; it proves nothing about ClickHouse.
 `TestReingestCollapsesInClickHouse` (build tag `integration`, needs
 `SIGNALMAN_CLICKHOUSE_DSN`, fails instead of skipping under `CI=true`) is
 the proof: the same check against a real ClickHouse with `SELECT ... FINAL`
-and `OPTIMIZE TABLE ... FINAL`. It has not been run yet: there is no Docker
-on the development machine.
+and `OPTIMIZE TABLE ... FINAL`. It runs in CI's `integration` job against
+the compose ClickHouse and passes; the development machine has no Docker.
 
 **Reset Redpanda and ClickHouse together.** `seq` is the `events.raw`
 offset, and `(partition, seq, rule_id)` is the table's dedup key. Recreating

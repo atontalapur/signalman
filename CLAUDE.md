@@ -37,6 +37,9 @@ Copied from the spec. Do not trade any of these for a shortcut.
 - `make fuzz-differential FUZZTIME=30m` runs the differential fuzzer and
   sums its comparison counts. It needs `test/fuzz/.venv` (see README);
   without it every `test/fuzz` case skips and still reports ok.
+- `make check-alerts` validates the Prometheus config and alert rules and runs
+  their promtool tests. It needs `promtool` and is not part of `make check`;
+  CI's `alerts` job runs it.
 - `make check-backlog` after editing `docs/backlog.yml`.
 - Go 1.27. Module path `github.com/atontalapur/signalman`.
 
@@ -88,6 +91,6 @@ There is no web UI and nothing deploys automatically; releases are `v*` tags.
 
 ## Layout
 
-See "Repository layout" in the roadmap. `internal/sigma/match` must not import
+See "Repository" in `README.md`. `internal/sigma/match` must not import
 `internal/sigma/ast`; the dependency runs one way. `internal/engine/v1` is the
 permanent oracle and is never optimized for speed.

@@ -9,7 +9,7 @@ old engine is retired.
 
 ## Status
 
-Plan A is done. The module exists on Go 1.27 with three packages:
+Plan A is done. It delivered three packages on Go 1.27:
 `internal/event` (the event value model), `internal/sigma/match` (the
 wildcard matcher, every supported Sigma modifier, and `match.Build`, which
 turns a modifier chain into one matcher), and `internal/sigma` (the condition
@@ -131,8 +131,8 @@ modifier the frontend accepts compiles, and every rule the corpus loads
 compiles. Where ClickHouse disagrees with Go (case folding, regex dot and
 Unicode tables, NULL, number and address parsing, invalid UTF-8), the event
 is stored with the value v1 would compute, so the SQL only compares.
-`docs/backend-ch.md` lists each leak. The retro-hunt-equals-replay test is
-written but has not yet run against a server.
+`docs/backend-ch.md` lists each leak. `TestRetroHuntEqualsReplay` runs
+against the compose ClickHouse in CI's `integration` job and passes.
 
 A pull request that touches `rules/` runs `.github/workflows/rules.yml`:
 `signalman gates` checks each changed rule for parse, fixtures, noise
@@ -155,8 +155,8 @@ outage is consumer lag, not loss. A record the table cannot hold goes to
 the `alerts.dead` topic, counted by `signalman_sink_dead_letters_total`; a
 permanent insert error stops the sink with the offsets it holds. A
 redelivered batch collapsing on merge is checked against a model of the
-merge; the same check against a real ClickHouse is an integration test that
-has not been run yet.
+merge; `TestReingestCollapsesInClickHouse` makes the same check against the
+compose ClickHouse in CI's `integration` job and passes.
 
 Plan E's code has landed. Every metric in the spec's core metrics table is
 exported with its type and labels, and a test holds the registered set to
@@ -183,11 +183,11 @@ detector.
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
-| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler, retro-hunt, alert schema and idempotent sink built; ClickHouse integration tests not run, gate not passed |
+| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | done: SQL compiler, retro-hunt, alert schema and idempotent sink built; `TestRetroHuntEqualsReplay` green against ClickHouse in CI, gate passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | in progress: all ten core metrics, canary, absence alerts, and dashboard built; page within 2m shown in process and with promtool; consumer kill against the compose stack not run |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); Redpanda and ClickHouse runs not done |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; no gate G0 to G6 run against traffic or passed, no game day run |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow has not run on a real rule PR yet and no noise corpus is configured |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow passed on its first real rule PR (`signalman-canary`, #44); no noise corpus is configured |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
@@ -248,7 +248,6 @@ internal/loadtest/      in-process load harness: pacer, output tap, failure inje
 internal/obs/           metrics, including the scrape-time staleness and canary age gauges
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
-test/replay/            corpus replay, digest comparison
 deploy/                 Dockerfile; docker compose for Redpanda, topic setup, ClickHouse, Prometheus, Grafana
 deploy/clickhouse/      ClickHouse init SQL: the alerts table (spec columns plus engine), and its migration
 deploy/prometheus/      scrape config, alert rules (absence, pipeline), promtool tests
@@ -270,7 +269,7 @@ config/taxonomy/        logsource bindings, hashed into every verdict
 rules/                  twenty hand-written rules and signalman-canary, each with a .test.yml fixture
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
-scripts/                backlog validator, Jira sync
+scripts/                backlog validator, Jira sync, differential fuzzer run stats
 .github/workflows/      ci, nightly fuzz, release, rules (the rule PR gates)
 ```
 
@@ -303,7 +302,9 @@ that needs them.
   reads `alerts` as group `signalman-sink`, inserts into ClickHouse
   (`-clickhouse` DSN, defaulting to the compose stack), and serves
   `/metrics` on `:9465`, which Prometheus scrapes. The table is created when the ClickHouse volume is
-  first initialized; after changing the DDL, `docker compose down -v`.
+  first initialized. On an existing volume, run new DDL such as
+  `deploy/clickhouse/002_alerts_engine.sql` by hand; `docker compose down -v`
+  also applies it but deletes every stored alert.
   It needs the `alerts.dead` and `events.raw` topics, which compose
   creates; it reads the `events.raw` partitions for its canary age. Reset the
   Redpanda and ClickHouse volumes together: `seq` restarts with a new

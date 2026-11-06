@@ -366,7 +366,7 @@ SIGNALMAN_LOAD=1 go test -run 'TestLoadExperiment/consumer-kill' -v -timeout 2h 
 | Variable | Effect |
 |---|---|
 | `SIGNALMAN_LOAD` | required; the load runs skip without it, so `make check` stays fast |
-| `SIGNALMAN_CORPUS` | SigmaHQ clone (default `corpora/sigmahq`); without it the 20 rules in `rules/` are used |
+| `SIGNALMAN_CORPUS` | SigmaHQ clone (default `corpora/sigmahq`); without it the 21 rules in `rules/` are used |
 | `SIGNALMAN_LOAD_BASELINE` | use this rate as 1x instead of measuring it |
 | `SIGNALMAN_LOAD_SCALE` | multiply every phase duration |
 | `SIGNALMAN_LOAD_PER_RULE` | generated events per rule (default 20) |
