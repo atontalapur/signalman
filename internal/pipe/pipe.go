@@ -24,6 +24,11 @@ const (
 	TopicDrops      = "drops"
 )
 
+// TopicAlertsDead is where signalman-sink writes an alerts record the
+// ClickHouse table cannot hold, with its position and the reason. Not in the
+// spec's topic table; see docs/pipeline.md.
+const TopicAlertsDead = "alerts.dead"
+
 // HeaderSource is the events.raw record header naming the source ("sysmon",
 // "auditd", "cloudtrail"). The record key is the host_id and the value is
 // the untouched source record.

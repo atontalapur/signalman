@@ -44,7 +44,7 @@ func TestStrictLoadRefusesRejections(t *testing.T) {
 
 func TestTopicSpecsCoverEveryPipelineTopic(t *testing.T) {
 	specs := topicSpecs(8)
-	if len(specs) != 5 {
+	if len(specs) != 6 {
 		t.Fatalf("%d topics", len(specs))
 	}
 	for _, s := range specs {

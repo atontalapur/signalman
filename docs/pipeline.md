@@ -2,7 +2,8 @@
 
 How `signalmand` moves an event from `events.raw` to verdicts, alerts, or
 the drop ledger, and how it proves none went missing. Code lives in
-`internal/pipe`, `internal/broker`, and `internal/obs`.
+`internal/pipe`, `internal/broker`, and `internal/obs`; the ClickHouse alert
+sink is `internal/pipe/chsink`.
 
 ```
 events.raw -> ingest -> normalize -> match (Slot: v1) -> sink -> events.norm, verdicts.v1, alerts, drops
@@ -22,6 +23,7 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 | `verdicts.v1` | partition, pinned to the event's partition | `EventVerdicts`: one record per event with every rule's verdict and both versions |
 | `alerts` | rule_id | `Alert`: one per match, shaped like the spec's ClickHouse alert table, plus `fields_omitted` when `fields` was left empty to fit the output limit |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
+| `alerts.dead` | the alert's key | an `alerts` record the ClickHouse table cannot hold, written by `signalman-sink`; not in the spec |
 
 `verdicts.v1` holds one record per event rather than one per verdict, so the
 topic grows with events, not events times rules, and an event's verdicts are
@@ -147,6 +149,100 @@ input fills, the workers block, the batch queue fills, and ingest stops
 polling. Consumer lag grows; nothing is dropped. The number of records
 admitted but not yet committed is bounded by `(inflight + 2) x max-poll`.
 
+## Alert sink: alerts to ClickHouse
+
+`signalman-sink` (`internal/pipe/chsink`) consumes `alerts` as its own
+consumer group and inserts into the `alerts` table from the spec, defined in
+`deploy/clickhouse/001_alerts.sql`. It runs as a separate process from
+`signalmand` so a ClickHouse outage stops alert storage and nothing else:
+detection keeps writing to Redpanda, and the backlog waits in the topic.
+
+- **Batches.** Rows are buffered until `-batch-rows` (5000) or until
+  `-flush-interval` (1s) after the first one, then sent as one INSERT.
+  ClickHouse writes a part per insert, so few large inserts beat many small
+  ones. The buffer never holds more than `batch-rows + max-poll` rows.
+- **Commit after insert.** Offsets are committed only after the INSERT
+  returns. A crash between the two redelivers the batch. A redelivered alert
+  is an exact copy (same partition, seq, rule_id, and ingest_time, so the
+  same PARTITION BY day), and the ReplacingMergeTree collapses the copies
+  when parts merge. Until a merge runs the copies are visible: read with
+  `FINAL`, or `OPTIMIZE TABLE alerts FINAL`, to see the collapsed table. A
+  failed commit is logged, not retried, as in the pipeline. The alerts table
+  sets `fsync_after_insert = 1` and `fsync_part_directory = 1` (MergeTree
+  table settings; ClickHouse refuses them on an INSERT), so it acknowledges
+  an insert only after the part is on disk; on a table created before this,
+  run `ALTER TABLE signalman.alerts MODIFY SETTING fsync_after_insert = 1,
+  fsync_part_directory = 1`; without it a host crash after the ack could lose rows whose
+  offsets are committed. The cost is one fsync per part, small at the
+  sink's batch sizes.
+- **Partitioning and TTL on ingest_time.** The spec partitions and expires
+  the table on `event_time`. Here both read `ingest_time` instead, the
+  `events.raw` record timestamp, which a replay reproduces. `event_time`
+  comes from the source: an alert for an event older than 90 days would be
+  TTL-deleted on insert, after its offset was committed, which is loss; and
+  a batch with skewed times could touch more than the 100 partitions one
+  INSERT may. Queries still filter on `event_time`. The sink refuses a
+  record whose times it cannot store exactly, since the normalizer has no
+  drop reason for them at this layer. `event_time` must be from 1900-01-01
+  to 2262-04-11T23:47:16.854775807Z: DateTime64(3) goes to 2299, but
+  clickhouse-go encodes through `UnixNano`, which overflows after that and
+  would store 2290 as 1705. `ingest_time` must be from 1970-01-01 to
+  2105-11-09T06:28:15Z, so `toDateTime(ingest_time) + INTERVAL 90 DAY` in
+  the TTL stays inside DateTime's range.
+- **Outage.** A failed insert is retried with the same rows, backing off
+  from 100ms to 5s, and nothing is polled meanwhile. The outage surfaces as
+  `signalman_consumer_lag_records{topic="alerts"}` on the sink's `/metrics`
+  (`:9465`), growing until ClickHouse returns, bounded by the topic's
+  retention. Nothing is dropped. signalmand itself is not slowed: the
+  acceptance line "the sink backpressures the pipeline" holds for the
+  alerts consumer, whose lag is the backpressure, not for detection.
+- **Records the table cannot hold.** The table's `rule_id` is a UUID,
+  `severity` is an Enum8 of the five Sigma levels, and the times are
+  DateTime64(3). The rule loader now rejects a non-UUID id and a missing or
+  unknown level (codes `invalid-id` and `level`), so these come from a
+  hand-written record, an older rule set, or a bug, but a record that would
+  fail every insert of its batch would still stop the sink for every
+  partition. `Decode` checks each record, and one it refuses goes to the
+  `alerts.dead` topic: same key and value, with headers naming its topic,
+  partition, offset, and the reason (capped at 1 KiB; a value too large to
+  fit beside the headers is cut, and `signalman-dead-truncated` records its
+  length). Its offset is committed with the batch around it, only after the
+  dead-letter write returned, so a crash redelivers it and it may be
+  dead-lettered twice. Each one increments
+  `signalman_sink_dead_letters_total`; any increase is an alert stored
+  nowhere queryable and needs an operator. `alerts.dead` keeps 30 days and
+  has the same 1 MiB record limit as the other topics. The sink refuses to
+  start without it. A transient dead-letter write failure is retried like
+  an insert; a permanent one stops the sink with the record's position.
+- **Permanent insert errors.** ClickHouse exceptions an identical insert
+  hits again (parse and type errors, a missing table or column, refused
+  auth, too many partitions in one block) and client-side append errors
+  wrap `chsink.ErrPermanent`. The sink then stops at once, naming the
+  offsets it holds per partition, and commits nothing. Everything else,
+  including "too many parts" while merges catch up, is retried as an
+  outage.
+
+Idempotence is checked twice, once against a model and once for real.
+`TestModelReingestChangesNoRow` runs over `replacingTable`, a model of the
+merge written for the test (last insert wins per sorting key, within a day
+partition), and checks over 500 random histories that inserting a batch
+again, whole or as a prefix, changes no row of `FINAL` or of the merged
+table. That shows the sink's redelivery pattern is safe if ClickHouse merges
+the way the model does; it proves nothing about ClickHouse.
+`TestReingestCollapsesInClickHouse` (build tag `integration`, needs
+`SIGNALMAN_CLICKHOUSE_DSN`, fails instead of skipping under `CI=true`) is
+the proof: the same check against a real ClickHouse with `SELECT ... FINAL`
+and `OPTIMIZE TABLE ... FINAL`. It has not been run yet: there is no Docker
+on the development machine.
+
+**Reset Redpanda and ClickHouse together.** `seq` is the `events.raw`
+offset, and `(partition, seq, rule_id)` is the table's dedup key. Recreating
+`events.raw` (or wiping the Redpanda volume) restarts offsets at 0, so new
+alerts reuse keys already in the table, and the ReplacingMergeTree collapses
+distinct alerts into one, silently. Wipe both volumes at once
+(`docker compose -f deploy/docker-compose.yml down -v`), or drop the
+`alerts` table when the topic is recreated.
+
 ## Rule set reload
 
 The engine sits in a `Slot`. Ingest reads the slot once per batch, when it
@@ -206,6 +302,7 @@ Names from the spec's core metrics table, in `internal/obs`.
 | `signalman_consumer_lag_records` | topic, partition | log end offset minus committed offset |
 | `signalman_ruleset_version_info` | ruleset_v, taxonomy_v | the slot, on every reload |
 | `signalman_audit_violations_total` | partition | the audit; not in the spec table |
+| `signalman_sink_dead_letters_total` | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
 
 A `source` label is never the raw header: it is the header when it is one of
 `pipe.Sources`, `unknown` when the header is missing, and `other` otherwise.

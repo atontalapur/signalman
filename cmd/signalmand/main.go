@@ -227,6 +227,9 @@ func topicSpecs(partitions int32) []kafka.TopicSpec {
 		{Name: pipe.TopicAlerts},
 		{Name: pipe.TopicVerdictsV1, Configs: map[string]string{"retention.ms": week}},
 		{Name: pipe.TopicDrops, Configs: map[string]string{"retention.ms": month}},
+		// signalman-sink's dead letters; created here so one flag sets up
+		// the whole stack.
+		{Name: pipe.TopicAlertsDead, Configs: map[string]string{"retention.ms": month}},
 	}
 	for i := range specs {
 		specs[i].Partitions, specs[i].Replication = partitions, 1

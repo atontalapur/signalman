@@ -46,6 +46,15 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 
 ## Completed
 
+### Reject rules the alert table cannot store
+**What:** The rule loader accepts any `id` and any `level` (including none), but the ClickHouse `alerts` table types `rule_id` as UUID and `severity` as an Enum8 of the five Sigma levels. An alert from such a rule stops `signalman-sink` at that record (`chsink.Decode`).
+**Why:** Stopping is correct for the sink (skipping would be silent loss), but the place to catch it is load time, where the error names the file and line, not a halted sink in production.
+**Context:** Options: a load error code for a non-UUID id or a missing or unknown level, or a lint warning in `signalman lint` only. A new code is a `docs/rule-loading.md` and `docs/corpus-acceptance.md` change too. Every rule in `rules/` already has a UUID id and a valid level.
+**Effort:** S
+**Priority:** P2
+**Depends on:** SIG-31
+**Completed:** SIG-46. The loader rejects a non-UUID `id` (`invalid-id`) and a missing or unknown `level` (`level`). `chsink.Decode` keeps its checks as a backstop, and a record it refuses now goes to `alerts.dead` instead of stopping the sink (SIG-31).
+
 ### Decide event value limits at decode time
 **What:** The decoder (Plan C) needs three stated decisions: a maximum field value length, what to do with invalid UTF-8 (reject, replace, or pass through), and whether nested lists are flattened or rejected.
 **Why:** From the SIG-15 adversarial review. `Wildcard.MatchString` is O(input x longest literal run), so a 1 MiB value against a rule with a 2000-character `contains` costs seconds and nothing upstream caps it. `strings.ToLower` maps invalid bytes to U+FFFD on both sides, so `Equals("a\xff")` matches `"a\xfe"` by accident. A list nested in a list never matches and never reaches the drop ledger, which the verdict invariant forbids.

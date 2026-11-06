@@ -32,7 +32,8 @@ services:
   # healthy. Partition counts match across host_id-keyed topics so a host's
   # events, norms, and drops share a partition number; verdicts.v1 must have
   # at least as many partitions as events.raw (signalmand checks at startup).
-  # Retention follows the spec: verdicts 7 days, drops 30 days.
+  # Retention follows the spec: verdicts 7 days, drops 30 days. alerts.dead
+  # (signalman-sink's dead letters, not in the spec) keeps 30 days like drops.
   # max.message.bytes is 1 MiB on every topic, equal to the producer's batch
   # limit (broker.MaxMessageBytes); change both together.
   topics:
@@ -50,6 +51,7 @@ services:
         done
         rpk topic create verdicts.v1 -p 8 -r 1 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe verdicts.v1 >/dev/null
         rpk topic create drops -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe drops >/dev/null
+        rpk topic create alerts.dead -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe alerts.dead >/dev/null
         touch /tmp/ready
         exec sleep infinity
     healthcheck:
@@ -74,6 +76,8 @@ services:
         hard: 262144
     volumes:
       - clickhouse:/var/lib/clickhouse
+      # Creates signalman.alerts on first start (empty volume only).
+      - ./clickhouse:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
       interval: 2s

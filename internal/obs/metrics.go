@@ -31,6 +31,10 @@ type Metrics struct {
 	// of the rule count. Not in the spec's table; it is the audit's output,
 	// and any increase is a P1. Labels: partition.
 	AuditViolations *prometheus.CounterVec
+	// SinkDeadLetters counts alerts records signalman-sink wrote to
+	// alerts.dead instead of the table. Not in the spec's table; any
+	// increase is an alert stored nowhere queryable.
+	SinkDeadLetters prometheus.Counter
 }
 
 // New registers the metrics on reg.
@@ -68,8 +72,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "signalman_audit_violations_total",
 			Help: "Committed events with no verdicts and no drop, with both, or with too few verdicts.",
 		}, []string{"partition"}),
+		SinkDeadLetters: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "signalman_sink_dead_letters_total",
+			Help: "Alerts records written to alerts.dead because the alerts table cannot hold them.",
+		}),
 	}
 	reg.MustRegister(m.EventsIngested, m.EventsDropped, m.StageQueueDepth, m.ConsumerLag,
-		m.Verdicts, m.RuleMatches, m.RuleSetVersion, m.AuditViolations)
+		m.Verdicts, m.RuleMatches, m.RuleSetVersion, m.AuditViolations, m.SinkDeadLetters)
 	return m
 }
