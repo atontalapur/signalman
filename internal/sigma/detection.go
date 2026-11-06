@@ -94,7 +94,10 @@ func compileMap(m map[string]any) (ast.Node, error) {
 		if err != nil {
 			return nil, fmt.Errorf("field %q: %w", key, err)
 		}
-		kids = append(kids, &ast.Pred{Field: field, Desc: describe(key, vals), Key: predKey(mods, vals), M: matcher})
+		kids = append(kids, &ast.Pred{
+			Field: field, Desc: describe(key, vals), Key: predKey(mods, vals), M: matcher,
+			Mods: mods, Vals: vals,
+		})
 	}
 	if len(kids) == 0 {
 		return nil, fmt.Errorf("empty map in selection")
@@ -123,10 +126,12 @@ func keywordPred(raw any) (ast.Node, error) {
 		return nil, fmt.Errorf("a keyword must be a scalar, got %s", v.Kind)
 	}
 	return &ast.Pred{
-		Field: "",
-		Desc:  fmt.Sprintf("keyword '%s'", text),
-		Key:   fmt.Sprintf("(keyword %q)", text),
-		M:     keywordMatcher{inner: match.Contains(text)},
+		Field:   "",
+		Desc:    fmt.Sprintf("keyword '%s'", text),
+		Key:     fmt.Sprintf("(keyword %q)", text),
+		M:       keywordMatcher{inner: match.Contains(text)},
+		Vals:    []event.Value{v},
+		Keyword: true,
 	}, nil
 }
 

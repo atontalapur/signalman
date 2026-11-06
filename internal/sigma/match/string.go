@@ -71,15 +71,21 @@ func padTrailingBackslash(s string) string {
 // Regex is case sensitive unless the |i modifier was present. This is the
 // one string modifier whose default differs from the rest of Sigma.
 func Regex(pattern string, caseInsensitive bool) (Matcher, error) {
-	if caseInsensitive {
-		pattern = "(?i)" + pattern
-	}
-	re, err := regexp.Compile(pattern)
+	re, err := compileRegex(pattern, caseInsensitive)
 	if err != nil {
 		return nil, err
 	}
-	return onText(re.MatchString), nil
+	return regexMatcher(re), nil
 }
+
+func compileRegex(pattern string, caseInsensitive bool) (*regexp.Regexp, error) {
+	if caseInsensitive {
+		pattern = "(?i)" + pattern
+	}
+	return regexp.Compile(pattern)
+}
+
+func regexMatcher(re *regexp.Regexp) Matcher { return onText(re.MatchString) }
 
 // Null matches an absent field or a field present with a null value. It does
 // not match an empty string.

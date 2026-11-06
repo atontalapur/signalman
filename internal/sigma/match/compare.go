@@ -44,11 +44,23 @@ func Compare(op string, want int64) (Matcher, error) {
 
 // CIDR parses the prefix once, at compile time, never per event.
 func CIDR(prefix string) (Matcher, error) {
+	p, err := parseCIDR(prefix)
+	if err != nil {
+		return nil, err
+	}
+	return cidrMatcher(p), nil
+}
+
+func parseCIDR(prefix string) (netip.Prefix, error) {
 	p, err := netip.ParsePrefix(prefix)
 	if err != nil {
-		return nil, fmt.Errorf("cidr %q: %w", prefix, err)
+		return netip.Prefix{}, fmt.Errorf("cidr %q: %w", prefix, err)
 	}
-	p = p.Masked()
+	return p.Masked(), nil
+}
+
+// cidrMatcher tests a parsed, masked prefix.
+func cidrMatcher(p netip.Prefix) Matcher {
 	return funcMatcher{func(v event.Value, _ *event.Event) bool {
 		return anyValue(v, func(item event.Value) bool {
 			s, ok := item.Text()
@@ -58,7 +70,7 @@ func CIDR(prefix string) (Matcher, error) {
 			addr, err := netip.ParseAddr(s)
 			return err == nil && p.Contains(addr)
 		})
-	}}, nil
+	}}
 }
 
 // anyValue applies f to v, or to each element of a list, and reports whether

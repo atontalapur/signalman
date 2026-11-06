@@ -164,7 +164,9 @@ func (t *Taxonomy) MatcherFor(e *TaxonomyEntry) LogSourceMatcher {
 			panic(fmt.Sprintf("taxonomy match %q: %v", k, err))
 		}
 		vals := []event.Value{v}
-		kids = append(kids, &ast.Pred{Field: k, Desc: describe(k, vals), Key: predKey(nil, vals), M: m})
+		kids = append(kids, &ast.Pred{
+			Field: k, Desc: describe(k, vals), Key: predKey(nil, vals), M: m, Vals: vals,
+		})
 	}
 	if len(kids) == 0 {
 		return LogSourceMatcher{}
