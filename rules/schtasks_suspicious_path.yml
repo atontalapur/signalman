@@ -1,0 +1,24 @@
+title: Scheduled Task Created From a User-Writable Path
+id: b0df3875-6348-49e7-8a5d-aee90dd632a8
+status: test
+description: schtasks creating a task whose action runs from AppData, Temp, or the public profile.
+author: signalman
+tags:
+  - attack.persistence
+  - attack.t1053.005
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\schtasks.exe'
+    CommandLine|windash|contains: ' -create '
+  selection_path:
+    CommandLine|contains:
+      - '\AppData\'
+      - '\Temp\'
+      - '\Users\Public\'
+  filter_updater:
+    CommandLine|contains: 'GoogleUpdateTaskMachine'
+  condition: selection and selection_path and not filter_updater
+level: medium

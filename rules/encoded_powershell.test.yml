@@ -1,0 +1,25 @@
+rule: encoded_powershell.yml
+cases:
+  - name:   encodedcommand switch
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+      CommandLine: powershell.exe -NoP -NonI -W Hidden -EncodedCommand RwBlAHQALQBDAGgAaQBsAGQASQB0AGUAbQAgAEMAOgBcAFUAcwBlAHIAcwAgAHwAIABTAGUAbABlAGMAdAAtAE8AYgBqAGUAYwB0ACAATgBhAG0AZQA=
+
+  - name:   pwsh with a slash switch
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Program Files\PowerShell\7\pwsh.exe
+      CommandLine: pwsh.exe /enc RwBlAHQALQBDAGgAaQBsAGQASQB0AGUAbQAgAEMAOgBcAFUAcwBlAHIAcwAgAHwAIABTAGUAbABlAGMAdAAtAE8AYgBqAGUAYwB0ACAATgBhAG0AZQA=
+
+  - name:   plain script file
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    1
+      Image:       C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+      CommandLine: powershell.exe -ExecutionPolicy Bypass -File C:\Scripts\inventory.ps1

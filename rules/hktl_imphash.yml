@@ -1,0 +1,19 @@
+title: Hack Tool Import Hash
+id: 723235d8-ca26-47b7-bbef-cf9ada7e1f45
+status: test
+description: A process whose import hash matches a known build of a credential or lateral movement tool.
+author: signalman
+tags:
+  - attack.execution
+  - attack.t1588.002
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Hashes|contains:
+      - 'IMPHASH=1B1A3F43BF37B5BFE60751F2EE2F326E'
+      - 'IMPHASH=C9A6A54BBF6A1A0BC9FC4F9E7B4C3E3A'
+      - 'IMPHASH=E96A73C7BF33A464C510EDE582318BF2'
+  condition: selection
+level: high

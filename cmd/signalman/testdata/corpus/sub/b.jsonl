@@ -1,0 +1,2 @@
+{"channel":"Microsoft-Windows-Sysmon/Operational","event_id":1,"Image":"C:\\Windows\\System32\\rundll32.exe","CommandLine":"rundll32 C:\\windows\\system32\\comsvcs.dll MiniDump 700 C:\\x.dmp full","ParentImage":"C:\\Windows\\System32\\cmd.exe"}
+{"channel":"Security","event_id":4688,"NewProcessName":"C:\\Windows\\System32\\whoami.exe","CommandLine":"whoami","SubjectUserName":"alice"}

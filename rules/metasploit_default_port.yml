@@ -1,0 +1,25 @@
+title: Connection to a Common Metasploit Port
+id: 8552a4ed-3788-48a6-92e6-72209dcc74f0
+status: test
+description: An outbound connection to a port Metasploit handlers default to, from anything but a browser.
+author: signalman
+tags:
+  - attack.command-and-control
+  - attack.t1571
+logsource:
+  product: windows
+  category: network_connection
+detection:
+  selection:
+    DestinationPort:
+      - 4444
+      - 4445
+      - 8443
+      - 31337
+  filter_browser:
+    Image|endswith:
+      - '\chrome.exe'
+      - '\firefox.exe'
+      - '\msedge.exe'
+  condition: selection and not filter_browser
+level: medium

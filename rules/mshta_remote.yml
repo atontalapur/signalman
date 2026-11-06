@@ -1,0 +1,22 @@
+title: Mshta Executing Remote or Inline Script
+id: 5fdf528d-e396-4df5-ace7-8e0d9903f09d
+status: test
+description: mshta running a script from a URL or an inline javascript or vbscript handler.
+author: signalman
+tags:
+  - attack.defense-evasion
+  - attack.t1218.005
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection_img:
+    Image|endswith: '\mshta.exe'
+  selection_cli:
+    CommandLine|contains:
+      - 'http://'
+      - 'https://'
+      - 'javascript:'
+      - 'vbscript:'
+  condition: selection_img and selection_cli
+level: high

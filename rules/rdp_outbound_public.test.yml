@@ -1,0 +1,28 @@
+rule: rdp_outbound_public.yml
+cases:
+  - name:   mstsc to a public host
+    expect: match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    3
+      Image:           C:\Windows\System32\mstsc.exe
+      DestinationIp:   203.0.113.25
+      DestinationPort: 3389
+
+  - name:   rdp inside the office network
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    3
+      Image:           C:\Windows\System32\mstsc.exe
+      DestinationIp:   172.20.4.11
+      DestinationPort: 3389
+
+  - name:   public address, https
+    expect: no-match
+    event:
+      channel:     Microsoft-Windows-Sysmon/Operational
+      event_id:    3
+      Image:           C:\Program Files\Mozilla Firefox\firefox.exe
+      DestinationIp:   203.0.113.25
+      DestinationPort: 443

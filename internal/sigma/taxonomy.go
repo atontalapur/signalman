@@ -163,7 +163,8 @@ func (t *Taxonomy) MatcherFor(e *TaxonomyEntry) LogSourceMatcher {
 			// and Build did not, which is a programming error, not bad input.
 			panic(fmt.Sprintf("taxonomy match %q: %v", k, err))
 		}
-		kids = append(kids, &ast.Pred{Field: k, Desc: describe(k, []event.Value{v}), M: m})
+		vals := []event.Value{v}
+		kids = append(kids, &ast.Pred{Field: k, Desc: describe(k, vals), Key: predKey(nil, vals), M: m})
 	}
 	if len(kids) == 0 {
 		return LogSourceMatcher{}
