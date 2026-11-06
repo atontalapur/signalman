@@ -75,6 +75,34 @@ jobs:
       - if: always()
         run: docker compose -f deploy/docker-compose.yml down -v
 
+  # Prometheus config, alert rules, and their promtool unit tests. promtool
+  # is the official 3.5.0 release (the compose Prometheus version), checked
+  # against the sha256 from that release's sha256sums.txt before it runs.
+  # make check-alerts fails under CI=true if promtool is missing.
+  alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      PROM_VERSION: 3.5.0
+      PROM_SHA256: e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install promtool
+        run: |
+          tarball="prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          dir="$RUNNER_TEMP/promtool"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/$tarball" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/${tarball}"
+          echo "${PROM_SHA256}  $dir/$tarball" | sha256sum -c -
+          tar -xzf "$dir/$tarball" -C "$dir" --strip-components=1 \
+            "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+          echo "$dir" >> "$GITHUB_PATH"
+      - run: promtool --version
+      - run: make check-alerts
+
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 10

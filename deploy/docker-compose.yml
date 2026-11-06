@@ -1,9 +1,12 @@
-# Local Redpanda and ClickHouse for signalmand and `make integration`.
+# Local Redpanda, ClickHouse, Prometheus, and Grafana for signalmand and
+# `make integration`.
 #
 #   docker compose -f deploy/docker-compose.yml up -d --wait
 #
 # Redpanda is reachable from the host at localhost:19092, ClickHouse at
-# localhost:8123 (HTTP) and localhost:9000 (native). Images are pinned; bump
+# localhost:8123 (HTTP) and localhost:9000 (native), Prometheus at
+# localhost:9090, Grafana at localhost:3000. Prometheus scrapes signalmand
+# on the host at :9464 and signalman-sink at :9465. Images are pinned; bump
 # them deliberately.
 name: signalman
 
@@ -30,10 +33,12 @@ services:
 
   # Creates the pipeline topics, then stays up so `up --wait` can treat it as
   # healthy. Partition counts match across host_id-keyed topics so a host's
-  # events, norms, and drops share a partition number; verdicts.v1 must have
-  # at least as many partitions as events.raw (signalmand checks at startup).
-  # Retention follows the spec: verdicts 7 days, drops 30 days. alerts.dead
-  # (signalman-sink's dead letters, not in the spec) keeps 30 days like drops.
+  # events, norms, and drops share a partition number; verdicts.v1 and
+  # verdicts.v2 must have at least as many partitions as events.raw
+  # (signalmand checks at startup). Retention follows the spec: verdicts 7
+  # days, drops 30 days. Divergences keep 30 days, like drops: each one is
+  # evidence for the cutover's divergence log. alerts.dead (signalman-sink's
+  # dead letters, not in the spec) keeps 30 days like drops.
   # max.message.bytes is 1 MiB on every topic, equal to the producer's batch
   # limit (broker.MaxMessageBytes); change both together.
   topics:
@@ -49,9 +54,12 @@ services:
         for t in events.raw events.norm alerts; do
           rpk topic create "$$t" -p 8 -r 1 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
         done
-        rpk topic create verdicts.v1 -p 8 -r 1 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe verdicts.v1 >/dev/null
-        rpk topic create drops -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe drops >/dev/null
-        rpk topic create alerts.dead -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe alerts.dead >/dev/null
+        for t in verdicts.v1 verdicts.v2; do
+          rpk topic create "$$t" -p 8 -r 1 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
+        done
+        for t in divergences drops alerts.dead; do
+          rpk topic create "$$t" -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
+        done
         touch /tmp/ready
         exec sleep infinity
     healthcheck:
@@ -84,6 +92,55 @@ services:
       timeout: 5s
       retries: 30
 
+  # Scrapes signalmand and signalman-sink on the host and evaluates
+  # deploy/prometheus/alerts.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # The silence detector looks back 30 days.
+      - --storage.tsdb.retention.time=35d
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - prometheus:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Local only: anonymous viewers, no login. The dashboard is provisioned
+  # from deploy/grafana/dashboards and is read only in the UI.
+  grafana:
+    image: grafana/grafana:12.1.0
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/signalman.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
 volumes:
   redpanda:
   clickhouse:
+  prometheus:
+  grafana:

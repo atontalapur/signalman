@@ -19,7 +19,7 @@ const testPartitions = 4
 
 func newMemory(opts ...broker.MemoryOption) *broker.Memory {
 	topics := map[string]int32{}
-	for _, t := range []string{TopicEventsRaw, TopicEventsNorm, TopicVerdictsV1, TopicAlerts, TopicDrops} {
+	for _, t := range []string{TopicEventsRaw, TopicEventsNorm, TopicVerdictsV1, TopicVerdictsV2, TopicAlerts, TopicDrops} {
 		topics[t] = testPartitions
 	}
 	return broker.NewMemory(topics, opts...)
@@ -90,8 +90,14 @@ type rig struct {
 
 func newRig(t testing.TB, b broker.Broker, mem *broker.Memory) *rig {
 	t.Helper()
+	return newRigClock(t, b, mem, time.Now)
+}
+
+// newRigClock is newRig with the metrics' age gauges read against now.
+func newRigClock(t testing.TB, b broker.Broker, mem *broker.Memory, now func() time.Time) *rig {
+	t.Helper()
 	reg := prometheus.NewRegistry()
-	m := obs.New(reg)
+	m := obs.NewWithClock(reg, now)
 	return &rig{b: b, mem: mem, reg: reg, m: m, norm: NewNormalizer(loadTaxonomy(t), NormalizeConfig{}, m), rs: loadRules(t)}
 }
 
