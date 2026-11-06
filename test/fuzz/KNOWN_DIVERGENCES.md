@@ -70,12 +70,16 @@ Signalman requires an `id`; pySigma does not. Verdicts are keyed on the rule
 id, so a rule without one cannot be reported on or compared across engines.
 Recorded in `docs/corpus-acceptance.md` as `missing-id`.
 
-### A rule whose id is not a UUID
+### A rule with no level
 
-The mirror of the case above, and a separate suppression
-(`SigmaIdentifierError`). pySigma requires the id to parse as a UUID and
-rejects `id: not-a-uuid`; Signalman requires only that an id exist, because
-what it needs from the id is a stable key for verdicts, not a format.
+Signalman requires a `level` from the five Sigma levels; pySigma allows a
+rule without one. The alerts table stores severity as an enum, so a rule
+with no level could not produce a storable alert. Recorded in
+`docs/rule-loading.md` as `level`. The generator always writes one.
+
+A rule whose id is not a UUID used to be listed here. Both sides now reject
+it (Signalman as `invalid-id`), so it is agreement, not a divergence, and
+`id-not-uuid` is no longer a suppressed refusal code.
 
 ### Aggregation and correlation
 

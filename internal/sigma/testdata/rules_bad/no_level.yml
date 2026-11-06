@@ -1,0 +1,9 @@
+title: A rule with no severity
+id: 1f1a1f1a-000c-4000-8000-00000000000c
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\cmd.exe'
+  condition: selection
