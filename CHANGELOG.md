@@ -3,6 +3,36 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.11.0] - 2026-10-21
+
+### Added
+
+- `internal/backend/ch`, the ClickHouse SQL backend. `CompileRule` turns a
+  loaded rule into a WHERE clause over an events table, and `RetroHunt` runs
+  it over a time window through `database/sql`. Every node type and
+  modifier the frontend accepts compiles, as does every rule the corpus
+  loads.
+- `ch.Encode` stores each field as v1 would compare it (folded, regex-safe,
+  fold key, ints, addresses), so the SQL only compares and never relies on
+  ClickHouse's own case folding, regex, or parsing. Each dialect leak is in
+  `docs/backend-ch.md`.
+- A retro-hunt-equals-replay integration test against ClickHouse.
+
+### Changed
+
+- The CI integration job and `make integration` set
+  `SIGNALMAN_CLICKHOUSE_DSN` to the compose server. Under `CI=true` the
+  retro-hunt test fails instead of skipping when the DSN is unset.
+
+### Fixed
+
+- The events table partitioned and expired rows on the source's
+  `event_time`, so old or skewed events were deleted on arrival and a wide
+  batch could exceed the 100 partitions per insert limit. It now uses
+  `ingest_time`.
+- The query size check covered only the WHERE clause. `HuntQuery` now
+  checks the full statement.
+
 ## [0.10.0] - 2026-10-21
 
 ### Added

@@ -85,12 +85,22 @@ topics, record formats, drop reasons, delivery, and the audit. The gate is
 not passed: the audit is green over generated load in test mode, but the
 one-hour soak against Redpanda has not been run.
 
+`internal/backend/ch` is the second execution target. It compiles a loaded
+rule into a ClickHouse WHERE clause over an events table, and `RetroHunt`
+runs it over a time window through `database/sql`. Every node type and
+modifier the frontend accepts compiles, and every rule the corpus loads
+compiles. Where ClickHouse disagrees with Go (case folding, regex dot and
+Unicode tables, NULL, number and address parsing, invalid UTF-8), the event
+is stored with the value v1 would compute, so the SQL only compares.
+`docs/backend-ch.md` lists each leak. The retro-hunt-equals-replay test is
+written but has not yet run against a server.
+
 | Plan | What it delivers | State |
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
-| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | not started |
+| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler and retro-hunt done, integration gate not yet run; sink not started |
 | E. Observability | metrics, dashboards, canary generator, silence detector | not started |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | not started |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, `docs/cutover.md` | in progress: v2 engine (interning, prefilter, presence gating, 0 allocs/event) digest-identical to v1 on the corpus; shadow lane, differ, rollout not started |
@@ -141,7 +151,7 @@ internal/fixture/       <rule>.test.yml loader and runner, through v1
 internal/explain/       explain walker and renderer, held equal to v1 by test
 internal/engine/v2/     compiled evaluator: interned predicates, presence gating, literal prefilter
 internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
-internal/backend/ch/    AST to ClickHouse SQL
+internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
 internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, invariant 1 audit
 internal/broker/        broker interface, in-memory implementation; kafka/ is franz-go
 internal/obs/           metrics (canary is Plan E)
@@ -156,6 +166,7 @@ docs/rule-loading.md    load pipeline, rejection codes, RuleSetV
 docs/corpus-acceptance.md  what loads from SigmaHQ and why the rest does not
 docs/evaluation.md      the v1 and v2 evaluators and how verdict streams are compared
 docs/pipeline.md        topics, Seq, drop reasons, at-least-once delivery, backpressure, the audit
+docs/backend-ch.md      the ClickHouse backend, its schema, rejections, dialect leaks
 docs/results.md         measured numbers: fuzzer, corpus, benchmarks
 corpora/                third-party rule corpus clone, gitignored
 config/taxonomy/        logsource bindings, hashed into every verdict
@@ -176,7 +187,10 @@ that needs them.
 - `make integration` needs Redpanda and ClickHouse from `deploy/docker-compose.yml`:
   `docker compose -f deploy/docker-compose.yml up -d --wait`. Integration tests
   carry the `integration` build tag and reach Redpanda at `localhost:19092`
-  (override with `SIGNALMAN_BROKERS`).
+  (override with `SIGNALMAN_BROKERS`). The ClickHouse retro-hunt test reads a
+  clickhouse-go DSN from `SIGNALMAN_CLICKHOUSE_DSN`, which `make integration`
+  sets to the compose server. Without it the test skips locally and fails
+  when `CI=true`.
 - Run the daemon against the compose stack:
   `go run ./cmd/signalmand -rules <dir> -taxonomy config/taxonomy`. It
   serves `/metrics` on `:9464`, reloads rules on `SIGHUP`, and by default

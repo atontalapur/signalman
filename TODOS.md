@@ -20,6 +20,14 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P4
 **Depends on:** Plan F load numbers
 
+### Rename fieldref targets through the taxonomy
+**What:** `rename` in `internal/sigma/rule.go` maps `Pred.Field` through the taxonomy but leaves the `fieldref` target, which lives in the rule value, under its Sigma name.
+**Why:** Found while writing the ClickHouse backend (SIG-32). Under `Image: NewProcessName`, `ParentImage|fieldref: Image` compares against a field the event never has, so the rule silently never matches. v1 and the SQL backend agree on this, so no differ catches it.
+**Context:** Fix in the loader by rewriting the value through the same mapping, then let `ch` and v1 both pick it up. Changes RuleSetV for any rule using fieldref under a renaming entry. See `docs/backend-ch.md`, "Found in the frontend".
+**Effort:** S
+**Priority:** P2
+**Depends on:** nothing
+
 ### Case folding applied to base64 text widens matching
 **What:** `Equals` lowercases both sides, and encoding transforms run before that fold, so a `base64offset|contains` matcher compares lowercased base64. Two different plaintext bytes can encode to base64 characters that differ only in case (`A` and `a`), so a value can match a blob it did not encode.
 **Why:** Sigma string matching is case insensitive by default and pySigma's backends fold case the same way, so following the spec here is right and the fuzzer will confirm it. The cost is a wider match on encoded values, which is a false positive, never a missed detection.
