@@ -264,6 +264,14 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   `service: security` used to share a RuleSetV while giving different
   verdicts. Every RuleSetV value changes.
 
+## [0.7.2] - 2026-10-21
+
+### Fixed
+
+- `make check` passes again on Go 1.27.3, which CI's `setup-go` now
+  resolves. staticcheck v0.8.1 could not read Go 1.27.3's export data and
+  failed every run, on `main` and on Dependabot PRs; it is now v0.8.2.
+
 ## [0.7.1] - 2026-10-01
 
 ### Changed
