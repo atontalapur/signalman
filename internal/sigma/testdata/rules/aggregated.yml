@@ -1,5 +1,6 @@
 title: Failed logon burst
 id: 1f1a1f1a-0002-4000-8000-000000000002
+level: low
 logsource:
   product: windows
   category: process_creation

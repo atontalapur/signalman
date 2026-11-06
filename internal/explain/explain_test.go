@@ -180,7 +180,7 @@ func TestExplainAgreesWithV1(t *testing.T) {
 			}
 		}
 	}
-	if len(rules) != 20 || matches == 0 {
+	if len(rules) < 20 || matches == 0 {
 		t.Fatalf("%d rules, %d matches: the comparison covered too little", len(rules), matches)
 	}
 }

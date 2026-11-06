@@ -21,7 +21,8 @@ type Memory struct {
 	mu      sync.Mutex
 	topics  map[string][][]Record
 	groups  map[string]map[TopicPartition]int64
-	start   map[TopicPartition]int64 // log start, moved by Trim
+	meta    map[string]map[TopicPartition]string // CommitCheckpoints metadata
+	start   map[TopicPartition]int64             // log start, moved by Trim
 	notify  chan struct{}
 	maxPoll int
 	maxRec  int
@@ -46,6 +47,7 @@ func NewMemory(topics map[string]int32, opts ...MemoryOption) *Memory {
 	m := &Memory{
 		topics:  make(map[string][][]Record, len(topics)),
 		groups:  map[string]map[TopicPartition]int64{},
+		meta:    map[string]map[TopicPartition]string{},
 		start:   map[TopicPartition]int64{},
 		notify:  make(chan struct{}),
 		maxPoll: 500,
@@ -211,6 +213,49 @@ func (m *Memory) CommittedOffsets(ctx context.Context, group, topic string) (map
 	return out, nil
 }
 
+func (m *Memory) Checkpoints(ctx context.Context, group, topic string) (map[int32]Checkpoint, error) {
+	c, err := m.CommittedOffsets(ctx, group, topic)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[int32]Checkpoint, len(c))
+	for p, next := range c {
+		out[p] = Checkpoint{Next: next, Meta: m.meta[group][TopicPartition{topic, p}]}
+	}
+	return out, nil
+}
+
+func (m *Memory) CommitCheckpoints(ctx context.Context, group string, cps map[TopicPartition]Checkpoint) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for tp := range cps {
+		ps, ok := m.topics[tp.Topic]
+		if !ok || tp.Partition < 0 || int(tp.Partition) >= len(ps) {
+			return fmt.Errorf("commit: no partition %s/%d", tp.Topic, tp.Partition)
+		}
+	}
+	g := m.groups[group]
+	if g == nil {
+		g = map[TopicPartition]int64{}
+		m.groups[group] = g
+	}
+	meta := m.meta[group]
+	if meta == nil {
+		meta = map[TopicPartition]string{}
+		m.meta[group] = meta
+	}
+	for tp, cp := range cps {
+		g[tp] = cp.Next
+		meta[tp] = cp.Meta
+	}
+	return nil
+}
+
 func (m *Memory) Close() {}
 
 type memConsumer struct {
@@ -283,6 +328,7 @@ func (c *memConsumer) Commit(ctx context.Context, next map[TopicPartition]int64)
 	}
 	for tp, off := range next {
 		g[tp] = off
+		delete(c.m.meta[c.group], tp) // a commit without metadata clears it, as in Kafka
 	}
 	return nil
 }

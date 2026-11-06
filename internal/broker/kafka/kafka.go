@@ -257,6 +257,36 @@ func (b *Broker) CommittedOffsets(ctx context.Context, group, topic string) (map
 	return out, ferr
 }
 
+// Checkpoints is CommittedOffsets with the metadata of each commit.
+func (b *Broker) Checkpoints(ctx context.Context, group, topic string) (map[int32]broker.Checkpoint, error) {
+	rs, err := b.admin.FetchOffsetsForTopics(ctx, group, topic)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int32]broker.Checkpoint{}
+	var ferr error
+	rs.Each(func(o kadm.OffsetResponse) {
+		if o.Err != nil && ferr == nil {
+			ferr = o.Err
+		}
+		if o.Topic == topic && o.At >= 0 {
+			out[o.Partition] = broker.Checkpoint{Next: o.At, Meta: o.Metadata}
+		}
+	})
+	return out, ferr
+}
+
+// CommitCheckpoints commits cps for group through the admin client,
+// outside any group membership. Kafka accepts it only while the group is
+// empty.
+func (b *Broker) CommitCheckpoints(ctx context.Context, group string, cps map[broker.TopicPartition]broker.Checkpoint) error {
+	os := kadm.Offsets{}
+	for tp, cp := range cps {
+		os.Add(kadm.Offset{Topic: tp.Topic, Partition: tp.Partition, At: cp.Next, LeaderEpoch: -1, Metadata: cp.Meta})
+	}
+	return b.admin.CommitAllOffsets(ctx, group, os)
+}
+
 // TopicSpec is one topic EnsureTopics creates.
 type TopicSpec struct {
 	Name        string

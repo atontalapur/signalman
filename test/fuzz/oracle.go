@@ -77,7 +77,6 @@ var refusalCodes = map[string]bool{
 	"regex-brace":            true, // RE2 reads non-canonical braces literally
 	"regex-newline":          true, // Python's $ matches before a final newline
 	"unparenthesized-not":    true, // the backend's NOT a OR b defect
-	"id-not-uuid":            true, // pySigma requires a UUID id
 	"regex-python-rejects":   true, // Python's engine rejects what RE2 accepts
 	"unknown-modifier":       true, // a modifier name pySigma does not carry
 	"wide-non-ascii":         true, // pySigma's wide/utf16 accept ASCII only
@@ -341,6 +340,8 @@ func known(errG, errP error) bool {
 			return true // deliberate scope cut; pySigma converts these
 		case sigma.CodeMissingID:
 			return true // verdicts are keyed on the id; pySigma allows none
+		case sigma.CodeLevel:
+			return true // the alerts table needs a severity; pySigma allows none
 		}
 		var synErr *syntax.Error
 		if errors.As(errG, &synErr) {

@@ -50,6 +50,8 @@ type Rule struct {
 const (
 	CodeYAML        = "yaml"
 	CodeMissingID   = "missing-id"
+	CodeInvalidID   = "invalid-id"
+	CodeLevel       = "level"
 	CodeDuplicateID = "duplicate-id"
 	CodeNoTaxonomy  = "no-taxonomy"
 	CodeCondition   = "condition"
@@ -120,6 +122,14 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 	if f.ID == "" {
 		return nil, fail(CodeMissingID, "rule has no id", 1)
 	}
+	// A UUID's hex is case insensitive, and macOS uuidgen writes upper
+	// case. The id is lowered here, before anything compares, hashes, or
+	// reports it, so the duplicate check, RuleSetV, verdicts, and alerts all
+	// see one spelling. Two rules whose ids differ only in case would
+	// otherwise both load and write the same alerts row.
+	if canonicalUUID(f.ID) {
+		f.ID = strings.ToLower(f.ID)
+	}
 	budget, err := budgetValue(f.Budget)
 	if err != nil {
 		return nil, fail(CodeYAML, err.Error(), keyLine(src, "budget:"))
@@ -163,6 +173,23 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 		}
 		arms = append(arms, expanded)
 	}
+	// The id and level are checked after everything about the engine and
+	// before the taxonomy, for the same reason the taxonomy is last: a rule
+	// with an aggregation pipe and no level still reports "aggregation".
+	// The alerts table holds rule_id as a UUID and severity as an enum of
+	// the five Sigma levels, so a rule outside either would load, match, and
+	// produce alerts no insert can store.
+	if !canonicalUUID(f.ID) {
+		return nil, fail(CodeInvalidID, fmt.Sprintf("id %q is not a UUID in the 8-4-4-4-12 hex form", f.ID), keyLine(src, "id:"))
+	}
+	if !Levels[f.Level] {
+		reason := "rule has no level; want one of informational, low, medium, high, critical"
+		if f.Level != "" {
+			reason = fmt.Sprintf("level %q is not one of informational, low, medium, high, critical", f.Level)
+		}
+		return nil, fail(CodeLevel, reason, keyLine(src, "level:"))
+	}
+
 	var cond ast.Node
 	if len(arms) == 1 {
 		cond = arms[0]
@@ -206,6 +233,36 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 		Condition:  cond,
 		Selections: named,
 	}, nil
+}
+
+// Levels are the Sigma rule levels, spelled as the spec spells them. They
+// are the values the alerts table's severity enum accepts.
+var Levels = map[string]bool{
+	"informational": true, "low": true, "medium": true, "high": true, "critical": true,
+}
+
+// canonicalUUID reports whether s is a UUID in the 36-character hyphenated
+// form, hex digits in either case. Braces, a urn:uuid: prefix, and the
+// 32-digit form are refused: a rule id is compared as a string everywhere,
+// so it has one spelling, and LoadRuleBytes lowers the hex to give it one.
+func canonicalUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // tagList keeps the string items of a tag list and ignores anything else.

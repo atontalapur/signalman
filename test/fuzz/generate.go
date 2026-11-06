@@ -99,6 +99,7 @@ func buildRule(fieldSel, modSel, condSel uint8, ruleVal, ruleVal2, eventVal stri
 	doc := map[string]any{
 		"title":     "fuzz",
 		"id":        fuzzRuleID,
+		"level":     "low",
 		"logsource": map[string]any{"product": "windows", "category": "process_creation"},
 		"detection": detection,
 	}

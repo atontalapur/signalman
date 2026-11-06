@@ -2,19 +2,42 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
+
+// shippedRules counts the rule files in rules/, so adding a rule needs no
+// change here and a rules-only PR stays rules-only.
+func shippedRules(t *testing.T) int {
+	t.Helper()
+	all, err := filepath.Glob("../../rules/*.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, f := range all {
+		if !strings.HasSuffix(f, ".test.yml") {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("no rules in ../../rules")
+	}
+	return n
+}
 
 func TestLintPassesTheShippedRules(t *testing.T) {
 	code, stdout, stderr := cli(t, "lint", "--taxonomy", testTaxonomy, "../../rules")
 	if code != exitOK {
 		t.Fatalf("code %d\n%s%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "20 rules, 20 loaded, 0 rejected") {
+	n := shippedRules(t)
+	if want := fmt.Sprintf("%d rules, %d loaded, 0 rejected", n, n); !strings.Contains(stdout, want) {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
 }
@@ -29,7 +52,9 @@ func TestLintPrintsEveryLoadErrorStructured(t *testing.T) {
 		"[modifier]",
 		"[yaml]",
 		"[condition]",
-		"5 rules, 0 loaded, 5 rejected",
+		"[invalid-id]",
+		"[level]",
+		"8 rules, 0 loaded, 8 rejected",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, stdout)
@@ -51,8 +76,8 @@ func TestLintJSONIsOneObjectPerError(t *testing.T) {
 		t.Fatalf("code %d", code)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("want 5 lines, got:\n%s", stdout)
+	if len(lines) != 8 {
+		t.Fatalf("want 8 lines, got:\n%s", stdout)
 	}
 	var e struct {
 		Path, RuleID, Code, Reason string
@@ -74,7 +99,8 @@ func TestBenchReportsP99PerRule(t *testing.T) {
 	if !strings.Contains(stdout, "p99") || !strings.Contains(stdout, "rules/proc_dump.yml") {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "20 rules, 0 over the 1h0m0s p99 budget, 56 events") {
+	summary := regexp.MustCompile(fmt.Sprintf(`\b%d rules, 0 over the 1h0m0s p99 budget, [1-9][0-9]* events`, shippedRules(t)))
+	if !summary.MatchString(stdout) {
 		t.Fatalf("stdout:\n%s", stdout)
 	}
 }

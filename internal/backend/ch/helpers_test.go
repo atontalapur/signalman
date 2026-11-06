@@ -31,7 +31,7 @@ func testTaxonomy(t testing.TB) *sigma.Taxonomy {
 // loadDetection builds a rule from a detection block written in YAML.
 func loadDetection(t testing.TB, tax *sigma.Taxonomy, detection string) *sigma.Rule {
 	t.Helper()
-	src := "title: t\nid: 00000000-0000-4000-8000-000000000000\nlogsource:\n  product: test\ndetection:\n" + indent(detection)
+	src := "title: t\nid: 00000000-0000-4000-8000-000000000000\nlevel: low\nlogsource:\n  product: test\ndetection:\n" + indent(detection)
 	r, lerr := sigma.LoadRuleBytes("inline.yml", []byte(src), tax)
 	if lerr != nil {
 		t.Fatalf("load: %v\n%s", lerr, src)

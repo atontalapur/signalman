@@ -13,6 +13,7 @@ import (
 
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/sigma"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // tamper wraps a broker and rewrites what the sink produces, standing in
@@ -78,9 +79,17 @@ func TestAuditIsGreenWhenEveryEventIsAccountedFor(t *testing.T) {
 	if ingested != 210 || dropped != 30 || evaluated != 180 || verdicts != 180*int64(len(r.rs.Rules)) {
 		t.Fatalf("ingested %d = evaluated %d + dropped %d, verdicts %d", ingested, evaluated, dropped, verdicts)
 	}
+	// The windows closed are counted, so the cutover gates can tell an
+	// audit that ran and found nothing from one that never ran.
+	if got := testutil.ToFloat64(r.m.AuditWindows); got != float64(len(reports)) || got == 0 {
+		t.Fatalf("signalman_audit_windows_total = %v for %d windows", got, len(reports))
+	}
 	again, err := a.Step(context.Background())
 	if err != nil || len(again) != 0 {
 		t.Fatalf("a second step with nothing new committed audits nothing: %v %v", again, err)
+	}
+	if got := testutil.ToFloat64(r.m.AuditWindows); got != float64(len(reports)) {
+		t.Fatalf("an empty step counted windows: %v", got)
 	}
 }
 
@@ -339,5 +348,22 @@ func TestAuditStartsAtTheLogStartOfAnUncommittedPartition(t *testing.T) {
 	}
 	if len(reports) == 0 {
 		t.Fatal("nothing audited")
+	}
+}
+
+// Prometheus's increase() never counts a series' first sample. A
+// partition's violations series made only when it first counts would read 5
+// missing verdicts as an increase of 0, and G6 would pass. Every audited
+// partition exports 0 from the start, so any violation is an increase.
+func TestAuditExportsZeroViolationsForEveryPartitionAtStart(t *testing.T) {
+	mem := newMemory(broker.WithMaxPoll(8))
+	r, _, _ := auditRig(t, mem, mem)
+	if got := testutil.CollectAndCount(r.m.AuditViolations); got != testPartitions {
+		t.Fatalf("%d signalman_audit_violations_total series before any window closed, want %d", got, testPartitions)
+	}
+	for p := range testPartitions {
+		if v := testutil.ToFloat64(r.m.AuditViolations.WithLabelValues(strconv.Itoa(p))); v != 0 {
+			t.Fatalf("partition %d starts at %v", p, v)
+		}
 	}
 }

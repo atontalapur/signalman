@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -76,14 +77,19 @@ func TestTestWithNoRulesIsAUsageError(t *testing.T) {
 	}
 }
 
-// The Plan B gate: twenty hand-written rules pass their fixtures.
+// The Plan B gate: at least twenty hand-written rules, and every shipped
+// rule passes its fixtures.
 func TestShippedRulesPassTheirFixtures(t *testing.T) {
 	code, stdout, stderr := cli(t, "test", "--taxonomy", testTaxonomy, "../../rules")
 	if code != exitOK {
 		t.Fatalf("code %d\n%s%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "20 rules, 20 passed, 0 failed") {
-		t.Fatalf("expected twenty rules:\n%s", stdout)
+	n := shippedRules(t)
+	if n < 20 {
+		t.Fatalf("%d shipped rules; the Plan B gate needs twenty", n)
+	}
+	if want := fmt.Sprintf("%d rules, %d passed, 0 failed", n, n); !strings.Contains(stdout, want) {
+		t.Fatalf("stdout lacks %q:\n%s", want, stdout)
 	}
 }
 

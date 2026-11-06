@@ -3,6 +3,298 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.17.0] - 2026-10-21
+
+### Added
+
+- `internal/loadtest` runs the pipeline in process over the in-memory
+  broker behind a tap that checks every batch's outputs: one verdict per
+  rule of one RuleSetV, alerts equal to matched verdicts, and exactly one
+  verdict record or drop per `events.raw` offset. It paces a corpus at a
+  multiple of a measured baseline and injects consumer kills, poison
+  records, rule reloads, an output outage and an offline partition.
+- The seven spec phase 05 experiments run under `SIGNALMAN_LOAD=1`, each
+  writing a JSON report. `docs/load.md` records the in-process run on the
+  1,236 SigmaHQ rules and what still needs Redpanda and ClickHouse.
+- `cmd/loadgen` replays an ndjson corpus, or events generated from a rule
+  directory, into `events.raw` on Kafka at a multiple of a baseline.
+- `pipe.Normalizer.SetFault` for failure injection in tests.
+
+### Changed
+
+- `Correctness.OK` fails on any redelivered verdict record whose bytes
+  differ from its first write. The reload experiment uses
+  `OKAcrossReloads`.
+- Sustained 5x asserts its digest equals a clean replay; partition offline
+  asserts no duplicates.
+- Reports carry `tap_blocked_sends`, counted, in place of relying on the
+  sampled tap queue depth.
+
+### Fixed
+
+- A redelivery was compared on rule set and matched rule indices only, and
+  a changed one was reported but never failed a run.
+- `Replay` resent a whole failed batch with no record of it; it now counts
+  `Resent` records (possible duplicates on Kafka) and stops on a permanent
+  produce error instead of retrying it forever.
+
+## [0.16.0] - 2026-10-21
+
+### Added
+
+- `cmd/cutover check` evaluates one gate of the G0 to G6 ladder and prints
+  every criterion with its status and evidence: a corpus replay digested
+  per partition through v1 and v2, the differential fuzzer's summed
+  counters and the property tests for G0, Prometheus for G1 to G6, and a
+  game day result for the rollback timings. A criterion nothing here can
+  check stays unchecked until attested with `-attest`. `-record` dates a
+  passed gate in `docs/cutover.md` and appends its evidence.
+- `cmd/cutover gameday` rolls the `-rollout` file back and forward with a
+  rename and times each change from `signalman_rollout_percent` and
+  `signalman_alerts_total`; `cutover measure` times a change made by hand.
+- `signalmand -serve v2` makes v2 the serving engine for every rule, with
+  v1 as the oracle under `-shadow`; `cmd/differ -primary v2` joins on v2's
+  records. The default stays `-serve v1`.
+- The ClickHouse `alerts` table and the sink carry the serving `engine`
+  column, with `002_alerts_engine.sql` for an existing table.
+- `signalman_audit_windows_total` counts the windows the invariant 1 audit
+  closed.
+
+### Changed
+
+- The corpus reader moves to `internal/corpus` and the rollout file parser
+  to `internal/pipe`. Prometheus also scrapes the differ.
+- `chsink.Decode` refuses an alert whose engine is not v1 or v2, and the
+  sink dead-letters it.
+
+### Fixed
+
+- Gates passed on a window only partly scraped. Every gate with a window
+  now needs signalmand and the differ scraped for 95% of it (and of the
+  alert volume baseline), and each engine's verdict rate above zero at
+  every 5m step.
+- `-at` could be in the future and `-record` could write a future date.
+  Both are refused.
+- G6 passed audit-violations when the audit never ran. It now needs
+  `signalman_audit_windows_total` rising at every 5m step.
+- A rollback drill counted for any step at any time. G2 to G4 now need one
+  from the gate's step, written within `-drill-slack` (24h) of the hold.
+  `-rollback-only` used to leave production at the rollback target; it now
+  writes `-from` back and checks the gauge, or exits non-zero.
+- `-record` dated a gate with earlier gates undated. It now refuses.
+- G6 audit-violations, G4 v1-serves-none and shadow-failures missed a
+  counter's first count: those series were made by it, and `increase()`
+  ignores a series' first sample. signalmand now exports them at zero (per
+  partition from the auditor's start, per rule and engine and per shadow
+  when engines are stored), and the gates treat no series as unchecked.
+- differ-running passed on any differ activity in the window, so a differ
+  that stalled after an hour, or fell far behind, passed G1 to G4 and G6
+  with divergences flat. It now needs differ resolutions at every 5m step,
+  and the new differ-keeps-up needs the differ to have resolved the events
+  signalmand evaluated, within `-verdict-tolerance`.
+
+## [0.15.0] - 2026-10-21
+
+### Added
+
+- `signalmand -shadow` evaluates every event with v2 beside v1 in the same
+  batch and writes `verdicts.v2` with no alerts. The slot stores the pair as
+  one value, so a reload never splits them across RuleSetV. A v2 panic or
+  malformed verdict list leaves v1 untouched, writes no v2 record, and
+  counts in `signalman_shadow_failures_total`.
+- `cmd/differ` merge-joins `verdicts.v1` and `verdicts.v2` per partition on
+  (partition, seq, rule_id), classifies disagreements into the spec's five
+  classes, and writes each to the `divergences` topic and the JSON log.
+  Memory is bounded by one head per side and a bounded channel.
+- Per-rule rollout: v2 serves a rule's alerts when fnv(rule_id) mod 100 is
+  below the rollout percentage, read once per batch, so each match gets
+  exactly one alert from its serving engine. `signalmand -rollout` rereads
+  the percentage from a file every `-rollout-poll` (5s) and on SIGHUP.
+  Alerts carry the serving engine; `signalman_alerts_total` and
+  `signalman_rollout_percent` are exported.
+- `docs/cutover.md`: the four arguments, the gate ladder, retirement
+  criteria, and an empty divergence log.
+- `broker.Checkpoint`: a committed offset with its commit metadata.
+
+### Changed
+
+- The differ commits each side's repeat-dropping state as offset commit
+  metadata (`CommitCheckpoints` replaces `CommitOffsets` on the broker).
+- `-create-topics` and the compose stack create `verdicts.v2` and
+  `divergences`, with the same 1 MiB `max.message.bytes` as every topic.
+
+### Fixed
+
+- A 20 MB `signalmand` binary was committed at the repository root. It is
+  removed, and the cmd binary names are ignored there.
+- signalmand now refuses at startup a `verdicts.v2` with fewer partitions
+  than `events.raw` when the shadow is on, and a `verdicts.v2` record over
+  the output limit stops the pipeline like a `verdicts.v1` one.
+- A differ restart inside a redelivered batch could report false missing
+  verdicts, because its repeat state started empty.
+- A shadowed redelivery of events first written without `-shadow` was
+  passed over as a repeat, so its v2 records were reported missing.
+- A v2 record for an event v1 wrote unshadowed is no longer counted as a
+  missing v1 verdict.
+- A shadowed v1 record whose v2 record never arrives no longer blocks its
+  partition forever: once a later unshadowed v1 record shows signalmand
+  moved on, it is reported missing after v2 is read to its end offset.
+- The canary age and `signalman_rule_matches_total` follow the alerts
+  actually served, so a v2 that wrongly stops matching the canary while it
+  serves the rule now pages.
+
+## [0.14.0] - 2026-10-21
+
+### Added
+
+- The rest of the spec's core metrics: `signalman_rule_eval_seconds`
+  (sampled per rule with `-rule-eval-every`, exemplars off),
+  `signalman_event_staleness_seconds`, and `signalman_canary_age_seconds`.
+  The two age gauges are computed at scrape time and kept separate from
+  consumer lag. A test parses the spec's metrics table and holds the
+  registered set, types, and labels to it.
+- A canary generator in `signalmand` that writes one synthetic event to
+  every `events.raw` partition every `-canary-interval` (30s), and
+  `rules/signalman_canary.yml`, which turns it into an alert that resets
+  the partition's canary age. Canary events are left out of staleness.
+- `deploy/prometheus` (scrape config, alert rules, promtool tests) and
+  `deploy/grafana` (provisioned dashboard), in the compose stack.
+  `SignalmanCanaryStalled` and `SignalmanCanaryAbsent` page;
+  `SignalmanCanaryStalled` fires at over 50s for 30s, so a dead consumer
+  pages within two minutes. `SignalmanRuleWentSilent` files a ticket.
+- `signalman_event_time_future_total`, counting durable events whose event
+  time is ahead of the clock.
+- An `alerts` CI job that installs promtool 3.5.0 from the official release
+  tarball, checks it against a pinned sha256, and runs `make check-alerts`.
+
+### Changed
+
+- The engine slot exports every loaded rule's `signalman_rule_matches_total`
+  series at zero and deletes the series of a rule a reload removes, so a
+  rule silenced by a taxonomy change still has a series for the silence
+  alert to compare.
+- `make check-alerts` fails when promtool is missing and `CI=true`.
+
+### Fixed
+
+- An event time in the future pinned a partition's staleness at zero until
+  the wall clock caught up with it. Staleness now advances to the earlier
+  of the event time and now.
+- The promtool alert tests never ran in CI.
+- The canary never reached ClickHouse: its age reset once the alert was on
+  the alerts topic, so a dead signalman-sink or ClickHouse never paged, and
+  Prometheus did not scrape signalman-sink at all. signalman-sink now
+  exports `signalman_sink_canary_age_seconds`, reset after the insert
+  holding a partition's canary alert succeeds, paged on by
+  `SignalmanSinkCanaryStalled` and `SignalmanSinkCanaryAbsent`, and
+  Prometheus scrapes it on `:9465`. signalman-sink now needs `events.raw`.
+
+## [0.13.1] - 2026-10-21
+
+### Added
+
+- `rules/signalman_canary.yml`, the signalman-canary rule, with fixtures.
+  It matches only the synthetic event the canary generator (0.14.0) writes,
+  and ships in its own rules-only PR so the rule gates judge it with code
+  already on the base branch.
+
+### Changed
+
+- The CLI and explain tests count the rules in `rules/` instead of
+  hardcoding twenty, so adding a rule needs no code change.
+
+## [0.13.0] - 2026-10-21
+
+### Added
+
+- `cmd/signalman-sink` and `internal/pipe/chsink`: consumes the `alerts`
+  topic and batch-inserts into the ClickHouse `alerts` table over
+  clickhouse-go, committing offsets only after an insert succeeds. While
+  ClickHouse is down it retries one batch and stops polling, so an outage
+  is consumer lag on `alerts`, not loss.
+- `deploy/clickhouse/001_alerts.sql`, the spec's alerts table
+  (ReplacingMergeTree on `(partition, seq, rule_id)`, 90 day TTL), created
+  by the compose ClickHouse on first start.
+- The `alerts.dead` topic and `signalman_sink_dead_letters_total`. A record
+  the table cannot hold is written there with its position and reason, and
+  its offset is committed after that write. Compose and
+  `signalmand -create-topics` create the topic; the sink refuses to start
+  without it.
+- An integration test that reinserts a batch into a real ClickHouse and
+  checks it collapses. It has not been run yet.
+
+### Changed
+
+- The alerts table partitions and expires on `ingest_time`, not
+  `event_time` as the spec has it, matching the events table. The deviation
+  is in `docs/pipeline.md`.
+- The alerts table sets `fsync_after_insert` and `fsync_part_directory`, so an acknowledged insert is on
+  disk before its offset is committed.
+- `docs/pipeline.md` says Redpanda and ClickHouse volumes must be reset
+  together, since `seq` is the `events.raw` offset and is the dedup key.
+
+### Fixed
+
+- A ClickHouse error an identical insert hits again (type, parse, missing
+  table, too many partitions in one block) was retried forever. It now
+  stops the sink with the batch's offsets and commits nothing.
+- One undecodable alerts record stopped the sink for every partition and
+  crash-looped it on restart. It is now dead-lettered.
+- An alert for an event older than 90 days was TTL-deleted after its offset
+  was committed. A time outside the DateTime64(3) range is refused.
+- The ClickHouse sink integration test fails instead of skipping under
+  `CI=true` without a DSN.
+- The merge property test is named and documented as a check of a model,
+  not of ClickHouse.
+- An `event_time` from 2262-04-12 to 2299 passed the range check, was
+  stored as a time in the 1600s or 1700s by the driver's `UnixNano`
+  encoding, and had its offset committed. `event_time` is now bounded at
+  2262-04-11, and `ingest_time` to 1970 through 2105-11-09 so the TTL
+  cannot overflow DateTime. Both are dead-lettered outside that.
+
+## [0.12.0] - 2026-10-21
+
+### Added
+
+- `signalman gates`, the rule pull request gates: parse, fixtures, noise
+  budget, latency budget, and prefilter for each changed rule, written as
+  one markdown report. A failed gate exits 1; a rule in the v2 `Always` set
+  is a warning. `--changed` reads a git diff file list, where a changed
+  fixture stands for its rule, and `--set` catches an id another rule in the
+  set already uses.
+- `.github/workflows/rules.yml` runs the gates on PRs that touch `rules/`.
+  The PR's code runs with a read-only token; a separate job with no
+  checkout posts the report as one PR comment and edits it on later pushes.
+  Fork PRs get the job summary only.
+- `docs/authoring.md`: the supported Sigma subset, rejection codes,
+  fixtures, explain, budgets, the prefilter, and the gates.
+- Load codes `invalid-id` and `level`.
+
+### Changed
+
+- The loader rejects a rule whose id is not a canonical UUID
+  (`invalid-id`) or whose `level` is missing or not one of the five Sigma
+  levels (`level`). The alerts table stores both as typed columns. SigmaHQ
+  corpus acceptance is unchanged. A non-UUID id is no longer a pySigma
+  divergence; a missing level is a new one.
+- `signalman gates` prints the full report on stdout; `--comment FILE`
+  writes a copy cut to fit one PR comment.
+- The rules workflow fails without running the gates when a rules PR also
+  changes `cmd/`, `internal/`, `config/taxonomy/`, `go.mod`, `go.sum`, the
+  noise corpus, or the workflow, since the gates would run the PR's own code.
+
+### Fixed
+
+- Past about 450 rules the gates report overran GitHub's comment limit,
+  because only the details were cut and the table was not, so the comment
+  POST failed. The comment copy now drops table rows too, keeping failures
+  and warnings first, says how many it left out, and the job summary gets
+  the full report it points to.
+- Two rules whose ids differed only in hex case both loaded, matched the
+  same events, and wrote alerts to one `(partition, seq, rule_id)` row, so
+  one alert disappeared on merge. The loader now lowers the id, so the rule
+  set and `gates --set` reject the second as `duplicate-id`.
+
 ## [0.11.0] - 2026-10-21
 
 ### Added

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/atontalapur/signalman/internal/broker"
+	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/sigma"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -179,6 +180,44 @@ func TestPipelineRefusesTopicsThatCannotHoldItsOutputs(t *testing.T) {
 	}
 }
 
+func TestShadowPipelineRefusesAVerdictsV2WithFewerPartitions(t *testing.T) {
+	mem := broker.NewMemory(map[string]int32{TopicEventsRaw: 4, TopicEventsNorm: 4, TopicVerdictsV1: 4,
+		TopicVerdictsV2: 2, TopicAlerts: 4, TopicDrops: 4})
+	r := newRig(t, mem, mem)
+	slot := NewSlot(V1(r.rs), r.m)
+	if err := slot.StoreWithShadow(V1(r.rs), V2(r.rs)); err != nil {
+		t.Fatal(err)
+	}
+	p, err := New(testConfig(), r.b, r.norm, slot, r.m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.Run(ctx); err == nil || ctx.Err() != nil {
+		t.Fatalf("Run = %v; a verdicts.v2 the shadow cannot write to is refused at startup", err)
+	}
+}
+
+func TestShadowVerdictRecordOverTheLimitIsPermanent(t *testing.T) {
+	mem := newMemory()
+	r := newRig(t, mem, mem)
+	slot := NewSlot(V1(r.rs), r.m)
+	if err := slot.StoreWithShadow(V1(r.rs), V2(r.rs)); err != nil {
+		t.Fatal(err)
+	}
+	a := slot.load()
+	it := &Item{Event: &event.Event{Partition: 0, Seq: 1}, Verdicts: nil, Shadow: make([]event.Verdict, MaxOutputRecordBytes/20)}
+	for i := range it.Shadow {
+		it.Shadow[i].RuleID = "r"
+	}
+	p := &Pipeline{m: r.m, norm: r.norm}
+	_, err := p.outputs(&batch{act: a, items: []*Item{it}})
+	if !errors.Is(err, broker.ErrPermanent) || !strings.Contains(err.Error(), TopicVerdictsV2) {
+		t.Fatalf("err = %v; a verdicts.v2 record over the output limit stops the pipeline", err)
+	}
+}
+
 // escapeHeavy is a raw record that matches the dump rule and carries two
 // string fields of '<', which JSON escapes to six bytes each. host is its
 // key; pad is the length of each '<' field.
@@ -273,7 +312,7 @@ func TestEveryAlertFitsTheOutputLimit(t *testing.T) {
 				}
 				t.Fatalf("dropped: %+v", it.Drop)
 			}
-			rec := AlertRecord(rule, it)
+			rec := AlertRecord(rule, it, "v1")
 			if s := size(rec); s > MaxOutputRecordBytes {
 				t.Fatalf("alert record is %d bytes, over the %d output limit", s, MaxOutputRecordBytes)
 			}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/obs"
+	"github.com/atontalapur/signalman/internal/sigma"
+	"github.com/atontalapur/signalman/internal/sigma/ast"
 )
 
 // Stage labels for signalman_stage_queue_depth. Each names the bounded
@@ -44,10 +47,18 @@ type Config struct {
 	RetryBackoff time.Duration
 	// SampleInterval is how often queue depth is sampled. Default 1s.
 	SampleInterval time.Duration
+	// RuleEvalEvery times every rule on events whose Seq is a multiple of
+	// it, for signalman_rule_eval_seconds. 0 turns timing off. The timed
+	// walk is separate from the verdicts and its result is discarded, so
+	// sampling costs time and never changes a verdict.
+	RuleEvalEvery int
 }
 
 func (c Config) validate() error {
 	var errs []error
+	if c.RuleEvalEvery < 0 {
+		errs = append(errs, fmt.Errorf("RuleEvalEvery must not be negative, got %d", c.RuleEvalEvery))
+	}
 	if c.Group == "" {
 		errs = append(errs, errors.New("group is required"))
 	}
@@ -177,6 +188,10 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		for w := range matchCh {
 			if w.it.Drop == nil {
 				p.match(w.b.act.eng, w.it)
+				if sh := w.b.act.shadow; sh != nil {
+					p.matchShadow(sh, w.it)
+				}
+				p.timeRules(w.b.act, w.it.Event)
 			}
 			if !send(ctx, sinkCh, w) {
 				return
@@ -196,14 +211,26 @@ func (p *Pipeline) Run(ctx context.Context) error {
 // checkTopics refuses a topic layout the sink cannot write to. Verdicts are
 // pinned to the event's partition, so a verdict topic with fewer partitions
 // than events.raw fails every produce for the partitions it lacks, forever.
-// The other outputs are keyed and need only exist.
+// That holds for the shadow's verdict topic too when there is a shadow at
+// startup; one added later by a reload that lacks partitions stops the
+// pipeline on its first produce instead. The other outputs are keyed and
+// need only exist.
 func (p *Pipeline) checkTopics(ctx context.Context) error {
 	raw, err := p.b.EndOffsets(ctx, TopicEventsRaw)
 	if err != nil {
 		return fmt.Errorf("topic check: %w", err)
 	}
-	vt := VerdictTopic(p.slot.load().eng)
-	for _, t := range []string{TopicEventsNorm, vt, TopicAlerts, TopicDrops} {
+	a := p.slot.load()
+	pinned := map[string]bool{VerdictTopic(a.eng): true}
+	if a.shadow != nil {
+		pinned[VerdictTopic(a.shadow)] = true
+	}
+	topics := []string{TopicEventsNorm, TopicAlerts, TopicDrops}
+	for t := range pinned {
+		topics = append(topics, t)
+	}
+	slices.Sort(topics)
+	for _, t := range topics {
 		parts, err := p.b.EndOffsets(ctx, t)
 		if err != nil {
 			return fmt.Errorf("topic check: output topic %s: %w", t, err)
@@ -211,9 +238,9 @@ func (p *Pipeline) checkTopics(ctx context.Context) error {
 		if len(parts) == 0 {
 			return fmt.Errorf("topic check: output topic %s does not exist", t)
 		}
-		if t == vt && len(parts) < len(raw) {
+		if pinned[t] && len(parts) < len(raw) {
 			return fmt.Errorf("topic check: %s has %d partitions and %s has %d; verdicts are pinned to the event's partition, so it needs at least as many",
-				vt, len(parts), TopicEventsRaw, len(raw))
+				t, len(parts), TopicEventsRaw, len(raw))
 		}
 	}
 	return nil
@@ -280,6 +307,65 @@ func (p *Pipeline) match(eng Engine, it *Item) {
 	}
 }
 
+// matchShadow evaluates the shadow engine on an item the primary has
+// already evaluated. A shadow that panics, or returns anything but one
+// verdict per rule in rule set order stamped with this event and the
+// primary's versions, leaves no shadow verdicts for the item. The primary's
+// output is untouched, so a v2 bug cannot cost a v1 verdict or alert, and
+// the differ reports the gap as missing verdicts: a shadowed v1 record with
+// no v2 record beside it.
+func (p *Pipeline) matchShadow(eng Engine, it *Item) {
+	vs, err := evalShadow(eng, it)
+	if err != nil {
+		it.ShadowFailure = err.Error()
+		p.log.Error("shadow engine failed; its verdicts for this event are not written",
+			"engine", eng.Name(), "partition", it.Event.Partition, "seq", it.Event.Seq, "err", err)
+		return
+	}
+	it.Shadow = vs
+}
+
+func evalShadow(eng Engine, it *Item) (vs []event.Verdict, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			vs, err = nil, fmt.Errorf("panic: %v", r)
+		}
+	}()
+	vs = eng.EvaluateInto(make([]event.Verdict, 0, len(it.Verdicts)), it.Event)
+	if len(vs) != len(it.Verdicts) {
+		return nil, fmt.Errorf("%d verdicts for %d rules", len(vs), len(it.Verdicts))
+	}
+	for i := range vs {
+		got, want := vs[i], it.Verdicts[i]
+		if got.RuleID != want.RuleID || got.Seq != want.Seq || got.Partition != want.Partition ||
+			got.Engine != eng.Name() || got.RuleSetV != want.RuleSetV || got.TaxonomyV != want.TaxonomyV {
+			return nil, fmt.Errorf("verdict %d is %+v, want rule %s at partition %d seq %d under %s",
+				i, got, want.RuleID, want.Partition, want.Seq, want.RuleSetV)
+		}
+	}
+	return vs, nil
+}
+
+// timeRules observes signalman_rule_eval_seconds for every rule on a
+// sampled event. Each sample is the rule's logsource test and, when it
+// covers the event, its condition walk: what v1 does per rule. The result
+// is thrown away; the verdicts were already made by the engine.
+func (p *Pipeline) timeRules(a *active, ev *event.Event) {
+	if p.cfg.RuleEvalEvery == 0 || ev.Seq%uint64(p.cfg.RuleEvalEvery) != 0 {
+		return
+	}
+	rules := a.eng.RuleSet().Rules
+	obsv := a.observers(p.m)
+	for i := range rules {
+		r := &rules[i]
+		start := time.Now()
+		if r.LogSource.Matches(ev) {
+			_ = ast.Eval(r.Cond, ev)
+		}
+		obsv[i].Observe(time.Since(start).Seconds())
+	}
+}
+
 // sink completes batches in poll order: wait for every item, write the
 // outputs, wait until they are durable, commit.
 func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-chan *batch, sinkCh <-chan work) error {
@@ -309,6 +395,7 @@ func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-cha
 			return err
 		}
 		p.count(b)
+		p.stale(b) // after write: an age resets only for an alert that is durable
 		p.commit(ctx, cons, b)
 	}
 }
@@ -328,64 +415,180 @@ func (p *Pipeline) sink(ctx context.Context, cons broker.Consumer, batchCh <-cha
 // and is an error.
 func (p *Pipeline) outputs(b *batch) ([]broker.Record, error) {
 	recs := make([]broker.Record, 0, 2*len(b.items))
-	rs := b.act.eng.RuleSet()
 	for _, it := range b.items {
 		if it.Drop != nil {
 			recs = append(recs, DropRecord(it))
 			continue
 		}
-		vr := VerdictRecord(b.act.eng, it)
-		if n := broker.RecordSize(vr); n > MaxOutputRecordBytes {
-			return nil, fmt.Errorf("%w: rule set %s has %d rules and its verdict record is %d bytes, over the %d byte output limit",
-				broker.ErrPermanent, rs.Version, len(rs.Rules), n, MaxOutputRecordBytes)
+		var vrs []broker.Record
+		if b.act.shadow != nil {
+			vrs = ShadowedVerdictRecords(b.act.eng, b.act.shadow, it)
+		} else {
+			vrs = []broker.Record{VerdictRecord(b.act.eng, it)}
+		}
+		for _, vr := range vrs {
+			if n := broker.RecordSize(vr); n > MaxOutputRecordBytes {
+				rs := b.act.eng.RuleSet()
+				return nil, fmt.Errorf("%w: rule set %s has %d rules and its %s verdict record is %d bytes, over the %d byte output limit",
+					broker.ErrPermanent, rs.Version, len(rs.Rules), vr.Topic, n, MaxOutputRecordBytes)
+			}
 		}
 		nr := NormRecord(it)
 		if n := broker.RecordSize(nr); n > MaxOutputRecordBytes {
-			it.Verdicts, it.Event.Fields = nil, nil
+			it.Verdicts, it.Shadow, it.Event.Fields = nil, nil, nil
 			p.norm.drop(it, ReasonOutputTooLarge, fmt.Sprintf("%s record would be %d bytes, limit %d", nr.Topic, n, MaxOutputRecordBytes))
 			recs = append(recs, DropRecord(it))
 			continue
 		}
-		recs = append(recs, nr, vr)
-		for _, v := range it.Verdicts {
-			if !v.Matched {
-				continue
-			}
-			r, ok := b.act.rules[v.RuleID]
-			if !ok {
-				panic(fmt.Sprintf("engine %s matched rule %q, which is not in its rule set", b.act.eng.Name(), v.RuleID))
-			}
-			ar := AlertRecord(r, it)
-			if n := broker.RecordSize(ar); n > MaxOutputRecordBytes {
-				return nil, fmt.Errorf("%w: rule %s in rule set %s makes a %d byte alert at partition %d seq %d even without fields, over the %d byte output limit",
-					broker.ErrPermanent, r.ID, rs.Version, n, it.Event.Partition, it.Event.Seq, MaxOutputRecordBytes)
+		recs = append(recs, nr)
+		recs = append(recs, vrs...)
+		var err error
+		alerts(b, it, func(r *sigma.Rule, eng Engine) {
+			ar := AlertRecord(r, it, eng.Name())
+			if n := broker.RecordSize(ar); n > MaxOutputRecordBytes && err == nil {
+				err = fmt.Errorf("%w: rule %s in rule set %s makes a %d byte alert at partition %d seq %d even without fields, over the %d byte output limit",
+					broker.ErrPermanent, r.ID, eng.RuleSet().Version, n, it.Event.Partition, it.Event.Seq, MaxOutputRecordBytes)
 			}
 			recs = append(recs, ar)
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 	return recs, nil
+}
+
+// alerts calls emit once per alert the item owes: for each matched rule,
+// from the engine serving it in this batch. The primary serves every rule
+// outside the rollout, the shadow every rule inside it. When the shadow
+// failed on this event, the primary serves its rules too, so a v2 failure
+// is a missing v2 verdict for the differ, never a lost alert. Each rule is
+// served by exactly one engine, so an event gets at most one alert per
+// rule whichever engine serves it.
+func alerts(b *batch, it *Item, emit func(*sigma.Rule, Engine)) {
+	rule := func(eng Engine, id string) *sigma.Rule {
+		r, ok := b.act.rules[id]
+		if !ok {
+			panic(fmt.Sprintf("engine %s matched rule %q, which is not in its rule set", eng.Name(), id))
+		}
+		return r
+	}
+	served := b.act.served
+	for _, v := range it.Verdicts {
+		if v.Matched && !served[v.RuleID] {
+			emit(rule(b.act.eng, v.RuleID), b.act.eng)
+		}
+	}
+	if len(served) == 0 {
+		return
+	}
+	src, eng := it.Shadow, b.act.shadow
+	if src == nil {
+		src, eng = it.Verdicts, b.act.eng
+	}
+	for _, v := range src {
+		if v.Matched && served[v.RuleID] {
+			emit(rule(eng, v.RuleID), eng)
+		}
+	}
 }
 
 // count updates the verdict and match counters for a batch that is now
 // durable, so the counters never run ahead of what a consumer can read.
 func (p *Pipeline) count(b *batch) {
 	var matched, unmatched float64
-	perRule := map[string]float64{}
 	for _, it := range b.items {
 		for _, v := range it.Verdicts {
 			if v.Matched {
 				matched++
-				perRule[v.RuleID]++
 			} else {
 				unmatched++
 			}
 		}
+	}
+	// signalman_rule_matches_total counts the alerts the batch served, from
+	// whichever engine serves each rule, so a rule v2 serves and wrongly
+	// stops matching goes quiet on it.
+	served := map[[2]string]float64{}
+	perRule := map[string]float64{}
+	for _, it := range b.items {
+		if it.Drop == nil {
+			alerts(b, it, func(r *sigma.Rule, eng Engine) {
+				served[[2]string{eng.Name(), r.ID}]++
+				perRule[r.ID]++
+			})
+		}
+	}
+	for k, n := range served {
+		p.m.Alerts.WithLabelValues(k[0], k[1]).Add(n)
 	}
 	name := b.act.eng.Name()
 	p.m.Verdicts.WithLabelValues(name, "true").Add(matched)
 	p.m.Verdicts.WithLabelValues(name, "false").Add(unmatched)
 	for id, n := range perRule {
 		p.m.RuleMatches.WithLabelValues(id).Add(n)
+	}
+	if b.act.shadow == nil {
+		return
+	}
+	var sm, su, failed float64
+	for _, it := range b.items {
+		if it.ShadowFailure != "" {
+			failed++
+		}
+		for _, v := range it.Shadow {
+			if v.Matched {
+				sm++
+			} else {
+				su++
+			}
+		}
+	}
+	sn := b.act.shadow.Name()
+	p.m.Verdicts.WithLabelValues(sn, "true").Add(sm)
+	p.m.Verdicts.WithLabelValues(sn, "false").Add(su)
+	p.m.ShadowFailures.WithLabelValues(sn).Add(failed)
+}
+
+// stale advances event staleness to the newest event time in a batch that
+// is now durable, and resets the canary age of every partition whose canary
+// alert is in it: the alert served, from whichever engine serves the rule. Drops carry no trustworthy event time and are skipped,
+// and so are canary events: they arrive every 30 seconds whatever the
+// upstream is doing, and would hide an upstream that stopped. An event time
+// ahead of the metrics clock counts as now and is counted in
+// signalman_event_time_future_total; the event and its verdicts are
+// untouched, since the clock is the metric's and never the engine's.
+func (p *Pipeline) stale(b *batch) {
+	now := p.m.Staleness.Now()
+	newest := map[int32]time.Time{}
+	future := map[int32]int{}
+	for _, it := range b.items {
+		if it.Drop != nil {
+			continue
+		}
+		part := it.Event.Partition
+		if it.HostID == CanaryHostID {
+			alerts(b, it, func(r *sigma.Rule, _ Engine) {
+				if r.ID == CanaryRuleID {
+					p.m.CanaryAge.Reset(part)
+				}
+			})
+			continue
+		}
+		t := it.Event.EventTime
+		if t.After(now) {
+			future[part]++
+			t = now
+		}
+		if t.After(newest[part]) {
+			newest[part] = t
+		}
+	}
+	for part, t := range newest {
+		p.m.Staleness.Advance(part, t)
+	}
+	for part, n := range future {
+		p.m.EventTimeFuture.WithLabelValues(strconv.Itoa(int(part))).Add(float64(n))
 	}
 }
 

@@ -1,0 +1,11 @@
+rule: regex_only.yml
+cases:
+  - name:   numbered stage file
+    expect: match
+    event:
+      CommandLine: loader.exe stage2.bin
+
+  - name:   unnumbered stage file
+    expect: no-match
+    event:
+      CommandLine: loader.exe stage.bin
