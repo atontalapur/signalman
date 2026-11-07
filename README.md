@@ -183,7 +183,7 @@ detector.
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
-| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | done: SQL compiler, retro-hunt, alert schema and idempotent sink built; `TestRetroHuntEqualsReplay` green against ClickHouse in CI, gate passed |
+| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler, retro-hunt, alert schema and idempotent sink built; retro-hunt SQL equals a v1 replay on a real ClickHouse in CI, over synthetic rules; no binary runs a retro-hunt yet, gate not passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | in progress: all ten core metrics, canary, absence alerts, and dashboard built; page within 2m shown in process and with promtool; consumer kill against the compose stack not run |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); Redpanda and ClickHouse runs not done |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; no gate G0 to G6 run against traffic or passed, no game day run |
@@ -304,7 +304,8 @@ that needs them.
   `/metrics` on `:9465`, which Prometheus scrapes. The table is created when the ClickHouse volume is
   first initialized. On an existing volume, run new DDL such as
   `deploy/clickhouse/002_alerts_engine.sql` by hand; `docker compose down -v`
-  also applies it but deletes every stored alert.
+  also applies it but wipes every compose volume: stored alerts, the Redpanda
+  topics, and Prometheus history.
   It needs the `alerts.dead` and `events.raw` topics, which compose
   creates; it reads the `events.raw` partitions for its canary age. Reset the
   Redpanda and ClickHouse volumes together: `seq` restarts with a new
