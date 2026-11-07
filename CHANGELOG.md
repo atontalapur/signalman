@@ -3,6 +3,31 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.17.1] - 2026-11-07
+
+### Fixed
+
+- `make check` passes again: govulncheck flagged GO-2026-6888 in
+  `andybalholm/brotli` 1.2.6, reachable through clickhouse-go and the Kafka
+  client. brotli is now 1.2.7.
+- The README no longer tells you to run `docker compose down -v` after a
+  schema change, which wiped stored alerts. It says to apply new DDL such as
+  `002_alerts_engine.sql` by hand, and `001_alerts.sql` says the same.
+- The docs now say the ClickHouse integration tests run and pass in CI's
+  `integration` job, and the rules workflow passed on its first real rule
+  PR. They used to say neither had run.
+- Plan D stays in progress. The retro-hunt SQL equals a v1 replay on a real
+  ClickHouse over synthetic rules, but no binary runs a retro-hunt yet.
+- Stale counts and paths: 21 rules in `docs/load.md`, no `test/replay/` in
+  the README layout, and `CLAUDE.md` points at the README's repository map
+  and lists `make check-alerts`.
+
+### Changed
+
+- CI actions bumped by Dependabot: docker/login-action 4.7.0,
+  actions/setup-python 7.1.0, goreleaser-action 7.3.0,
+  actions/upload-artifact 7.0.2.
+
 ## [0.17.0] - 2026-10-21
 
 ### Added
