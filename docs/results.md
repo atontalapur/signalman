@@ -320,6 +320,15 @@ table held 4,021,128 rows with no duplicate key, and the hunt still equaled
 the stored alerts row for row (2,058,990). After Redpanda was unpaused,
 the canary ages fell back under 10 s and no process had exited.
 
+**G0, attempted.** `cutover check -gate G0` with `-rules
+corpora/sigmahq/rules` (1,236 rules) and 200,000 events exported from the
+soak's `events.norm` as the corpus: the v1 and v2 digests match on all 8
+partitions (247.2 million verdicts), and the property and equivalence tests
+pass. The gate fails on `fuzz-compared` alone: the latest differential run
+made 232,324 comparisons against the 1e8 floor. At about 1,900 a second on
+this laptop, the floor is roughly 15 hours of fuzzing, a nightly-scale run
+rather than a session. G0 is not dated in `docs/cutover.md`.
+
 ## Codebase
 
 As of commit `365ed2d`: about 7,400 lines of Go, of which about 4,200 are
