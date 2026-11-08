@@ -9,6 +9,7 @@ import (
 	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/sigma"
 	"github.com/atontalapur/signalman/internal/sigma/ast"
+	"github.com/atontalapur/signalman/internal/sigma/match"
 )
 
 // uh is the unhex form a literal outside the plain character set takes.
@@ -297,6 +298,9 @@ func TestCompileIsInjectionProof(t *testing.T) {
 		for _, mods := range []string{"", "|contains", "|startswith", "|endswith", "|re", "|windash", "|base64offset|contains"} {
 			if mods == "|re" && v == `\` {
 				continue // not a regex
+			}
+			if mods == "|base64offset|contains" && match.HasWildcard(v) {
+				continue // a wildcard cannot be encoded; rejected at load
 			}
 			det := "s:\n  " + yamlQuote("F'"+v+mods) + ": " + yv + "\nk:\n  - " + yv + "\nr:\n  A|fieldref: " + yv + "\ncondition: s or k or r"
 			r := loadDetection(t, tax, det)
