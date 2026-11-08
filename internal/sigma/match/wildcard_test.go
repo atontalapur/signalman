@@ -116,10 +116,11 @@ func TestWildcardCaseFoldContract(t *testing.T) {
 		pat, in string
 		want    bool
 	}{
-		{"microsoft", "MİCROSOFT", true}, // dotted capital I lowers to i
-		{"svchost", "ſvchost", false},    // long s does not fold to s
-		{"kernel32", "Kernel32", true},   // Kelvin sign lowers to k
-		{"ΣΑΣ", "σας", false},            // no final-sigma rule
+		{"microsoft", "MİCROSOFT", false},    // dotted capital I is not i: no fold crosses ASCII
+		{"svchost", "ſvchost", false},        // long s does not fold to s
+		{"kernel32", "\u212aernel32", false}, // nor does the Kelvin sign to k
+		{"mİcrosoft", "MİCROSOFT", true},     // it still matches itself
+		{"ΣΑΣ", "σας", false},                // no final-sigma rule
 	}
 	for _, c := range cases {
 		if got := CompileWildcard(c.pat).MatchString(c.in); got != c.want {
