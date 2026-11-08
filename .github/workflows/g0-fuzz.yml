@@ -5,8 +5,7 @@
 # them and fails below the floor. `cutover check -gate G0 -fuzz-stats <dir>`
 # reads the merged artifact.
 #
-# Manual only (workflow_dispatch, or a push to the branch that adds it): a
-# run costs about 60 runner-hours.
+# Manual only (workflow_dispatch): a run costs about 60 runner-hours.
 name: g0-fuzz
 on:
   workflow_dispatch:
@@ -14,8 +13,6 @@ on:
       fuzztime:
         description: "fuzz time per shard (Go duration)"
         default: "5h20m"
-  push:
-    branches: [ci/SIG-43-g0-fuzz-matrix]
 
 permissions:
   contents: read
