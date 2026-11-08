@@ -10,12 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/broker/kafka"
 )
 
 // TestPipelineOverRedpanda runs the pipeline and the audit against the
 // compose stack. It uses the real topic names with a fresh consumer group,
-// so it reprocesses whatever earlier runs left in events.raw.
+// committed at the current end of events.raw first, so it reads only the
+// records it produces. Reading from the start made the test's run time grow
+// with whatever earlier runs left in the topic; after a soak that is
+// millions of records.
 func TestPipelineOverRedpanda(t *testing.T) {
 	addr := os.Getenv("SIGNALMAN_BROKERS")
 	if addr == "" {
@@ -40,6 +44,7 @@ func TestPipelineOverRedpanda(t *testing.T) {
 	slot := NewSlot(V1(r.rs), r.m)
 	cfg := testConfig()
 	cfg.Group = fmt.Sprintf("signalmand-it-%d", time.Now().UnixNano())
+	startAtEnd(t, ctx, b, cfg.Group)
 	a, err := NewAuditor(ctx, b, AuditConfig{Group: cfg.Group, Window: 1000}, slot.RuleCount, r.m, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -92,5 +97,32 @@ func TestPipelineOverRedpanda(t *testing.T) {
 	}
 	if ingested < 500 {
 		t.Fatalf("audited %d events, produced at least 500", ingested)
+	}
+}
+
+// startAtEnd commits group at the end of every events.raw partition. It
+// commits without joining: a consumer's Commit only covers partitions it
+// has been assigned, which a consumer that never polled has none of.
+func startAtEnd(t *testing.T, ctx context.Context, b broker.Broker, group string) {
+	t.Helper()
+	end, err := b.EndOffsets(ctx, TopicEventsRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cps := map[broker.TopicPartition]broker.Checkpoint{}
+	for p, off := range end {
+		cps[broker.TopicPartition{Topic: TopicEventsRaw, Partition: p}] = broker.Checkpoint{Next: off}
+	}
+	if err := b.CommitCheckpoints(ctx, group, cps); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.CommittedOffsets(ctx, group, TopicEventsRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, off := range end {
+		if got[p] != off {
+			t.Fatalf("partition %d committed at %d, want the end %d", p, got[p], off)
+		}
 	}
 }
