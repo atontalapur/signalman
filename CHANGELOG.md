@@ -16,6 +16,9 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   SigmaHQ rule or rule in `rules/` contains any of the three characters.
 - The fuzzer recognizes the documented `windash` and chain fan-out budget
   by a typed error, `match.ErrFanOut`, instead of failing on it.
+- The fuzzer declines a case-insensitive regex on the Turkish i family
+  (`regex-casefold`): RE2 and Python's `re.IGNORECASE` disagree there, and
+  `|re` is RE2 by design.
 
 ## [0.18.0] - 2026-11-08
 
