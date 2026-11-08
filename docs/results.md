@@ -334,14 +334,15 @@ The floor now runs as a 12-shard GitHub Actions matrix (`g0-fuzz.yml`),
 (0.18.1), and three oracle gaps: the `windash` fan-out budget (0.18.1),
 regex case folding on the Turkish i, named or inside a range, and
 SQLite's ASCII-only NOCASE against a non-ASCII case pair (0.18.2). Each
-has a seed in `test/fuzz/testdata`. A clean shard compares about 18.8
-million cases, so twelve clear the floor.
+has a seed in `test/fuzz/testdata`.
 
 **G0, passed** (2026-11-08). The fourth matrix run
 ([42490031683](https://github.com/atontalapur/signalman/actions/runs/42490031683))
 finished with all 12 shards clean: 133,581,079 comparisons from 1,108
-workers, 59.3 million suppressed by a coded refusal, 637 oracle timeouts (a
-0.0005% share). `cutover check -gate G0 -record` then passed every
+workers, about 11.1 million a shard, so losing three shards would fall under
+the floor. Of the 213.5 million cases that reached both engines, 59.3
+million (28%) were suppressed by a coded refusal, under the 40% cap, and
+637 timed out in the oracle (0.0003%). `cutover check -gate G0 -record` then passed every
 criterion on the same corpus and rules. Digests match on all 8 partitions,
 the fuzz count clears 1e8, the property and equivalence tests pass, and
 `fuzz-clean` is attested with the run's URL, since the counters do not
