@@ -212,6 +212,18 @@ zero-width repetition in Python, and `{,3}` and `{}` split the same way. The
 braced forms the two engines agree on are not worth the ones they do not, so
 the oracle declines any braced pattern.
 
+### A case-insensitive regex on a character the engines fold differently
+
+Measured over the whole BMP, `(?i)` in RE2 and `re.IGNORECASE` in Python
+disagree on sixteen ordered pairs. Python treats `I`, `i`, `İ` (U+0130) and
+`ı` (U+0131) as one case class; RE2 pairs only `I` and `i`. Go's Unicode
+tables also case-pair U+A7CE to U+A7D5, which Python 3.14's do not yet.
+`|re` is RE2 by design, and RE2 not matching `İ` to `I` agrees with the
+string fold (`docs/modifiers.md`). The oracle declines with
+`regex-casefold` when a `re|i` value or the event field it is matched
+against holds one of those characters. The G0 fuzz matrix found it first:
+`ParentImage|re|i: I` against `İ`, input `bbda9a31f50d0616`.
+
 ### A regex compared against a value containing a newline
 
 Python's `$` matches at the end of the text and also just before a trailing

@@ -257,6 +257,15 @@ REGEX_SHORTHAND = re.compile(r"\\[sSwWdDbB]")
 # declines a braced pattern outright.
 REGEX_BRACE = re.compile(r"[{}]")
 
+# Case-insensitive regex disagrees on exactly these characters, measured
+# over the whole BMP. Python's re.IGNORECASE treats I, i, U+0130 (dotted
+# capital I) and U+0131 (dotless i) as one class; RE2 folds only I and i.
+# U+A7CE to U+A7D5 are letters Go's Unicode tables case-pair and Python's
+# do not yet, a version skew. RE2 is Signalman's regex semantics on purpose
+# (it is also what ClickHouse runs), so the oracle declines rather than
+# answer in its own dialect.
+REGEX_CASEFOLD = frozenset("\u0130\u0131\ua7ce\ua7cf\ua7d2\ua7d3\ua7d4\ua7d5")
+
 
 def evaluate(rule_yaml: str, event: dict, fields, mods):
     sql = query(rule_yaml)
@@ -338,6 +347,10 @@ def handle(req: dict) -> dict:
         if any(REGEX_BRACE.search(v) for v in values):
             raise Unanswerable("regex-brace", "regex repetition brace")
         v = event.get(field)
+        if "i" in key_mods and any(
+            REGEX_CASEFOLD & set(s) for s in [*values, v] if isinstance(s, str)
+        ):
+            raise Unanswerable("regex-casefold", "case-insensitive regex on a character the engines fold differently")
         if isinstance(v, str) and "\n" in v:
             # Python's $ also matches just before a trailing newline and
             # RE2's does not, so "$^" matches "\n" here and not in Go. The
