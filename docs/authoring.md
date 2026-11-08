@@ -61,6 +61,9 @@ What does not load, on purpose:
 - `|expand` placeholders. They need a value list from outside the rule.
 - `fieldref` combined with a comparison (`fieldref|contains`). pySigma
   accepts it; Signalman rejects it rather than guess which one you meant.
+- A wildcard inside a `base64` or `base64offset` value
+  (`CommandLine|base64|contains: '*foo*'`). The star would be encoded as a
+  literal byte. Write the plaintext without stars, or escape one as `\*`.
 - `windash` on a value with more than five switches, and any chain that
   expands to more than 4096 variants.
 - A logsource that `config/taxonomy/` does not map. See `docs/taxonomy.md`.

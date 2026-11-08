@@ -30,6 +30,11 @@ const (
 // spec's topic table; see docs/pipeline.md.
 const TopicAlertsDead = "alerts.dead"
 
+// TopicEventsDead is where signalman-sink's events lane writes an
+// events.norm record the ClickHouse events table cannot hold. Not in the
+// spec's topic table; see docs/pipeline.md.
+const TopicEventsDead = "events.dead"
+
 // HeaderSource is the events.raw record header naming the source ("sysmon",
 // "auditd", "cloudtrail"). The record key is the host_id and the value is
 // the untouched source record.

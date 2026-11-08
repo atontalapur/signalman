@@ -8,7 +8,34 @@ window. That is the Plan D gate.
 
 The compiler is pure. It reads the bound tree and returns a string.
 `RetroHunt` runs the query through `database/sql`, so the package imports no
-driver; the integration test brings `clickhouse-go`.
+driver; `signalman hunt` and the integration tests bring `clickhouse-go`.
+
+## Running a hunt
+
+`signalman-sink -lane events` fills the events table from `events.norm`,
+storing each event as the row `Encode` computes, with the alert lane's
+delivery: commit after insert, retry on outage, and a record the table
+cannot hold goes to `events.dead`. `deploy/clickhouse/003_events.sql` creates
+the table on a fresh volume; `TestEventsDDLIsTheBackendSchema` holds it to
+`CreateTableSQL`.
+
+```
+signalman hunt --from 2026-11-01T00:00:00Z --to 2026-11-02T00:00:00Z rules/
+```
+
+prints each rule's matching `(partition, seq)` rows over `[from, to)` in
+event time (`--json` for one object per rule). The DSN is `--clickhouse`,
+then `SIGNALMAN_CLICKHOUSE_DSN`, then the compose server; `--table` defaults
+to `events`. Each rule is its own scan of the window; `--parallel` (4)
+of them run at once, and output stays in rule set order. A rule that does
+not load or compile is reported and fails the command; the others still
+run.
+
+`TestHuntEqualsReplayOverTheRuleDirectory` (`cmd/signalman`, integration) is
+the gate over real rules: every fixture event of every rule in `rules/` is
+stored twice through the events lane's inserter, `signalman hunt` runs the
+directory over a window that excludes some of them, and each rule's rows
+equal a v1 replay, logsource test included.
 
 ## The events table
 
@@ -228,18 +255,19 @@ replay read the same instant.
 ## Found in the frontend
 
 `fieldref` names its target field in the rule value, and the taxonomy rename
-rewrites `Pred.Field` but not the value. Under a mapping such as
-`Image: NewProcessName`, `ParentImage|fieldref: Image` compares against a
-field the event does not have, so v1 never matches. The backend mirrors v1,
-because v1 is the oracle; the fix belongs in the rule loader. Recorded in
-`TODOS.md`.
+used to rewrite `Pred.Field` but not the value. Under a mapping such as
+`Image: NewProcessName`, `ParentImage|fieldref: Image` compared against a
+field the event does not have, so v1 never matched and the backend, which
+mirrors v1, agreed. The rule loader now maps the value through the same
+entry and rebuilds the predicate, so v1, v2 and this backend all read the
+renamed field.
 
 ## Gaps
 
-The integration test (`-tags integration`, `SIGNALMAN_CLICKHOUSE_DSN`) has
-not been run against a server: there was no ClickHouse available when it was
-written. CI now sets the DSN to the compose server and fails the test if it
-is missing, so the first CI integration run is the first real one. Until it is, these are assumptions, each exercised by its fixture:
+The integration test (`-tags integration`, `SIGNALMAN_CLICKHOUSE_DSN`) runs
+against the compose server in CI's `integration` job, which fails the test if
+the DSN is missing, and it passes. No ClickHouse was available when it was
+written, so these started as assumptions, each exercised by its fixture:
 
 - RE2 and Go agree on the emitted subset (`\x{...}`, classes, `\A`, `\z`,
   `(?m:^)`, `\b`, repeats).

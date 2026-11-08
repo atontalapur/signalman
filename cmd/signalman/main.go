@@ -1,7 +1,7 @@
 // Command signalman is the rule author's tool: it runs a rule's fixtures,
 // explains a verdict, and reports load errors, noise, and evaluation cost
 // before a rule merges. gates runs those checks together for a rule pull
-// request.
+// request. hunt back-tests rules against the events stored in ClickHouse.
 //
 // Exit codes: 0 when every check passed, 1 when a check failed, 2 when the
 // command could not run (bad arguments, unreadable input).
@@ -39,6 +39,7 @@ func init() {
 		"bench":   {"time each rule's evaluation and flag p99 over budget", cmdBench},
 		"noise":   {"report a rule's matches per 100k corpus events against its budget", cmdNoise},
 		"gates":   {"run the rule PR gates and write a markdown report", cmdGates},
+		"hunt":    {"run rules as ClickHouse queries over stored events in a time window", cmdHunt},
 	}
 }
 

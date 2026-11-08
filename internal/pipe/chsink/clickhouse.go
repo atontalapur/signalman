@@ -53,7 +53,7 @@ var (
 
 func checkTime(name string, t, lo, hi time.Time) error {
 	if t.Before(lo) || t.After(hi) {
-		return fmt.Errorf("%s %s is outside the range the alerts table stores exactly, %s to %s",
+		return fmt.Errorf("%s %s is outside the range the table stores exactly, %s to %s",
 			name, t.UTC().Format(time.RFC3339Nano), lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano))
 	}
 	return nil
@@ -146,6 +146,16 @@ var _ Inserter = (*ClickHouse)(nil)
 // clickhouse://user:pass@localhost:9000/signalman, and pings. table is the
 // table to insert into, normally "alerts".
 func Open(ctx context.Context, dsn, table string) (*ClickHouse, error) {
+	conn, err := openConn(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	return &ClickHouse{conn: conn, query: insertQuery(table)}, nil
+}
+
+// openConn dials a clickhouse-go DSN and pings, so a wrong DSN fails at
+// startup. Both lanes connect through it.
+func openConn(ctx context.Context, dsn string) (driver.Conn, error) {
 	opts, err := clickhouse.ParseDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse dsn: %w", err)
@@ -158,7 +168,7 @@ func Open(ctx context.Context, dsn, table string) (*ClickHouse, error) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("clickhouse ping: %w", err)
 	}
-	return &ClickHouse{conn: conn, query: insertQuery(table)}, nil
+	return conn, nil
 }
 
 func insertQuery(table string) string {

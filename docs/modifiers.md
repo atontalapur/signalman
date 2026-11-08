@@ -98,6 +98,9 @@ well as the value.
 Absence is not a value: if either side is absent, there is no match, even
 when both are absent. Two fields are not equal because neither exists.
 
+The target is a Sigma field name, so the taxonomy renames it the same way
+it renames the field the predicate sits under.
+
 ## Encoding transforms
 
 | Modifier | Effect |
@@ -195,6 +198,13 @@ classifies on with `errors.Is` and never by error text:
   budget rejects nothing real; it exists so a rule that would do it fails at
   load instead of quietly costing the pipeline orders of magnitude.
 - `fieldref` beside a comparison.
+- An unescaped `*` or `?` in a value under `base64` or `base64offset`. The
+  encoded bytes of a wildcard are not a wildcard, so the rule would match
+  the encoding of a literal star. pySigma rejects the same values. Escape it
+  (`\*`) to match a literal: under `base64` and `base64offset` the escapes
+  `\*`, `\?` and `\\` are resolved before encoding, so `a\*b` matches the
+  base64 of `a*b`, as in pySigma. `wide` and `windash` keep wildcards and are
+  not affected.
 - Any modifier chain on a `null` rule value. `field: null` is the only null
   form.
 

@@ -2,6 +2,8 @@ module github.com/atontalapur/signalman
 
 go 1.27
 
+toolchain go1.27.3
+
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.50.0
 	github.com/google/uuid v1.6.0

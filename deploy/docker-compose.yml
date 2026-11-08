@@ -37,8 +37,8 @@ services:
   # verdicts.v2 must have at least as many partitions as events.raw
   # (signalmand checks at startup). Retention follows the spec: verdicts 7
   # days, drops 30 days. Divergences keep 30 days, like drops: each one is
-  # evidence for the cutover's divergence log. alerts.dead (signalman-sink's
-  # dead letters, not in the spec) keeps 30 days like drops.
+  # evidence for the cutover's divergence log. alerts.dead and events.dead
+  # (signalman-sink's dead letters, not in the spec) keep 30 days like drops.
   # max.message.bytes is 1 MiB on every topic, equal to the producer's batch
   # limit (broker.MaxMessageBytes); change both together.
   topics:
@@ -57,7 +57,7 @@ services:
         for t in verdicts.v1 verdicts.v2; do
           rpk topic create "$$t" -p 8 -r 1 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
         done
-        for t in divergences drops alerts.dead; do
+        for t in divergences drops alerts.dead events.dead; do
           rpk topic create "$$t" -p 8 -r 1 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
         done
         touch /tmp/ready

@@ -3,6 +3,10 @@
 // offset only after the rows before it are inserted, so delivery is
 // at-least-once and redeliveries collapse in the table's ReplacingMergeTree.
 //
+// With -lane events it instead moves events.norm into the events table
+// (deploy/clickhouse/003_events.sql) that signalman hunt retro-hunts over.
+// Run one process per lane, so a slow events table never holds alerts back.
+//
 // It is its own process, not a stage of signalmand, so that a ClickHouse
 // outage stops alert storage and nothing else: signalmand keeps producing
 // verdicts and alerts into Redpanda, and the backlog shows up as this
@@ -22,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/atontalapur/signalman/internal/backend/ch"
 	"github.com/atontalapur/signalman/internal/broker/kafka"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/pipe/chsink"
@@ -37,6 +42,7 @@ var (
 )
 
 type flags struct {
+	lane          string
 	brokers       string
 	group         string
 	clickhouse    string
@@ -50,19 +56,33 @@ type flags struct {
 func parseFlags(args []string) (flags, error) {
 	var f flags
 	fs := flag.NewFlagSet("signalman-sink", flag.ContinueOnError)
+	fs.StringVar(&f.lane, "lane", "alerts", "what to store: alerts (alerts topic) or events (events.norm)")
 	fs.StringVar(&f.brokers, "brokers", "localhost:19092", "comma-separated Kafka bootstrap brokers")
-	fs.StringVar(&f.group, "group", "signalman-sink", "alerts consumer group")
-	fs.StringVar(&f.clickhouse, "clickhouse", "clickhouse://signalman:signalman@localhost:9000/signalman", "clickhouse-go DSN")
-	fs.StringVar(&f.table, "table", "alerts", "table to insert into")
+	fs.StringVar(&f.group, "group", "", "consumer group (default signalman-sink, or signalman-events for -lane events)")
+	fs.StringVar(&f.clickhouse, "clickhouse", ch.ComposeDSN, "clickhouse-go DSN")
+	fs.StringVar(&f.table, "table", "", "table to insert into (default alerts, or events for -lane events)")
 	// ClickHouse writes a part per insert and wants few, large inserts.
 	fs.IntVar(&f.batchRows, "batch-rows", 5000, "insert once this many rows are buffered")
 	fs.DurationVar(&f.flushInterval, "flush-interval", time.Second, "insert a partial batch this long after its first row")
 	fs.IntVar(&f.maxPoll, "max-poll", 500, "records per poll")
-	fs.StringVar(&f.metricsAddr, "metrics-addr", ":9465", "address serving /metrics")
+	fs.StringVar(&f.metricsAddr, "metrics-addr", "", "address serving /metrics (default :9465, or :9467 for -lane events)")
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}
 	var errs []error
+	def, ok := laneDefaults[f.lane]
+	if !ok {
+		errs = append(errs, fmt.Errorf("-lane %q is not alerts or events", f.lane))
+	}
+	if f.group == "" {
+		f.group = def.group
+	}
+	if f.table == "" {
+		f.table = def.table
+	}
+	if f.metricsAddr == "" {
+		f.metricsAddr = def.metricsAddr
+	}
 	if f.clickhouse == "" {
 		errs = append(errs, errors.New("-clickhouse is required"))
 	}
@@ -73,6 +93,13 @@ func parseFlags(args []string) (flags, error) {
 		errs = append(errs, errors.New("-flush-interval must be positive"))
 	}
 	return f, errors.Join(errs...)
+}
+
+// laneDefaults are the per-lane defaults. signalmand serves :9464 and the
+// differ :9466.
+var laneDefaults = map[string]struct{ group, table, metricsAddr, clientID string }{
+	"alerts": {"signalman-sink", "alerts", ":9465", "signalman-sink"},
+	"events": {"signalman-events", "events", ":9467", "signalman-sink-events"},
 }
 
 func main() {
@@ -110,7 +137,7 @@ func run(f flags, log *slog.Logger) error {
 
 	b, err := kafka.Dial(ctx, kafka.Config{
 		Brokers:        strings.Split(f.brokers, ","),
-		ClientID:       "signalman-sink",
+		ClientID:       laneDefaults[f.lane].clientID,
 		MaxPollRecords: f.maxPoll,
 	})
 	if err != nil {
@@ -118,22 +145,33 @@ func run(f flags, log *slog.Logger) error {
 	}
 	defer b.Close()
 
-	// ClickHouse must answer at startup, so a wrong DSN fails fast. Once
-	// running, an outage is retried, not fatal.
-	ch, err := chsink.Open(ctx, f.clickhouse, f.table)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = ch.Close() }()
-
-	s, err := chsink.New(chsink.Config{
+	cfg := chsink.Config{
 		Group:         f.group,
 		BatchRows:     f.batchRows,
 		FlushInterval: f.flushInterval,
-	}, b, ch, m, log)
-	if err != nil {
-		return err
 	}
-	log.Info("signalman-sink started", "version", version, "commit", commit, "brokers", f.brokers, "group", f.group, "table", f.table)
-	return s.Run(ctx)
+	// ClickHouse must answer at startup, so a wrong DSN fails fast. Once
+	// running, an outage is retried, not fatal.
+	var lane interface{ Run(context.Context) error }
+	if f.lane == "events" {
+		tbl, err := chsink.OpenEvents(ctx, f.clickhouse, f.table)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tbl.Close() }()
+		if lane, err = chsink.NewEvents(cfg, b, tbl, m, log); err != nil {
+			return err
+		}
+	} else {
+		tbl, err := chsink.Open(ctx, f.clickhouse, f.table)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tbl.Close() }()
+		if lane, err = chsink.New(cfg, b, tbl, m, log); err != nil {
+			return err
+		}
+	}
+	log.Info("signalman-sink started", "version", version, "commit", commit, "lane", f.lane, "brokers", f.brokers, "group", f.group, "table", f.table)
+	return lane.Run(ctx)
 }

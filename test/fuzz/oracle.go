@@ -80,7 +80,6 @@ var refusalCodes = map[string]bool{
 	"regex-python-rejects":   true, // Python's engine rejects what RE2 accepts
 	"unknown-modifier":       true, // a modifier name pySigma does not carry
 	"wide-non-ascii":         true, // pySigma's wide/utf16 accept ASCII only
-	"wildcard-in-encoding":   true, // pySigma rejects a wildcard under base64
 	"sqlite-depth":           true, // SQLite's parser depth limit
 }
 

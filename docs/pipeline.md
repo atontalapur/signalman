@@ -28,6 +28,7 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 | `alerts` | rule_id | `Alert`: one per match by the engine serving the rule, shaped like the spec's ClickHouse alert table plus `engine`, and `fields_omitted` when `fields` was left empty to fit the output limit |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
 | `alerts.dead` | the alert's key | an `alerts` record the ClickHouse table cannot hold, written by `signalman-sink`; not in the spec |
+| `events.dead` | the event's key | an `events.norm` record the ClickHouse events table cannot hold, written by `signalman-sink -lane events`; same headers as `alerts.dead`; not in the spec |
 
 `verdicts.v1` holds one record per event rather than one per verdict, so the
 topic grows with events, not events times rules, and an event's verdicts are
@@ -242,16 +243,18 @@ the way the model does; it proves nothing about ClickHouse.
 `TestReingestCollapsesInClickHouse` (build tag `integration`, needs
 `SIGNALMAN_CLICKHOUSE_DSN`, fails instead of skipping under `CI=true`) is
 the proof: the same check against a real ClickHouse with `SELECT ... FINAL`
-and `OPTIMIZE TABLE ... FINAL`. It has not been run yet: there is no Docker
-on the development machine.
+and `OPTIMIZE TABLE ... FINAL`. It runs in CI's `integration` job against
+the compose ClickHouse and passes; the development machine has no Docker.
 
 **Reset Redpanda and ClickHouse together.** `seq` is the `events.raw`
 offset, and `(partition, seq, rule_id)` is the table's dedup key. Recreating
 `events.raw` (or wiping the Redpanda volume) restarts offsets at 0, so new
 alerts reuse keys already in the table, and the ReplacingMergeTree collapses
-distinct alerts into one, silently. Wipe both volumes at once
-(`docker compose -f deploy/docker-compose.yml down -v`), or drop the
-`alerts` table when the topic is recreated.
+distinct alerts into one, silently, and the events table does the same on
+`(partition, seq)`. Wipe both volumes at once
+(`docker compose -f deploy/docker-compose.yml down -v`, which also deletes
+Prometheus history and any dashboard edits saved in Grafana), or drop the
+`alerts` and `events` tables when the topic is recreated.
 
 ## Rule set reload
 
@@ -315,14 +318,13 @@ instances on one group would break the second assumption.
 
 ### Status of the Plan C gate
 
-The gate is "green for an hour under load". That has not been run: there is
-no Docker on the development machine. What has run is
-`TestEndToEndUnderGeneratedLoad` in `internal/pipe`, which pushes generated
-load (including malformed records and rule set reloads every half second)
-through the in-memory broker for 3 seconds with the audit stepping
-throughout, and requires every window green. `SIGNALMAN_SOAK_DURATION=1h`
-lengthens it, but the in-memory broker keeps every record, so the real hour
-belongs on Redpanda.
+The gate is "green for an hour under load", and it passed on Redpanda on
+2026-11-08: 3.72 million events at 1,000/s for 62 minutes through the real
+`signalmand`, 2,992 audit windows, zero violations, three reloads mid-run.
+The numbers are in `docs/results.md`. `TestEndToEndUnderGeneratedLoad` in
+`internal/pipe` is the in-process version: generated load, including
+malformed records and rule set reloads every half second, through the
+in-memory broker for 3 seconds, every window green.
 
 ## Metrics
 
@@ -352,7 +354,7 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_rollout_percent` | gauge | | the slot, on every rollout change; not in the spec table |
 | `signalman_event_time_future_total` | counter | partition | sink, per durable event whose event time is ahead of the clock; not in the spec table |
 | `signalman_sink_canary_age_seconds` | gauge | partition | signalman-sink: seconds since the last canary alert was stored in ClickHouse, at scrape; not in the spec table |
-| `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
+| `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead` (or `events.dead` by the events lane); not in the spec table |
 
 A `source` label is never the raw header: it is the header when it is one of
 `pipe.Sources`, `unknown` when the header is missing, and `other` otherwise.
