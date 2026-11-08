@@ -41,7 +41,10 @@ Three deliberate adjustments to make the comparison meaningful:
   insensitive through `contains` and case sensitive through a plain equals.
   NOCASE folds ASCII only. A case difference outside ASCII is still a real
   divergence and has no suppression; if the fuzzer finds one, it is a
-  question about Signalman's Unicode folding, not noise.
+  question about Signalman's Unicode folding, not noise. It found one: Go
+  lowercased `İ` (U+0130) to `i`, so `contains: İ` matched every `i`
+  (inputs `6c2f3783bbcc1257`, `af3c814fc5bfa650`). Signalman's fold now
+  never crosses the ASCII boundary (`match.Fold`, `docs/modifiers.md`).
 - **A `regexp` function registered from Python's `re`.** SQLite ships no
   REGEXP implementation, so `|re` would otherwise fail to run at all.
 - **`TEXT` affinity on every column.** The fuzzer sends integer and null
@@ -92,6 +95,16 @@ in the spec and in `CLAUDE.md`; it is not up for revision by a fuzzer.
 Go's `regexp` is RE2: no backreferences, no lookaround. Python's engine has
 both. A pattern using them loads in the oracle and is a load error in
 Signalman.
+
+### A modifier chain over its fan-out budget
+
+`windash` on a value with more than five switch-introducing dashes, or any
+chain that expands to more than 4096 variants, is a `modifier` load error
+here. pySigma has no budget and expands it. The limit is deliberate
+(`docs/modifiers.md`): every variant is a matcher scanned on every event
+that does not match. Keyed on `match.ErrFanOut`, which only those two
+budgets wrap. The G0 fuzz matrix found it first, with
+`-0ϳ-0ϳ-0ϳ-0ϳ-0ϳ-0`, input `0771b852e8440357`.
 
 ## The oracle will not answer
 

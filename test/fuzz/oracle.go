@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/atontalapur/signalman/internal/sigma"
+	"github.com/atontalapur/signalman/internal/sigma/match"
 )
 
 // venvPython is the interpreter the oracle runs in, relative to this package
@@ -345,6 +346,9 @@ func known(errG, errP error) bool {
 		var synErr *syntax.Error
 		if errors.As(errG, &synErr) {
 			return true // RE2 rejects what Python's engine accepts
+		}
+		if errors.Is(errG, match.ErrFanOut) {
+			return true // windash or chain fan-out budget; pySigma has none
 		}
 	}
 	var refusal *RefusalError
