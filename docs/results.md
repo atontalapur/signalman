@@ -286,6 +286,49 @@ SIGNALMAN_LOAD=1 SIGNALMAN_CORPUS=/path/to/sigmahq SIGNALMAN_LOAD_OUT=out \
 replaying into Kafka, and `-baseline R -multiple X` replays at a stated
 multiple without measuring.
 
+## Gate runs on the compose stack (Plans C, D, E)
+
+Run on 2026-11-08 on a laptop against `deploy/docker-compose.yml`
+(Redpanda 24.2.7, ClickHouse 24.8, Prometheus 3.5), with the real binaries:
+`signalmand -rules rules`, `signalman-sink`, `signalman-sink -lane events`,
+and `loadgen -rules rules -baseline 1000`. 21 rules.
+
+**Plan C, one-hour soak.** `loadgen` offered 1,000 events/s for 62 minutes,
+00:32 to 01:34 UTC: 3,720,000 records, 0 retries, at most 4.5 s behind
+schedule. signalmand ingested 3,721,008 (the rest are canary events),
+closed 2,992 audit windows, and `signalman_audit_violations_total` stayed 0
+on every partition; Prometheus agrees (`increase` over 65 minutes is 0).
+Consumer lag on `events.raw` ended at 0. Three `SIGHUP` reloads landed
+mid-run. No ERROR or WARN line in any of the three logs. Gate passed.
+
+**Plan D, live.** After the soak drained, `signalman hunt` over the whole
+event-time range up to the end of the soak returned, for each of the 21
+rules, exactly the `(partition, seq)` set the pipeline had stored in the
+`alerts` table: 1,905,293 rows each way, none on one side only. Rows
+written to `signalman.alerts` by the integration tests (negative
+partitions) are excluded.
+
+**Plan E, consumer kill.** Under 1,000 events/s, `kill -9` of signalmand:
+`SignalmanCanaryAbsent` went pending at +21 s and fired at +51 s. With
+signalmand alive and Redpanda paused (`docker compose pause redpanda`), so
+the canary age climbs instead of vanishing: `SignalmanCanaryStalled` went
+pending at +66 s and fired at +95 s. Both inside two minutes. Gate passed.
+
+**The kill, for Plan F.** After the `kill -9` and a restart on the same
+group, the audit closed 163 more windows with 0 violations, the events
+table held 4,021,128 rows with no duplicate key, and the hunt still equaled
+the stored alerts row for row (2,058,990). After Redpanda was unpaused,
+the canary ages fell back under 10 s and no process had exited.
+
+**G0, attempted.** `cutover check -gate G0` with `-rules
+corpora/sigmahq/rules` (1,236 rules) and 200,000 events exported from the
+soak's `events.norm` as the corpus: the v1 and v2 digests match on all 8
+partitions (247.2 million verdicts), and the property and equivalence tests
+pass. The gate fails on `fuzz-compared` alone: the latest differential run
+made 232,324 comparisons against the 1e8 floor. At about 1,900 a second on
+this laptop, the floor is roughly 15 hours of fuzzing, a nightly-scale run
+rather than a session. G0 is not dated in `docs/cutover.md`.
+
 ## Codebase
 
 As of commit `365ed2d`: about 7,400 lines of Go, of which about 4,200 are

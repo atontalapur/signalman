@@ -20,14 +20,6 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P4
 **Depends on:** Plan F load numbers
 
-### Rename fieldref targets through the taxonomy
-**What:** `rename` in `internal/sigma/rule.go` maps `Pred.Field` through the taxonomy but leaves the `fieldref` target, which lives in the rule value, under its Sigma name.
-**Why:** Found while writing the ClickHouse backend (SIG-32). Under `Image: NewProcessName`, `ParentImage|fieldref: Image` compares against a field the event never has, so the rule silently never matches. v1 and the SQL backend agree on this, so no differ catches it.
-**Context:** Fix in the loader by rewriting the value through the same mapping, then let `ch` and v1 both pick it up. Changes RuleSetV for any rule using fieldref under a renaming entry. See `docs/backend-ch.md`, "Found in the frontend".
-**Effort:** S
-**Priority:** P2
-**Depends on:** nothing
-
 ### Case folding applied to base64 text widens matching
 **What:** `Equals` lowercases both sides, and encoding transforms run before that fold, so a `base64offset|contains` matcher compares lowercased base64. Two different plaintext bytes can encode to base64 characters that differ only in case (`A` and `a`), so a value can match a blob it did not encode.
 **Why:** Sigma string matching is case insensitive by default and pySigma's backends fold case the same way, so following the spec here is right and the fuzzer will confirm it. The cost is a wider match on encoded values, which is a false positive, never a missed detection.
@@ -36,6 +28,8 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P3
 **Depends on:** Plan A Task 14
 
+## Completed
+
 ### Decide whether a wildcard inside an encoded value is a load error
 **What:** `CommandLine|base64|contains: '*foo*'` encodes the asterisks as literal bytes here and matches the base64 of `*foo*`. pySigma rejects the rule outright ("Base64 encoding of strings with wildcards is not allowed").
 **Why:** Found by the SIG-21 differential fuzzer. An author who writes that almost certainly means a wildcard, and gets a rule that silently matches something else. Signalman already prefers a loud load error for a chain that cannot mean what it says: a chain whose variants are all empty is rejected for exactly this reason.
@@ -43,8 +37,16 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Effort:** S
 **Priority:** P2
 **Depends on:** None
+**Completed:** SIG-16. Rejected at load: `match.Plan` returns `ErrUnsupportedModifier` for an unescaped wildcard under `base64` or `base64offset`, so the loader reports it under code `modifier`. The fuzzer suppression and its `KNOWN_DIVERGENCES.md` section are gone; both engines now reject. No SigmaHQ rule is affected.
 
-## Completed
+### Rename fieldref targets through the taxonomy
+**What:** `rename` in `internal/sigma/rule.go` maps `Pred.Field` through the taxonomy but leaves the `fieldref` target, which lives in the rule value, under its Sigma name.
+**Why:** Found while writing the ClickHouse backend (SIG-32). Under `Image: NewProcessName`, `ParentImage|fieldref: Image` compares against a field the event never has, so the rule silently never matches. v1 and the SQL backend agree on this, so no differ catches it.
+**Context:** Fix in the loader by rewriting the value through the same mapping, then let `ch` and v1 both pick it up. Changes RuleSetV for any rule using fieldref under a renaming entry. See `docs/backend-ch.md`, "Found in the frontend".
+**Effort:** S
+**Priority:** P2
+**Depends on:** nothing
+**Completed:** SIG-32. `renameNode` in `internal/sigma/rule.go` maps a fieldref value through the taxonomy entry and rebuilds `M` and `Key`, so RuleSetV changes for such a rule under a renaming entry. `TestFieldRefTargetIsRenamedThroughTheTaxonomy` holds it.
 
 ### Reject rules the alert table cannot store
 **What:** The rule loader accepts any `id` and any `level` (including none), but the ClickHouse `alerts` table types `rule_id` as UUID and `severity` as an Enum8 of the five Sigma levels. An alert from such a rule stops `signalman-sink` at that record (`chsink.Decode`).

@@ -3,6 +3,69 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.18.0] - 2026-11-08
+
+### Added
+
+- `signalman hunt --from --to rules/` runs rules as ClickHouse queries over
+  stored events and prints each rule's matching `(partition, seq)` rows.
+- `signalman-sink -lane events` stores `events.norm` in a new `events`
+  table (`deploy/clickhouse/003_events.sql`) for the hunt to read, with the
+  alert lane's delivery: commit after insert, retry on outage, and
+  dead letters to the new `events.dead` topic. Prometheus scrapes it on
+  `:9467`.
+- Plans C, D and E passed their gates on the compose stack. The one-hour
+  soak ran 3.72 million events through the real binaries with zero audit
+  violations. The hunt over stored events equals the pipeline's stored
+  alerts for all 21 rules. A killed `signalmand` paged in 51 s and a
+  stalled one in 95 s. Numbers are in `docs/results.md`.
+
+### Fixed
+
+- A `fieldref` target is now renamed through the taxonomy like the field
+  it sits under. Under `Image: NewProcessName`, `ParentImage|fieldref: Image`
+  used to compare against a field no event has and never matched, in all
+  three engines.
+- A wildcard inside a `base64` or `base64offset` value is a load error
+  (`modifier`). The star used to be encoded as a literal byte, so the rule
+  matched something other than what it said. pySigma rejects the same
+  values. No SigmaHQ rule is affected. An escaped `\*`, `\?` or `\\` under
+  those modifiers is now resolved before encoding, so `a\*b` matches the
+  base64 of `a*b` rather than of the backslash and star.
+- `signalman hunt --json` writes a failed rule as a JSON record with an
+  `error` field, and load errors print before ClickHouse is dialed.
+- `go.mod` pins the go1.27.3 toolchain, so local builds no longer fail
+  govulncheck on ten standard library vulnerabilities fixed after 1.27.1.
+- `TestPipelineOverRedpanda` reread all of `events.raw` with a fresh group
+  and timed out on a stack with history. It now starts at the end.
+- `TestRetroHuntEqualsReplay` now forces the merge it claimed to check, and
+  `002_alerts_engine.sql` is tested against a table that lacks the column.
+
+## [0.17.1] - 2026-11-07
+
+### Fixed
+
+- `make check` passes again: govulncheck flagged GO-2026-6888 in
+  `andybalholm/brotli` 1.2.6, reachable through clickhouse-go and the Kafka
+  client. brotli is now 1.2.7.
+- The README no longer tells you to run `docker compose down -v` after a
+  schema change, which wiped stored alerts. It says to apply new DDL such as
+  `002_alerts_engine.sql` by hand, and `001_alerts.sql` says the same.
+- The docs now say the ClickHouse integration tests run and pass in CI's
+  `integration` job, and the rules workflow passed on its first real rule
+  PR. They used to say neither had run.
+- Plan D stays in progress. The retro-hunt SQL equals a v1 replay on a real
+  ClickHouse over synthetic rules, but no binary runs a retro-hunt yet.
+- Stale counts and paths: 21 rules in `docs/load.md`, no `test/replay/` in
+  the README layout, and `CLAUDE.md` points at the README's repository map
+  and lists `make check-alerts`.
+
+### Changed
+
+- CI actions bumped by Dependabot: docker/login-action 4.7.0,
+  actions/setup-python 7.1.0, goreleaser-action 7.3.0,
+  actions/upload-artifact 7.0.2.
+
 ## [0.17.0] - 2026-10-21
 
 ### Added

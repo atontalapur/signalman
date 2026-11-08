@@ -67,21 +67,28 @@ func TestRetroHuntEqualsReplay(t *testing.T) {
 
 	w := Window{From: msTime(1000), To: msTime(1000 + int64(len(evs)) - 2)}
 	tax := testTaxonomy(t)
-	for _, det := range huntRules {
-		r := loadDetection(t, tax, det)
-		want := replay(r, evs, w)
-		got, err := RetroHunt(ctx, db, table, r, w)
-		if err != nil {
-			t.Fatalf("%s\n%v", det, err)
-		}
-		if len(got) == 0 && len(want) == 0 {
-			got, want = nil, nil
-		}
-		if !reflect.DeepEqual(got, want) {
-			q, _ := HuntQuery(table, r, w)
-			t.Errorf("rule\n%s\nretro-hunt %v\nreplay     %v\nquery %s", det, got, want, q)
+	check := func(when string) {
+		for _, det := range huntRules {
+			r := loadDetection(t, tax, det)
+			want := replay(r, evs, w)
+			got, err := RetroHunt(ctx, db, table, r, w)
+			if err != nil {
+				t.Fatalf("%s\n%v", det, err)
+			}
+			if len(got) == 0 && len(want) == 0 {
+				got, want = nil, nil
+			}
+			if !reflect.DeepEqual(got, want) {
+				q, _ := HuntQuery(table, r, w)
+				t.Errorf("%s: rule\n%s\nretro-hunt %v\nreplay     %v\nquery %s", when, det, got, want, q)
+			}
 		}
 	}
+	check("before the merge")
+	// FINAL forces the merge, so the duplicates are gone on disk rather
+	// than folded by DISTINCT.
+	mustExec(t, ctx, db, "OPTIMIZE TABLE "+table+" FINAL")
+	check("after the merge")
 }
 
 func mustExec(t *testing.T, ctx context.Context, db *sql.DB, q string) {

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/sigma/ast"
 	"github.com/atontalapur/signalman/internal/sigma/match"
 	"gopkg.in/yaml.v3"
@@ -213,10 +215,13 @@ func LoadRuleBytes(path string, src []byte, tax *Taxonomy) (*Rule, *LoadError) {
 	}
 
 	bound := bind(cond, sels)
-	renamed, fields := rename(bound, entry.Fields)
+	renamed, fields, err := rename(bound, entry.Fields)
+	if err != nil {
+		return nil, fail(CodeDetection, err.Error(), keyLine(src, "detection:"))
+	}
 	named := make(map[string]ast.Node, len(names))
 	for _, name := range names {
-		named[name] = renameNode(sels[name], entry.Fields, map[string]bool{})
+		named[name], _, _ = rename(sels[name], entry.Fields)
 	}
 
 	return &Rule{
@@ -342,47 +347,87 @@ func bindAll(in []ast.Node, sels map[string]ast.Node) []ast.Node {
 // collects the sorted set of fields the rule reads. A field with no mapping
 // keeps its name, which is what an event source that already uses Sigma
 // field names needs.
-func rename(n ast.Node, mapping map[string]string) (ast.Node, []string) {
-	seen := map[string]bool{}
-	out := renameNode(n, mapping, seen)
-	fields := make([]string, 0, len(seen))
-	for f := range seen {
+func rename(n ast.Node, mapping map[string]string) (ast.Node, []string, error) {
+	r := renamer{mapping: mapping, seen: map[string]bool{}}
+	out := r.node(n)
+	fields := make([]string, 0, len(r.seen))
+	for f := range r.seen {
 		fields = append(fields, f)
 	}
 	sort.Strings(fields)
-	return out, fields
+	return out, fields, r.err
 }
 
-func renameNode(n ast.Node, mapping map[string]string, seen map[string]bool) ast.Node {
+// renamer walks a tree once, collecting the fields it reads and the first
+// predicate it could not rebuild.
+type renamer struct {
+	mapping map[string]string
+	seen    map[string]bool
+	err     error
+}
+
+func (r *renamer) node(n ast.Node) ast.Node {
 	switch n := n.(type) {
 	case *ast.And:
 		kids := make([]ast.Node, len(n.Children))
 		for i, c := range n.Children {
-			kids[i] = renameNode(c, mapping, seen)
+			kids[i] = r.node(c)
 		}
 		return &ast.And{Children: kids}
 	case *ast.Or:
 		kids := make([]ast.Node, len(n.Children))
 		for i, c := range n.Children {
-			kids[i] = renameNode(c, mapping, seen)
+			kids[i] = r.node(c)
 		}
 		return &ast.Or{Children: kids}
 	case *ast.Not:
-		return &ast.Not{Child: renameNode(n.Child, mapping, seen)}
+		return &ast.Not{Child: r.node(n.Child)}
 	case *ast.Pred:
 		field := n.Field
-		if to, ok := mapping[field]; ok && to != "" {
+		if to, ok := r.mapping[field]; ok && to != "" {
 			field = to
 		}
 		if field != "" {
-			seen[field] = true
+			r.seen[field] = true
 		}
-		return &ast.Pred{
+		out := &ast.Pred{
 			Field: field, Desc: n.Desc, Key: n.Key, M: n.M,
 			Mods: n.Mods, Vals: n.Vals, Keyword: n.Keyword,
 		}
+		if slices.Contains(n.Mods, match.ModFieldRef) {
+			if err := r.fieldRef(out); err != nil && r.err == nil {
+				r.err = err
+			}
+		}
+		return out
 	}
 	return n
+}
+
+// fieldRef maps a fieldref predicate's values, which are Sigma field names,
+// through the same mapping as its field, then rebuilds M and Key from the
+// renamed values so every engine reads the event field. Desc keeps the
+// names as written, like the field it describes.
+func (r *renamer) fieldRef(p *ast.Pred) error {
+	vals := make([]event.Value, len(p.Vals))
+	for i, v := range p.Vals {
+		vals[i] = v
+		name, ok := v.Text()
+		if !ok {
+			continue
+		}
+		if to, ok := r.mapping[name]; ok && to != "" {
+			name = to
+			vals[i] = event.String(name)
+		}
+		r.seen[name] = true
+	}
+	m, err := match.Build(p.Mods, vals)
+	if err != nil {
+		return fmt.Errorf("field %q: fieldref renamed through the taxonomy: %w", p.Field, err)
+	}
+	p.Vals, p.M, p.Key = vals, m, predKey(p.Mods, vals)
+	return nil
 }
 
 // keyLine finds the 1-based line of the first line starting with key, so

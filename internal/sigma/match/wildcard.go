@@ -121,6 +121,24 @@ func AppendFold(dst []byte, s string) []byte {
 	return dst
 }
 
+// Unescape resolves Sigma's escapes the way CompileWildcard reads them,
+// keeping case: \* and \? become a literal star and question mark, \\
+// becomes one backslash, and any other backslash is kept. It is for a value
+// that is plaintext rather than a pattern, such as one about to be encoded.
+func Unescape(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && (s[i+1] == '*' || s[i+1] == '?' || s[i+1] == '\\') {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 // HasWildcard reports whether the pattern contains an unescaped * or ?.
 func HasWildcard(pattern string) bool {
 	return !CompileWildcard(pattern).plain

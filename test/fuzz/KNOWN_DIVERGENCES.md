@@ -176,18 +176,6 @@ pySigma's implementation encodes to UTF-16 and then decodes the result as
 UTF-8, so these modifiers raise for most non-ASCII input. Signalman encodes
 the text and compares bytes, which is what the modifier means.
 
-### A wildcard inside an encoded value
-
-pySigma refuses `CommandLine|base64|contains: '*'`, on the grounds that a
-wildcard cannot survive encoding. Signalman encodes the `*` as a literal
-byte and matches the encoding of it.
-
-This one is a live design question, not a settled difference: an author who
-writes `|base64|contains: '*foo*'` expecting a wildcard gets a silently
-literal match here and a load error from pySigma. Signalman's own habit is
-to reject a rule that can never mean what it says. Carried in `TODOS.md`
-rather than decided inside the fuzzer's story.
-
 ### A pattern Python's engine rejects
 
 The mirror of the RE2 case above: `0$*` is a valid RE2 pattern and a syntax

@@ -1,6 +1,7 @@
 -- The alert table from the spec (phase 04). The clickhouse service in
 -- deploy/docker-compose.yml runs this on its first start, when its data
--- volume is empty; `docker compose down -v` to apply a change.
+-- volume is empty. On an existing volume, apply a change by hand, as
+-- 002_alerts_engine.sql shows; `docker compose down -v` wipes every volume.
 --
 -- ReplacingMergeTree collapses rows with equal ORDER BY keys when parts
 -- merge. The pipeline is at-least-once, and a redelivered alert is an exact

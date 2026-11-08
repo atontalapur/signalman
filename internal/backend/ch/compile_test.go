@@ -9,6 +9,7 @@ import (
 	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/sigma"
 	"github.com/atontalapur/signalman/internal/sigma/ast"
+	"github.com/atontalapur/signalman/internal/sigma/match"
 )
 
 // uh is the unhex form a literal outside the plain character set takes.
@@ -298,6 +299,9 @@ func TestCompileIsInjectionProof(t *testing.T) {
 			if mods == "|re" && v == `\` {
 				continue // not a regex
 			}
+			if mods == "|base64offset|contains" && match.HasWildcard(v) {
+				continue // a wildcard cannot be encoded; rejected at load
+			}
 			det := "s:\n  " + yamlQuote("F'"+v+mods) + ": " + yv + "\nk:\n  - " + yv + "\nr:\n  A|fieldref: " + yv + "\ncondition: s or k or r"
 			r := loadDetection(t, tax, det)
 			sql, err := CompileRule(r)
@@ -354,5 +358,27 @@ func assertSafeSQL(t *testing.T, sql string) {
 	}
 	if in {
 		t.Fatalf("unterminated literal in %s", sql)
+	}
+}
+
+// Columns names the insert's columns; it must be CreateTableSQL's columns in
+// order, since Row.Values is positional within that list.
+func TestColumnsAreTheTableColumnsInOrder(t *testing.T) {
+	ddl, err := CreateTableSQL("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := ddl[strings.Index(ddl, "(")+1 : strings.Index(ddl, ") ENGINE")]
+	var got []string
+	for _, line := range strings.Split(body, "\n") {
+		if f := strings.Fields(line); len(f) > 0 {
+			got = append(got, f[0])
+		}
+	}
+	if strings.Join(got, ",") != strings.Join(Columns, ",") {
+		t.Fatalf("DDL columns %v, Columns %v", got, Columns)
+	}
+	if n := len(Encode(&event.Event{}).Values()); n != len(Columns) {
+		t.Fatalf("Row.Values has %d values for %d columns", n, len(Columns))
 	}
 }
