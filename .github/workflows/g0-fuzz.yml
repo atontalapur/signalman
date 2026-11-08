@@ -1,0 +1,122 @@
+# The G0 differential fuzz run (docs/cutover.md): the pySigma fuzzer needs
+# at least 1e8 comparisons, about 16 hours on one 8-core machine. This
+# splits it over parallel runners. Each shard runs the same target for one
+# job's time budget and uploads its per-worker counters; the merge job sums
+# them and fails below the floor. `cutover check -gate G0 -fuzz-stats <dir>`
+# reads the merged artifact.
+#
+# Manual only (workflow_dispatch): a run costs about 60 runner-hours.
+name: g0-fuzz
+on:
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "fuzz time per shard (Go duration)"
+        default: "5h20m"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: g0-fuzz
+  cancel-in-progress: false
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      # The fuzzer looks for pySigma at test/fuzz/.venv; anywhere else and
+      # every case skips without failing.
+      - run: |
+          python3 -m venv test/fuzz/.venv
+          test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt
+      # A runner has 4 vCPUs. Each Go fuzz process picks its own random
+      # mutations, so shards explore different inputs from the same seeds.
+      # make expands FUZZTIME unquoted into its recipe, so the input must be
+      # a plain duration, and it must leave room for setup and upload
+      # inside the job's 350 minutes. The suppressed cap matches nightly.
+      - env:
+          FUZZTIME: ${{ inputs.fuzztime || '5h20m' }}
+        run: |
+          if ! [[ "$FUZZTIME" =~ ^(([0-9]+)h)?(([0-9]+)m)?$ ]] || [ -z "$FUZZTIME" ]; then
+            echo "fuzztime must be hours and minutes, as 5h20m: got '$FUZZTIME'" >&2
+            exit 1
+          fi
+          mins=$(( 10#${BASH_REMATCH[2]:-0} * 60 + 10#${BASH_REMATCH[4]:-0} ))
+          if [ "$mins" -lt 1 ] || [ "$mins" -gt 330 ]; then
+            echo "fuzztime $FUZZTIME is $mins minutes; it must be 1 to 330" >&2
+            exit 1
+          fi
+          make fuzz-differential FUZZWORKERS=4 FUZZTIME="$FUZZTIME" FUZZMAXSUPPRESSED=0.40 FUZZMAXTIMEOUT=0.01
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzzstats-${{ matrix.shard }}
+          path: .fuzzstats/*.json
+          # upload-artifact skips dot paths unless told otherwise, and the
+          # stats directory is .fuzzstats.
+          include-hidden-files: true
+          if-no-files-found: error
+      # The corpus directory holds the committed seeds too, so this uploads
+      # only when the fuzz step failed; the new crasher is the file not in git.
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashers-${{ matrix.shard }}
+          path: test/fuzz/testdata/fuzz/**
+          if-no-files-found: ignore
+
+  merge:
+    needs: shard
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fuzzstats-*
+          path: shards
+      # Each shard must have finished clean and uploaded stats: a crasher in
+      # one shard, or a missing shard, fails the gate run even when the rest
+      # clear the floor.
+      - env:
+          SHARDS: ${{ needs.shard.result }}
+        run: |
+          if [ "$SHARDS" != success ]; then
+            echo "shard matrix result is $SHARDS, not success" >&2
+            exit 1
+          fi
+          n=$(ls -d shards/fuzzstats-* | wc -l)
+          if [ "$n" -ne 12 ]; then
+            echo "found $n shard stats artifacts, want 12" >&2
+            exit 1
+          fi
+      # Worker file names are pid-time and could repeat across runners, so
+      # each is prefixed with its shard.
+      - run: |
+          mkdir merged
+          for d in shards/fuzzstats-*; do
+            s=${d##*-}
+            for f in "$d"/*.json; do cp "$f" "merged/shard$s-$(basename "$f")"; done
+          done
+          ls merged | wc -l
+          python3 scripts/fuzz_stats.py merged --min-compared 100000000 --max-suppressed-ratio 0.40 --max-timeout-ratio 0.01
+      # Only a passing run publishes the merged stats cutover check reads.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzzstats-merged
+          path: merged/*.json
+          if-no-files-found: error

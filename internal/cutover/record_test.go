@@ -69,6 +69,9 @@ func TestRecordDatesTheGateAndAppendsEvidence(t *testing.T) {
 	if strings.Contains(out, noEvidence) {
 		t.Error("the placeholder survived the first record")
 	}
+	if !strings.Contains(out, "## Gate evidence\n\n### G4 passed") {
+		t.Errorf("the first entry does not follow the heading after one blank line:\n%s", out)
+	}
 	if _, err := Record(out, passed("G4", 0), "again", recordNow); err == nil {
 		t.Fatal("a gate recorded twice")
 	}

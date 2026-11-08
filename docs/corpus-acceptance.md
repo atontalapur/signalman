@@ -165,8 +165,8 @@ are in `docs/results.md`.
 
 Plan A's gate wants 1e6 executions clean. Both runs clear that by cases
 reaching both engines, and the 30 minute run clears it by verdict
-comparisons alone. Spec gate G0 wants 1e8, which accumulates in nightly CI
-rather than in one sitting.
+comparisons alone. Spec gate G0 wants 1e8, reached on 2026-11-08 by the
+manually dispatched 12-shard `g0-fuzz.yml` matrix (`docs/cutover.md`).
 
 ### What the fuzzer found
 

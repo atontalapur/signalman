@@ -3,6 +3,24 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.18.3] - 2026-11-08
+
+### Added
+
+- G0, the offline equivalence gate, has passed and is dated in
+  `docs/cutover.md`. The 12-shard fuzz workflow (`g0-fuzz.yml`) made
+  133.6 million clean comparisons against pySigma, and the corpus replay
+  digests match on all 8 partitions. The workflow now runs only on manual
+  dispatch.
+
+### Fixed
+
+- `cutover check -record` no longer leaves two blank lines before the
+  first gate's evidence.
+- A G0 fuzz run now fails when any shard fails or goes missing, even if
+  the rest clear the floor, and it caps the suppressed share at 40% as
+  nightly does.
+
 ## [0.18.2] - 2026-11-08
 
 ### Fixed
