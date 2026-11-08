@@ -29,7 +29,11 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 - A wildcard inside a `base64` or `base64offset` value is a load error
   (`modifier`). The star used to be encoded as a literal byte, so the rule
   matched something other than what it said. pySigma rejects the same
-  values. No SigmaHQ rule is affected.
+  values. No SigmaHQ rule is affected. An escaped `\*`, `\?` or `\\` under
+  those modifiers is now resolved before encoding, so `a\*b` matches the
+  base64 of `a*b` rather than of the backslash and star.
+- `signalman hunt --json` writes a failed rule as a JSON record with an
+  `error` field, and load errors print before ClickHouse is dialed.
 - `go.mod` pins the go1.27.3 toolchain, so local builds no longer fail
   govulncheck on ten standard library vulnerabilities fixed after 1.27.1.
 - `TestPipelineOverRedpanda` reread all of `events.raw` with a fresh group
