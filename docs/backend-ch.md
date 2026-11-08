@@ -26,8 +26,10 @@ signalman hunt --from 2026-11-01T00:00:00Z --to 2026-11-02T00:00:00Z rules/
 prints each rule's matching `(partition, seq)` rows over `[from, to)` in
 event time (`--json` for one object per rule). The DSN is `--clickhouse`,
 then `SIGNALMAN_CLICKHOUSE_DSN`, then the compose server; `--table` defaults
-to `events`. A rule that does not load or compile is reported and fails the
-command; the others still run.
+to `events`. Each rule is its own scan of the window; `--parallel` (4)
+of them run at once, and output stays in rule set order. A rule that does
+not load or compile is reported and fails the command; the others still
+run.
 
 `TestHuntEqualsReplayOverTheRuleDirectory` (`cmd/signalman`, integration) is
 the gate over real rules: every fixture event of every rule in `rules/` is

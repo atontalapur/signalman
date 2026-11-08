@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,5 +179,65 @@ func TestHuntReportsLoadErrorsWithoutClickHouse(t *testing.T) {
 	}
 	if dialed {
 		t.Fatal("dialed ClickHouse with no rule loaded")
+	}
+}
+
+// concurrentHunter records how many hunts ran at once.
+type concurrentHunter struct {
+	mu        sync.Mutex
+	cur, peak int
+}
+
+func (c *concurrentHunter) Hunt(context.Context, string, *sigma.Rule, ch.Window) ([]ch.Hit, error) {
+	c.mu.Lock()
+	c.cur++
+	c.peak = max(c.peak, c.cur)
+	c.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	c.mu.Lock()
+	c.cur--
+	c.mu.Unlock()
+	return nil, nil
+}
+
+func (c *concurrentHunter) Close() error { return nil }
+
+// --parallel runs that many queries at once, never more, and the output
+// stays in rule order whatever order they finish in.
+func TestHuntRunsRulesInParallelInRuleOrder(t *testing.T) {
+	c := &concurrentHunter{}
+	prev := openHunter
+	openHunter = func(context.Context, string) (hunter, error) { return c, nil }
+	t.Cleanup(func() { openHunter = prev })
+	args := []string{"hunt", "--taxonomy", testTaxonomy, "--parallel", "3",
+		"--from", "2026-11-01T00:00:00Z", "--to", "2026-11-02T00:00:00Z", "../../rules"}
+	code, stdout, stderr := cli(t, args...)
+	if code != exitOK {
+		t.Fatalf("code %d\n%s%s", code, stdout, stderr)
+	}
+	if c.peak != 3 {
+		t.Fatalf("peak concurrency %d, want 3", c.peak)
+	}
+	_, again, _ := cli(t, args...)
+	if again != stdout {
+		t.Fatalf("output order changed between runs:\n%s\n---\n%s", stdout, again)
+	}
+	// The rule set is ordered by rule id; the output must be too.
+	var ids []string
+	for _, line := range strings.Split(stdout, "\n") {
+		if f := strings.Fields(line); len(f) == 4 && f[2] == "hits" {
+			ids = append(ids, f[0])
+		}
+	}
+	if !sort.StringsAreSorted(ids) || len(ids) < 20 {
+		t.Fatalf("rules not in rule set order: %v", ids)
+	}
+}
+
+func TestHuntRejectsAZeroParallelism(t *testing.T) {
+	withHunter(t, &stubHunter{})
+	if code, _, _ := cli(t, "hunt", "--taxonomy", testTaxonomy, "--parallel", "0",
+		"--from", "2026-11-01T00:00:00Z", "--to", "2026-11-02T00:00:00Z", "testdata/pass"); code != exitUsage {
+		t.Fatalf("code %d, want %d", code, exitUsage)
 	}
 }

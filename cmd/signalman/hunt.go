@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2" // registers the "clickhouse" database/sql driver
@@ -74,8 +75,13 @@ func cmdHunt(args []string, stdout, stderr io.Writer) int {
 	toS := fs.String("to", "", "window end, RFC 3339, exclusive (required)")
 	asJSON := fs.Bool("json", false, "print one JSON object per rule")
 	timeout := fs.Duration("timeout", 5*time.Minute, "give up on the whole hunt after this long")
+	parallel := fs.Int("parallel", 4, "queries to run at once")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
+		return exitUsage
+	}
+	if *parallel < 1 {
+		fmt.Fprintln(stderr, "signalman hunt: --parallel must be at least 1")
 		return exitUsage
 	}
 	w, err := huntWindow(*fromS, *toS)
@@ -142,10 +148,30 @@ func cmdHunt(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = h.Close() }()
 
+	// Each rule is its own scan of the window, so they run --parallel at a
+	// time. Results land by index and print in rule order.
+	type result struct {
+		hits []ch.Hit
+		err  error
+	}
+	results := make([]result, len(rs.Rules))
+	sem := make(chan struct{}, *parallel)
+	var wg sync.WaitGroup
+	for i := range rs.Rules {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer func() { <-sem; wg.Done() }()
+			hits, err := h.Hunt(ctx, *table, &rs.Rules[i], w)
+			results[i] = result{hits, err}
+		}(i)
+	}
+	wg.Wait()
+
 	total := 0
 	for i := range rs.Rules {
 		r := &rs.Rules[i]
-		hits, err := h.Hunt(ctx, *table, r, w)
+		hits, err := results[i].hits, results[i].err
 		if err != nil {
 			failed++
 			if !fail(r.Path, r.ID, err) {
