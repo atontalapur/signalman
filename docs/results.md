@@ -337,6 +337,19 @@ SQLite's ASCII-only NOCASE against a non-ASCII case pair (0.18.2). Each
 has a seed in `test/fuzz/testdata`. A clean shard compares about 18.8
 million cases, so twelve clear the floor.
 
+**G0, passed** (2026-11-08). The fourth matrix run
+([42490031683](https://github.com/atontalapur/signalman/actions/runs/42490031683))
+finished with all 12 shards clean: 133,581,079 comparisons from 1,108
+workers, 59.3 million suppressed by a coded refusal, 637 oracle timeouts (a
+0.0005% share). `cutover check -gate G0 -record` then passed every
+criterion on the same corpus and rules. Digests match on all 8 partitions,
+the fuzz count clears 1e8, the property and equivalence tests pass, and
+`fuzz-clean` is attested with the run's URL, since the counters do not
+record its exit status. In the recorded command, `$SCRATCH/g0corpus` held
+the 200,000 soak events and `$SCRATCH/g0run` the run's `fuzzstats-merged`
+artifact. G0 is dated in `docs/cutover.md`. G1 to G6 need
+live traffic.
+
 ## Codebase
 
 As of commit `365ed2d`: about 7,400 lines of Go, of which about 4,200 are

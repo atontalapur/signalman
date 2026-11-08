@@ -4,9 +4,9 @@ How v2 replaces v1 as the serving engine, what has to be true before each
 step, and the record of every disagreement found on the way. The spec is
 phases 08 and 09 of `docs/spec/signalman-v1.html`.
 
-No gate has been passed. The dates column below is empty on purpose and is
-filled in only when a gate's criteria are met and checked, by
-`cutover check -record` (see "Checking the gates").
+G0 passed on 2026-11-08; G1 to G6 have not. A date is filled in only when
+a gate's criteria are met and checked, by `cutover check -record` (see
+"Checking the gates").
 
 ## The four arguments
 
@@ -177,7 +177,7 @@ Redpanda under production load.
 
 | Gate | Criteria | Date passed |
 |---|---|---|
-| G0 Offline equivalence | Full corpus replay digests match on every partition. Differential fuzzer clean for 1e8 executions. All property tests green. | |
+| G0 Offline equivalence | Full corpus replay digests match on every partition. Differential fuzzer clean for 1e8 executions. All property tests green. | 2026-11-08 |
 | G1 Shadow at full traffic | v2 shadows 100% of rules for 7 days with 0 divergences in the three zero-budget classes. v2 p99 within target under production load. | |
 | G2 1% of rules served by v2 | Hold 48 h. v1 still shadowing. Alert volume per rule unchanged within noise. Rollback is a config flag, measured to take effect in under 30 s. | |
 | G3 10%, then 50% | 48 h at each step, same conditions. Any divergence at any step returns to the previous step, not to zero. | |
@@ -381,4 +381,11 @@ No entries. Shadow mode has not run against production traffic.
 What `cutover check -record` appended for each gate it recorded, newest
 last. Each entry names the command, the window, and every check.
 
-Nothing recorded. No gate has been checked against production traffic.
+### G0 passed 2026-11-08
+
+Checked at 2026-11-08T20:50:36Z with `cutover check -gate G0 -rules corpora/sigmahq/rules -corpus $SCRATCH/g0corpus -fuzz-stats $SCRATCH/g0run -go-test -attest fuzz-clean=https://github.com/atontalapur/signalman/actions/runs/42490031683 -record`.
+
+- `replay-digests` pass: full corpus replay: v1 and v2 verdict digests match on every partition. 200000 events, 1236 rules (ruleset 7e799898dbe3), 8 partitions; p0 v1 b74ca81af938855d/30900000 v2 b74ca81af938855d/30900000 match; p1 v1 dc2b449572f15eee/30900000 v2 dc2b449572f15eee/30900000 match; p2 v1 9804857a376b28fd/30900000 v2 9804857a376b28fd/30900000 match; p3 v1 697c0394578eca66/30900000 v2 697c0394578eca66/30900000 match; p4 v1 c1d32bd2989a0432/30900000 v2 c1d32bd2989a0432/30900000 match; p5 v1 0bd4027668506c32/30900000 v2 0bd4027668506c32/30900000 match; p6 v1 ccf0206981551193/30900000 v2 ccf0206981551193/30900000 match; p7 v1 87db7b5a2bb466cb/30900000 v2 87db7b5a2bb466cb/30900000 match; 1908 rules rejected at load; corpus $SCRATCH/g0corpus
+- `fuzz-compared` pass: the differential fuzzer compared at least 100000000 cases. $SCRATCH/g0run: 1108 workers, 133581079 compared, 20650568 rejected by both, 59298745 suppressed, 637 oracle timeouts, 192762660 skipped
+- `fuzz-clean` attested: the differential fuzz run exited 0 with no new crasher. attested: https://github.com/atontalapur/signalman/actions/runs/42490031683
+- `property-tests` pass: property and equivalence tests green (determinism, rule independence, prefilter and gate soundness, idempotence). ok  	github.com/atontalapur/signalman/internal/engine/v1	0.499s | ok  	github.com/atontalapur/signalman/internal/engine/v2	9.490s | ok  	github.com/atontalapur/signalman/internal/engine/v2/aho	0.337s | ok  	github.com/atontalapur/signalman/internal/verdict	0.331s | ok  	github.com/atontalapur/signalman/internal/pipe/chsink	0.796s

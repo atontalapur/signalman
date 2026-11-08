@@ -54,8 +54,11 @@ rule's alerts to v2 when `fnv(rule_id) mod 100` is below the file's
 percentage, while v1 keeps evaluating and recording every rule; editing the
 file is the rollback, and it lands at the next batch. `docs/cutover.md` has
 the four arguments, the gate ladder, the retirement criteria, the rollout
-design, and the divergence log. No gate has been passed: shadow mode and the
-rollout have only run over the in-memory broker in tests.
+design, and the divergence log. G0, offline equivalence, passed on
+2026-11-08: the corpus replay digests match on every partition and the
+differential fuzzer made 133.6 million clean comparisons on a 12-shard
+GitHub Actions matrix (`g0-fuzz.yml`). G1 to G6 need live traffic; shadow
+mode and the rollout have only run over the in-memory broker in tests.
 
 The gate tooling is built. `cmd/cutover check` evaluates one gate from its
 sources (a corpus replay and the fuzzer's counters for G0, Prometheus for
@@ -67,8 +70,8 @@ ladder order and never for a window that has not ended. `cmd/cutover gameday` ro
 forward and times both from metrics. `signalmand -serve v2` is the
 configuration after G6: v2 serves every rule, and v1 either shadows as the
 oracle or is out of the pipeline. The default is still v1. None of this has
-run against real traffic, so no gate has a date and no game day has been
-measured.
+run against real traffic, so no gate past G0 has a date and no game day
+has been measured.
 
 Three documents cover the surface: `docs/modifiers.md` (modifiers, chain
 rules, divergences), `docs/taxonomy.md` (logsource binding and TaxonomyV),
@@ -195,7 +198,7 @@ detector.
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | done: SQL compiler, alert and events sinks, `signalman hunt`; the hunt over `rules/` equals a v1 replay on a real ClickHouse, gate passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | done: a killed signalmand pages in 51 s and a stalled one in 95 s on the compose stack, gate passed |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); Redpanda and ClickHouse runs not done |
-| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; no gate G0 to G6 run against traffic or passed, no game day run |
+| G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; G0 passed (offline); G1 to G6 not run against traffic, no game day run |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow passed on its first real rule PR (`signalman-canary`, #44); no noise corpus is configured |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
