@@ -175,6 +175,8 @@ func Record(doc string, r Report, invocation string, now time.Time) (string, err
 	// The placeholder line goes once something is recorded.
 	out = strings.Replace(out, "\n"+noEvidence+"\n", "\n", 1)
 	out = strings.TrimSuffix(out, "\n"+noEvidence)
+	// Removing the placeholder leaves the blank line before it.
+	out = strings.TrimRight(out, "\n")
 	return out + "\n\n" + b.String(), nil
 }
 
