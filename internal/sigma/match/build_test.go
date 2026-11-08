@@ -453,3 +453,42 @@ func TestBuildAllowsRealisticChainsUnderTheBudget(t *testing.T) {
 		t.Fatal("a two-transform encoding chain stays legal")
 	}
 }
+
+// A wildcard cannot survive base64: the encoded bytes of '*' are not a
+// wildcard, so an author who writes one gets a rule that matches something
+// other than what it says. pySigma rejects the same rules.
+func TestBuildRejectsAWildcardUnderBase64(t *testing.T) {
+	cases := []struct{ mods, val string }{
+		{"base64|contains", "*foo*"},
+		{"base64", "foo?"},
+		{"base64offset|contains", "a*b"},
+		{"utf16le|base64offset|contains", "IEX*"},
+		{"windash|base64|contains", "-e *"},
+	}
+	for _, c := range cases {
+		_, err := Build(strings.Split(c.mods, "|"), []event.Value{event.String(c.val)})
+		if err == nil {
+			t.Errorf("Build(%q, %q): expected an error", c.mods, c.val)
+			continue
+		}
+		if !errors.Is(err, ErrUnsupportedModifier) {
+			t.Errorf("Build(%q, %q): error must wrap ErrUnsupportedModifier, got %v", c.mods, c.val, err)
+		}
+	}
+}
+
+// An escaped star is a literal, not a wildcard, so it encodes like any other
+// byte. A wildcard under a transform that keeps it (wide, windash) is not
+// affected.
+func TestBuildAllowsLiteralStarsAndOtherTransforms(t *testing.T) {
+	cases := []struct{ mods, val string }{
+		{"base64|contains", `a\*b`},
+		{"wide|contains", "a*b"},
+		{"windash|contains", "-e *"},
+	}
+	for _, c := range cases {
+		if _, err := Build(strings.Split(c.mods, "|"), []event.Value{event.String(c.val)}); err != nil {
+			t.Errorf("Build(%q, %q): %v", c.mods, c.val, err)
+		}
+	}
+}

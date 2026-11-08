@@ -28,6 +28,8 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Priority:** P3
 **Depends on:** Plan A Task 14
 
+## Completed
+
 ### Decide whether a wildcard inside an encoded value is a load error
 **What:** `CommandLine|base64|contains: '*foo*'` encodes the asterisks as literal bytes here and matches the base64 of `*foo*`. pySigma rejects the rule outright ("Base64 encoding of strings with wildcards is not allowed").
 **Why:** Found by the SIG-21 differential fuzzer. An author who writes that almost certainly means a wildcard, and gets a rule that silently matches something else. Signalman already prefers a loud load error for a chain that cannot mean what it says: a chain whose variants are all empty is rejected for exactly this reason.
@@ -35,8 +37,7 @@ Engineering debt too small for a Jira story. Stories live in `docs/backlog.yml`.
 **Effort:** S
 **Priority:** P2
 **Depends on:** None
-
-## Completed
+**Completed:** SIG-16. Rejected at load: `match.Plan` returns `ErrUnsupportedModifier` for an unescaped wildcard under `base64` or `base64offset`, so the loader reports it under code `modifier`. The fuzzer suppression and its `KNOWN_DIVERGENCES.md` section are gone; both engines now reject. No SigmaHQ rule is affected.
 
 ### Rename fieldref targets through the taxonomy
 **What:** `rename` in `internal/sigma/rule.go` maps `Pred.Field` through the taxonomy but leaves the `fieldref` target, which lives in the rule value, under its Sigma name.
