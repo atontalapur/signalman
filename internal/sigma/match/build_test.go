@@ -492,3 +492,25 @@ func TestBuildAllowsLiteralStarsAndOtherTransforms(t *testing.T) {
 		}
 	}
 }
+
+// Under base64 the value is plaintext to encode, so Sigma's escapes are
+// resolved first, as the wildcard matcher resolves them: \* and \? are a
+// literal star and question mark, \\ is one backslash, and any other
+// backslash is itself. pySigma encodes the same bytes.
+func TestBuildBase64EncodesTheUnescapedPlaintext(t *testing.T) {
+	cases := []struct{ val, plain, notPlain string }{
+		{`a\*b`, "a*b", `a\*b`},
+		{`a\?b`, "a?b", `a\?b`},
+		{`a\\b`, `a\b`, `a\\b`},
+		{`a\b`, `a\b`, "ab"},
+	}
+	for _, c := range cases {
+		m := build(t, "base64", c.val)
+		if !hit(t, m, event.String(Base64(c.plain))) {
+			t.Errorf("base64 %q must match the encoding of %q", c.val, c.plain)
+		}
+		if hit(t, m, event.String(Base64(c.notPlain))) {
+			t.Errorf("base64 %q must not match the encoding of %q", c.val, c.notPlain)
+		}
+	}
+}

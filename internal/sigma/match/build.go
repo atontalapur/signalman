@@ -18,6 +18,10 @@ var ErrUnsupportedModifier = errors.New("unsupported modifier")
 // three places: the chain parser above, validateChain, and either buildOne's
 // dedicated switch (re, cidr, the numeric operators) or the variant loop that
 // follows it.
+// ModFieldRef is the fieldref modifier. The rule loader matches on it to
+// rename a fieldref target through the taxonomy.
+const ModFieldRef = "fieldref"
+
 const (
 	modContains   = "contains"
 	modStartsWith = "startswith"
@@ -28,7 +32,7 @@ const (
 	modEquals     = "equals" // implicit; no modifier written
 
 	modCidr     = "cidr"
-	modFieldRef = "fieldref"
+	modFieldRef = ModFieldRef
 	modLt       = "lt"
 	modLte      = "lte"
 	modGt       = "gt"
@@ -122,9 +126,15 @@ func Plan(mods []string, vals []event.Value) (Spec, error) {
 		if text, ok := v.Text(); ok && b64 && HasWildcard(text) {
 			// The encoded bytes of a wildcard are not a wildcard, so the
 			// rule would match something other than what it says. pySigma
-			// rejects the same entry. An escaped \* is a literal and passes.
+			// rejects the same entry. An escaped \* is a literal star: Unescape
+			// turns it into one before encoding.
 			return Spec{}, fmt.Errorf("%w: a wildcard cannot be encoded by base64 in %q (escape it as \\* to match a literal)",
 				ErrUnsupportedModifier, mods)
+		}
+		if text, ok := v.Text(); ok && b64 {
+			// The value is plaintext to encode, not a pattern, so its
+			// escapes are resolved before the transforms see it.
+			v = event.String(Unescape(text))
 		}
 		vs, err := planOne(v, transforms, comparison, reInsens, fieldref)
 		if err != nil {

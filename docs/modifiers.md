@@ -201,8 +201,10 @@ classifies on with `errors.Is` and never by error text:
 - An unescaped `*` or `?` in a value under `base64` or `base64offset`. The
   encoded bytes of a wildcard are not a wildcard, so the rule would match
   the encoding of a literal star. pySigma rejects the same values. Escape it
-  (`\*`) to match a literal; `wide` and `windash` keep wildcards and are not
-  affected.
+  (`\*`) to match a literal: under `base64` and `base64offset` the escapes
+  `\*`, `\?` and `\\` are resolved before encoding, so `a\*b` matches the
+  base64 of `a*b`, as in pySigma. `wide` and `windash` keep wildcards and are
+  not affected.
 - Any modifier chain on a `null` rule value. `field: null` is the only null
   form.
 
