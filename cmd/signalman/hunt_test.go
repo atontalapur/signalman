@@ -139,3 +139,43 @@ func TestHuntFailsOnARuleItCannotRun(t *testing.T) {
 		t.Fatalf("code %d\n%s", code, stdout)
 	}
 }
+
+// With --json every line of stdout is one JSON object, failures included.
+func TestHuntJSONReportsFailuresAsRecords(t *testing.T) {
+	id := procDumpRuleID(t)
+	withHunter(t, &stubHunter{fail: map[string]error{id: errors.New("boom")}})
+	code, stdout, _ := cli(t, "hunt", "--taxonomy", testTaxonomy, "--json",
+		"--from", "2026-11-01T00:00:00Z", "--to", "2026-11-02T00:00:00Z", "testdata/pass")
+	if code != exitFail {
+		t.Fatalf("code %d\n%s", code, stdout)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		var rec huntRecord
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("not JSON: %q: %v", line, err)
+		}
+		if rec.RuleID != id || !strings.Contains(rec.Error, "boom") {
+			t.Fatalf("record %+v, want rule %s with the error", rec, id)
+		}
+	}
+}
+
+// A rule that does not load is reported even when ClickHouse cannot be
+// reached, and with nothing loaded the command never dials.
+func TestHuntReportsLoadErrorsWithoutClickHouse(t *testing.T) {
+	dialed := false
+	prev := openHunter
+	openHunter = func(context.Context, string) (hunter, error) {
+		dialed = true
+		return nil, errors.New("connection refused")
+	}
+	t.Cleanup(func() { openHunter = prev })
+	code, stdout, _ := cli(t, "hunt", "--taxonomy", testTaxonomy,
+		"--from", "2026-11-01T00:00:00Z", "--to", "2026-11-02T00:00:00Z", "testdata/gates/always")
+	if code != exitFail || !strings.Contains(stdout, "FAIL") {
+		t.Fatalf("code %d, want %d with the load error\n%s", code, exitFail, stdout)
+	}
+	if dialed {
+		t.Fatal("dialed ClickHouse with no rule loaded")
+	}
+}

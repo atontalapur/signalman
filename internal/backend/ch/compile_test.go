@@ -360,3 +360,25 @@ func assertSafeSQL(t *testing.T, sql string) {
 		t.Fatalf("unterminated literal in %s", sql)
 	}
 }
+
+// Columns names the insert's columns; it must be CreateTableSQL's columns in
+// order, since Row.Values is positional within that list.
+func TestColumnsAreTheTableColumnsInOrder(t *testing.T) {
+	ddl, err := CreateTableSQL("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := ddl[strings.Index(ddl, "(")+1 : strings.Index(ddl, ") ENGINE")]
+	var got []string
+	for _, line := range strings.Split(body, "\n") {
+		if f := strings.Fields(line); len(f) > 0 {
+			got = append(got, f[0])
+		}
+	}
+	if strings.Join(got, ",") != strings.Join(Columns, ",") {
+		t.Fatalf("DDL columns %v, Columns %v", got, Columns)
+	}
+	if n := len(Encode(&event.Event{}).Values()); n != len(Columns) {
+		t.Fatalf("Row.Values has %d values for %d columns", n, len(Columns))
+	}
+}

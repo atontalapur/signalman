@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/atontalapur/signalman/internal/backend/ch"
 	"github.com/atontalapur/signalman/internal/broker"
@@ -64,21 +64,11 @@ func OpenEvents(ctx context.Context, dsn, table string) (*EventsTable, error) {
 	if err := ch.CheckTable(table); err != nil {
 		return nil, err
 	}
-	opts, err := clickhouse.ParseDSN(dsn)
-	if err != nil {
-		return nil, fmt.Errorf("clickhouse dsn: %w", err)
-	}
-	conn, err := clickhouse.Open(opts)
+	conn, err := openConn(ctx, dsn)
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.Ping(ctx); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("clickhouse ping: %w", err)
-	}
-	// Positional: Row.Values is in CreateTableSQL's column order, and
-	// TestEventsDDLIsTheBackendSchema holds the deployed DDL to it.
-	return &EventsTable{conn: conn, query: "INSERT INTO " + table}, nil
+	return &EventsTable{conn: conn, query: "INSERT INTO " + table + " (" + strings.Join(ch.Columns, ", ") + ")"}, nil
 }
 
 // Insert sends rows as one INSERT, like ClickHouse.Insert.

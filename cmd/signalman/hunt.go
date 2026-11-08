@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,9 +15,6 @@ import (
 	"github.com/atontalapur/signalman/internal/backend/ch"
 	"github.com/atontalapur/signalman/internal/sigma"
 )
-
-// defaultDSN is the compose ClickHouse, the same default signalman-sink uses.
-const defaultDSN = "clickhouse://signalman:signalman@localhost:9000/signalman"
 
 // hunter runs one rule over the stored events. sqlHunter is the real one;
 // tests swap openHunter for a stub.
@@ -53,6 +51,9 @@ type huntRecord struct {
 	From   time.Time `json:"from"`
 	To     time.Time `json:"to"`
 	Hits   []huntHit `json:"hits"`
+	// Error is set, and Hits empty, when the rule did not load or its
+	// query failed.
+	Error string `json:"error,omitempty"`
 }
 
 type huntHit struct {
@@ -98,12 +99,42 @@ func cmdHunt(args []string, stdout, stderr io.Writer) int {
 		*dsn = os.Getenv("SIGNALMAN_CLICKHOUSE_DSN")
 	}
 	if *dsn == "" {
-		*dsn = defaultDSN
+		*dsn = ch.ComposeDSN
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
+	enc := json.NewEncoder(stdout)
+	// fail reports one rule that did not run: a FAIL line, or with --json a
+	// record carrying the error, so stdout stays one object per line.
+	fail := func(path, id string, err error) bool {
+		if !*asJSON {
+			fmt.Fprintf(stdout, "FAIL  %s  %s: %v\n", id, path, err)
+			return true
+		}
+		if err := enc.Encode(huntRecord{Path: path, RuleID: id, From: w.From, To: w.To, Hits: []huntHit{}, Error: err.Error()}); err != nil {
+			fmt.Fprintf(stderr, "signalman hunt: %v\n", err)
+			return false
+		}
+		return true
+	}
+
+	// Load errors come first, before ClickHouse is dialed, so a broken rule
+	// is reported even when the server is down.
 	rs, loadErrs := sigma.LoadRuleFiles(paths, tax)
+	failed := len(loadErrs)
+	for _, e := range loadErrs {
+		if !*asJSON {
+			fmt.Fprintln(stdout, "FAIL  "+e.Error())
+			continue
+		}
+		if !fail(e.Path, e.RuleID, errors.New(e.Error())) {
+			return exitUsage
+		}
+	}
+	if len(rs.Rules) == 0 {
+		return exitFail
+	}
 	h, err := openHunter(ctx, *dsn)
 	if err != nil {
 		fmt.Fprintf(stderr, "signalman hunt: %v\n", err)
@@ -111,18 +142,15 @@ func cmdHunt(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = h.Close() }()
 
-	failed := len(loadErrs)
-	for _, e := range loadErrs {
-		fmt.Fprintln(stdout, "FAIL  "+e.Error())
-	}
-	enc := json.NewEncoder(stdout)
 	total := 0
 	for i := range rs.Rules {
 		r := &rs.Rules[i]
 		hits, err := h.Hunt(ctx, *table, r, w)
 		if err != nil {
 			failed++
-			fmt.Fprintf(stdout, "FAIL  %s  %s: %v\n", r.ID, r.Path, err)
+			if !fail(r.Path, r.ID, err) {
+				return exitUsage
+			}
 			continue
 		}
 		total += len(hits)

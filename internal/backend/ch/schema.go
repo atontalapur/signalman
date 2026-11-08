@@ -43,6 +43,18 @@ const (
 // DefaultTable is the events table the retro-hunt reads.
 const DefaultTable = "events"
 
+// ComposeDSN is the clickhouse-go DSN of the ClickHouse in
+// deploy/docker-compose.yml, the default for every binary that dials one.
+const ComposeDSN = "clickhouse://signalman:signalman@localhost:9000/signalman"
+
+// Columns is the events table's columns in CreateTableSQL order, the order
+// Row.Values returns. An insert names them, so a column a later migration
+// adds does not break it.
+var Columns = []string{
+	"partition", "seq", "event_time", "ingest_time", "source",
+	colPresent, colText, colFolded, colEqFold, "f_ints", colIPs, "raw",
+}
+
 // tableName is the only identifier a caller supplies. It is checked, never
 // quoted: database.table or table, ASCII letters, digits, and underscores.
 var tableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)

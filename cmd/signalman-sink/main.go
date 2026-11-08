@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/atontalapur/signalman/internal/backend/ch"
 	"github.com/atontalapur/signalman/internal/broker/kafka"
 	"github.com/atontalapur/signalman/internal/obs"
 	"github.com/atontalapur/signalman/internal/pipe/chsink"
@@ -58,7 +59,7 @@ func parseFlags(args []string) (flags, error) {
 	fs.StringVar(&f.lane, "lane", "alerts", "what to store: alerts (alerts topic) or events (events.norm)")
 	fs.StringVar(&f.brokers, "brokers", "localhost:19092", "comma-separated Kafka bootstrap brokers")
 	fs.StringVar(&f.group, "group", "", "consumer group (default signalman-sink, or signalman-events for -lane events)")
-	fs.StringVar(&f.clickhouse, "clickhouse", "clickhouse://signalman:signalman@localhost:9000/signalman", "clickhouse-go DSN")
+	fs.StringVar(&f.clickhouse, "clickhouse", ch.ComposeDSN, "clickhouse-go DSN")
 	fs.StringVar(&f.table, "table", "", "table to insert into (default alerts, or events for -lane events)")
 	// ClickHouse writes a part per insert and wants few, large inserts.
 	fs.IntVar(&f.batchRows, "batch-rows", 5000, "insert once this many rows are buffered")
