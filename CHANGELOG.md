@@ -12,7 +12,8 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   ASCII only, so it reported `Ώ` against `ώ` as a Signalman bug. The G0
   fuzz matrix found it.
 - `regex-casefold` also covers a regex range that holds the Turkish i
-  family without naming it, as `[x-٬]` does.
+  family without naming it, as `[x-٬]` does, and an inline `(?i)` under a
+  plain `re`.
 
 ## [0.18.1] - 2026-11-08
 

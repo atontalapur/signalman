@@ -269,6 +269,10 @@ REGEX_CASEFOLD = frozenset("\u0130\u0131\ua7ce\ua7cf\ua7d2\ua7d3\ua7d4\ua7d5")
 # The letters of that set Go's tables case-pair and Python's do not, so
 # str.lower() cannot see the pair in unicode_case_pair. Declining any two of
 # them together over-declines U+A7CE against U+A7D3; there is no such rule.
+# An inline flag group that turns on case folding, as (?i) or (?si) does,
+# under a plain re key.
+INLINE_CASE_FLAG = re.compile(r"\(\?[a-zA-Z]*i")
+
 CASE_SKEW = frozenset("\ua7ce\ua7cf\ua7d2\ua7d3\ua7d4\ua7d5")
 
 
@@ -306,9 +310,13 @@ def unicode_case_pair(values, v) -> bool:
     if not ev:
         return False
     for s in values:
-        for r in {c for c in s if not c.isascii()} - ev:
+        for r in {c for c in s if not c.isascii()}:
             for e in ev:
-                if r.lower() == e.lower() or r.upper() == e.upper():
+                if r == e:
+                    continue
+                # casefold() as well: lower() and upper() equality is not
+                # transitive, and misses U+03D1 against U+03F4.
+                if r.lower() == e.lower() or r.upper() == e.upper() or r.casefold() == e.casefold():
                     return True
                 if r in CASE_SKEW and e in CASE_SKEW:
                     return True
@@ -398,7 +406,7 @@ def handle(req: dict) -> dict:
         if any(REGEX_BRACE.search(v) for v in values):
             raise Unanswerable("regex-brace", "regex repetition brace")
         v = event.get(field)
-        if "i" in key_mods and (
+        if ("i" in key_mods or any(INLINE_CASE_FLAG.search(p) for p in values)) and (
             any(REGEX_CASEFOLD & set(s) for s in [*values, v] if isinstance(s, str))
             or any(range_holds_casefold(p) for p in values)
         ):

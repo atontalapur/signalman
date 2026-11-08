@@ -147,6 +147,16 @@ class RegexChecks(unittest.TestCase):
         out = ask("Image|contains", "'꟎'", {"Image": "꟏"})
         self.assertEqual(out.get("refusal"), "unicode-case")
 
+    def test_case_pair_beside_the_same_letter_is_refused(self):
+        # The event holds the rule's letter and its other case.
+        out = ask("Image|contains", "'ΏΏ'", {"Image": "Ώώ"})
+        self.assertEqual(out.get("refusal"), "unicode-case")
+
+    def test_case_pair_only_casefold_sees_is_refused(self):
+        # U+03D1 and U+03F4 share a fold orbit; lower() and upper() differ.
+        out = ask("Image", "'ϑ'", {"Image": "ϴ"})
+        self.assertEqual(out.get("refusal"), "unicode-case")
+
     def test_same_non_ascii_text_is_answered(self):
         out = ask("Image|contains", "'ώ'", {"Image": "xώy"})
         self.assertNotIn("refusal", out)
@@ -175,6 +185,19 @@ class RegexChecks(unittest.TestCase):
         # naming either, and re.I pairs them with I.
         out = ask("User|re|i", "'[x-٬]'", {"User": "I"})
         self.assertEqual(out.get("refusal"), "regex-casefold")
+
+    def test_inline_case_flag_on_the_turkish_i_is_refused(self):
+        out = ask("Image|re", "'(?i)I'", {"Image": "İ"})
+        self.assertEqual(out.get("refusal"), "regex-casefold")
+
+    def test_inline_flag_group_with_i_on_a_range_is_refused(self):
+        out = ask("User|re", "'(?si)[x-٬]'", {"User": "I"})
+        self.assertEqual(out.get("refusal"), "regex-casefold")
+
+    def test_inline_flag_without_i_is_answered(self):
+        out = ask("Image|re", "'(?s)I'", {"Image": "İ"})
+        self.assertNotIn("refusal", out)
+        self.assertFalse(out["matched"])
 
     def test_ascii_range_in_a_case_insensitive_regex_is_answered(self):
         out = ask("User|re|i", "'[a-z]'", {"User": "I"})

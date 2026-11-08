@@ -221,7 +221,8 @@ disagree on sixteen ordered pairs. Python treats `I`, `i`, `İ` (U+0130) and
 tables also case-pair U+A7CE to U+A7D5, which Python 3.14's do not yet.
 `|re` is RE2 by design, and RE2 not matching `İ` to `I` agrees with the
 string fold (`docs/modifiers.md`). The oracle declines with
-`regex-casefold` when a `re|i` value or the event field it is matched
+`regex-casefold` when a `re|i` value, or a `re` value with an inline flag
+group such as `(?i)`, or the event field it is matched
 against holds one of those characters, or when a range in the value may
 cover one without naming it (`[x-٬]` holds both Turkish i's; an escaped
 endpoint is not decoded and counts as covering). The G0 fuzz matrix found
@@ -235,8 +236,8 @@ against `ώ` (U+03CE) is no match in the oracle and a match in Signalman,
 which folds Unicode as Sigma's case-insensitive default requires. The oracle
 declines with `unicode-case` when a rule value and the event field it is
 compared against hold two distinct non-ASCII characters that Python pairs
-by `lower()` or `upper()`, or two of U+A7CE to U+A7D5, which Go's tables
-pair and Python's do not yet. A key under `re` or `cased` is case sensitive and
+by `lower()`, `upper()` or `casefold()`, or two of U+A7CE, U+A7CF and
+U+A7D2 to U+A7D5, which Go's tables pair and Python's do not yet. A key under `re` or `cased` is case sensitive and
 is still compared. Teaching the oracle Unicode folding was rejected: it
 would copy Signalman's own rule into the oracle, and Python's and Go's case
 tables differ. Signalman's folding is covered by unit tests in
