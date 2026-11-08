@@ -182,7 +182,13 @@ tree; a real `kill -9` of `signalmand` also loses the producer's buffered
 records and needs the group to notice a dead member (session timeout,
 rebalance). That the alert table's ReplacingMergeTree collapses the
 duplicates was checked by counting distinct keys, not by ClickHouse;
-`signalman-sink` was not part of the run. Not run.
+`signalman-sink` was not part of the run.
+
+**Run on Redpanda since.** One `kill -9` of `signalmand` at 1,000 events/s,
+with both sink lanes running, then a restart on the same group: the audit
+stayed at zero violations, and `signalman hunt` over the stored events
+equaled the stored alerts row for row (`docs/results.md`). That is one
+kill at an arbitrary moment, not five at the worst one.
 
 ## Poison record
 
@@ -344,7 +350,7 @@ not checked against:
 |---|---|---|
 | Sustained 2x | run, 120 s, zero drops, digest equal | 30 min on Redpanda; real lag and staleness metrics |
 | Sustained 5x | run, 60 s, nothing failed | broker disk, socket buffers, producer backpressure on Redpanda: not run |
-| Consumer kill | run, 5 kills, digest equal, duplicates counted | `kill -9` of `signalmand` on Redpanda; ReplacingMergeTree collapse in ClickHouse: not run |
+| Consumer kill | run, 5 kills, digest equal, duplicates counted | one `kill -9` of `signalmand` on Redpanda with ClickHouse: audit green, hunt equals stored alerts; five worst-moment kills on Redpanda: not run |
 | Poison record | run, every bad record one drop, no wedge | a real-source poison record |
 | Rule set reload | run, 236 reloads, zero straddles | `SIGHUP` path in `signalmand` under load |
 | ClickHouse unavailable | analogue run (output writes failing 30 s) | the ClickHouse alert sink and a 10 min ClickHouse outage: not run |

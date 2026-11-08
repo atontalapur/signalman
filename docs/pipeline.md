@@ -318,14 +318,13 @@ instances on one group would break the second assumption.
 
 ### Status of the Plan C gate
 
-The gate is "green for an hour under load". That has not been run: there is
-no Docker on the development machine. What has run is
-`TestEndToEndUnderGeneratedLoad` in `internal/pipe`, which pushes generated
-load (including malformed records and rule set reloads every half second)
-through the in-memory broker for 3 seconds with the audit stepping
-throughout, and requires every window green. `SIGNALMAN_SOAK_DURATION=1h`
-lengthens it, but the in-memory broker keeps every record, so the real hour
-belongs on Redpanda.
+The gate is "green for an hour under load", and it passed on Redpanda on
+2026-11-08: 3.72 million events at 1,000/s for 62 minutes through the real
+`signalmand`, 2,992 audit windows, zero violations, three reloads mid-run.
+The numbers are in `docs/results.md`. `TestEndToEndUnderGeneratedLoad` in
+`internal/pipe` is the in-process version: generated load, including
+malformed records and rule set reloads every half second, through the
+in-memory broker for 3 seconds, every window green.
 
 ## Metrics
 

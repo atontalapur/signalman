@@ -121,9 +121,10 @@ bounded channels, rule set reloads land between batches, and an in-process
 audit checks invariant 1 against the output topics. `internal/broker` puts
 Redpanda (franz-go) and an in-memory broker behind one interface, so the
 delivery logic is unit tested without Docker. `docs/pipeline.md` covers
-topics, record formats, drop reasons, delivery, and the audit. The gate is
-not passed: the audit is green over generated load in test mode, but the
-one-hour soak against Redpanda has not been run.
+topics, record formats, drop reasons, delivery, and the audit. The gate
+passed on the compose stack: 3.72 million events over 62 minutes at 1,000/s
+through the real binaries, 2,992 audit windows, zero violations
+(`docs/results.md`).
 
 `internal/backend/ch` is the second execution target. It compiles a loaded
 rule into a ClickHouse WHERE clause over an events table, and `RetroHunt`
@@ -180,8 +181,9 @@ ClickHouse pages too and the pair says which half failed.
 counterparts page, `SignalmanRuleWentSilent` files a ticket. `deploy/grafana/` has the
 dashboard. In-process tests kill the consumer under a fake clock and show
 the page fires within two minutes, and show a taxonomy field rename
-silencing exactly the rules that read the field. The gate is not passed:
-killing a real consumer against Redpanda and Prometheus has not been run.
+silencing exactly the rules that read the field. On the compose stack a
+`kill -9` of signalmand paged in 51 s and a paused Redpanda in 95 s, both
+through Prometheus, so the gate passed (`docs/results.md`).
 `docs/pipeline.md` covers the metrics, the canary, and the silence
 detector.
 
@@ -189,9 +191,9 @@ detector.
 |---|---|---|
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
-| C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
+| C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | done: one-hour soak on Redpanda, 3.72M events, audit green throughout, gate passed |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | done: SQL compiler, alert and events sinks, `signalman hunt`; the hunt over `rules/` equals a v1 replay on a real ClickHouse, gate passed |
-| E. Observability | metrics, dashboards, canary generator, silence detector | in progress: all ten core metrics, canary, absence alerts, and dashboard built; page within 2m shown in process and with promtool; consumer kill against the compose stack not run |
+| E. Observability | metrics, dashboards, canary generator, silence detector | done: a killed signalmand pages in 51 s and a stalled one in 95 s on the compose stack, gate passed |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); Redpanda and ClickHouse runs not done |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; no gate G0 to G6 run against traffic or passed, no game day run |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow passed on its first real rule PR (`signalman-canary`, #44); no noise corpus is configured |
