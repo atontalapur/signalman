@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.18.1] - 2026-11-08
+
+### Fixed
+
+- Case folding no longer maps a non-ASCII character onto ASCII. Go
+  lowercases `İ` (U+0130) to `i` and the Kelvin sign to `k`, so a rule with
+  `contains: İ` matched every `i` on every event. `fieldref` also paired the
+  long s with `s`. Each now matches only itself, in v1, v2 and the
+  ClickHouse encoder alike, and Unicode folding otherwise still applies
+  (`ДОМ` matches `дом`). The G0 differential fuzz matrix found it. No
+  SigmaHQ rule or rule in `rules/` contains any of the three characters.
+- The fuzzer recognizes the documented `windash` and chain fan-out budget
+  by a typed error, `match.ErrFanOut`, instead of failing on it.
+
 ## [0.18.0] - 2026-11-08
 
 ### Added
