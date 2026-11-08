@@ -21,7 +21,7 @@ type WildcardPart struct {
 }
 
 // Parts returns the pattern as MatchString sees it: escapes resolved, the
-// literal runs lowercased with strings.ToLower and merged, and runs of
+// literal runs folded with Fold and merged, and runs of
 // stars collapsed. A backend that compiles a pattern into another language
 // reads this rather than re-parsing the Sigma escapes, so the two cannot
 // disagree about what \* or a trailing backslash means.

@@ -102,7 +102,7 @@ func FieldRef(otherField string) Matcher {
 			}
 			return anyValue(other, func(right event.Value) bool {
 				want, ok := right.Text()
-				return ok && strings.EqualFold(got, want)
+				return ok && EqualFold(got, want)
 			})
 		})
 	}}

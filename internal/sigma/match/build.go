@@ -14,6 +14,12 @@ import (
 // The rule loader classifies on it with errors.Is, never on error text.
 var ErrUnsupportedModifier = errors.New("unsupported modifier")
 
+// ErrFanOut is wrapped, beside ErrUnsupportedModifier, by the two load-time
+// fan-out budgets: windash over five dash positions and a chain over
+// maxVariants variants. Both are deliberate limits, not Sigma semantics,
+// and the differential fuzzer recognizes them by this type.
+var ErrFanOut = errors.New("modifier fan-out over budget")
+
 // Modifier names as written in a detection key. A comparison is consumed in
 // three places: the chain parser above, validateChain, and either buildOne's
 // dedicated switch (re, cidr, the numeric operators) or the variant loop that
@@ -267,7 +273,7 @@ func expand(text string, transforms []transform) ([]string, error) {
 		for _, s := range variants {
 			outs, err := tr(s)
 			if err != nil {
-				return nil, fmt.Errorf("%w: %s", ErrUnsupportedModifier, err)
+				return nil, fmt.Errorf("%w: %w", ErrUnsupportedModifier, err)
 			}
 			for _, out := range outs {
 				if out != "" {
@@ -276,8 +282,8 @@ func expand(text string, transforms []transform) ([]string, error) {
 			}
 		}
 		if len(next) > maxVariants {
-			return nil, fmt.Errorf("%w: the modifier chain expands to %d variants, over the limit of %d",
-				ErrUnsupportedModifier, len(next), maxVariants)
+			return nil, fmt.Errorf("%w: %w: the modifier chain expands to %d variants, over the limit of %d",
+				ErrUnsupportedModifier, ErrFanOut, len(next), maxVariants)
 		}
 		variants = next
 	}

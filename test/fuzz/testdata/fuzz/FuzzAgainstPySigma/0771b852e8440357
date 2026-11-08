@@ -1,0 +1,7 @@
+go test fuzz v1
+byte('\x1b')
+byte('\a')
+byte('\u0083')
+string("-0ϳ-0ϳ-0ϳ-0ϳ-0ϳ-0")
+string("0")
+string("0")

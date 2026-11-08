@@ -1,0 +1,7 @@
+go test fuzz v1
+byte('\x02')
+byte('Y')
+byte('=')
+string("I")
+string("0")
+string("İ")

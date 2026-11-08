@@ -6,7 +6,6 @@ package match
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -37,7 +36,7 @@ type Wildcard struct {
 // Windows paths in the rule corpus rely on.
 func CompileWildcard(pattern string) *Wildcard {
 	w := &Wildcard{plain: true}
-	rs := []rune(strings.ToLower(pattern))
+	rs := []rune(Fold(pattern))
 	for i := 0; i < len(rs); i++ {
 		switch rs[i] {
 		case '\\':
@@ -91,9 +90,9 @@ func (w *Wildcard) Literals() []string {
 	return out
 }
 
-// AppendFold appends strings.ToLower(s) to dst without allocating a
-// string: the folded form MatchString compares against. Invalid UTF-8
-// folds to U+FFFD, as it does in strings.ToLower, so the result is always
+// AppendFold appends Fold(s) to dst without allocating a string: the
+// folded form MatchString compares against. Invalid UTF-8 folds to U+FFFD,
+// as it does in strings.ToLower, so the result is always
 // valid UTF-8 and a substring test on it agrees with a rune comparison.
 func AppendFold(dst []byte, s string) []byte {
 	ascii := true
@@ -116,7 +115,7 @@ func AppendFold(dst []byte, s string) []byte {
 	for _, r := range s {
 		// range yields U+FFFD for each invalid byte, which is what
 		// strings.Map, and so strings.ToLower, writes for it.
-		dst = utf8.AppendRune(dst, unicode.ToLower(r))
+		dst = utf8.AppendRune(dst, foldRune(r))
 	}
 	return dst
 }
@@ -149,7 +148,7 @@ func HasWildcard(pattern string) bool {
 // O(len(input) * longest literal run between stars), never exponential.
 // Input length is bounded at ingest, not here.
 func (w *Wildcard) MatchString(s string) bool {
-	low := strings.ToLower(s)
+	low := Fold(s)
 	if w.plain {
 		return low == w.exact
 	}

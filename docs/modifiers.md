@@ -54,7 +54,13 @@ Exactly one comparison per chain. Two is a load error.
 ### Case sensitivity
 
 Sigma string matching is case insensitive by default, and that is what this
-package does. `re` is the one exception: it is case sensitive unless `i` is
+package does. The fold is Unicode lowercase (`ДОМ` matches `дом`, `É`
+matches `é`) with one rule: it never crosses the ASCII boundary. Go maps
+`İ` (U+0130) to `i` and the Kelvin sign (U+212A) to `k`, and `fieldref`'s
+fold pairs `ſ` (U+017F) with `s`; here each of those matches only itself,
+so a rule value `İ` does not match every `i`. pySigma and SQLite agree. v1,
+v2 and the ClickHouse encoder all fold through `match.Fold`, `AppendFold`,
+`EqualFold` and `FoldKey`. `re` is the one exception: it is case sensitive unless `i` is
 present. `i` without `re` is a load error rather than a no-op, because a rule
 author who writes it believes it is doing something.
 

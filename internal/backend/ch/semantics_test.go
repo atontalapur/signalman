@@ -78,8 +78,8 @@ func TestEncode(t *testing.T) {
 		{"ips IP6", r.IPs["IP6"], []string{"620010db8000000000000000000000001"}},
 		{"ips Zone", r.IPs["Zone"], []string(nil)},
 		{"ips Lead", r.IPs["Lead"], []string(nil)},
-		{"eqfold Kel", r.EqFold["Kel"], []string{"K"}},
-		{"folded Kel", r.Folded["Kel"], []string{"k"}},
+		{"eqfold Kel", r.EqFold["Kel"], []string{"\u212a"}},
+		{"folded Kel", r.Folded["Kel"], []string{"\u212a"}},
 	}
 	for _, c := range checks {
 		if !reflect.DeepEqual(c.got, c.want) {
@@ -290,7 +290,7 @@ func FuzzRE2Pattern(f *testing.F) {
 	})
 }
 
-// FoldKey equality is strings.EqualFold, which is what fieldref compares.
+// FoldKey equality is match.EqualFold, which is what fieldref compares.
 func FuzzFoldKey(f *testing.F) {
 	for _, s := range [][2]string{
 		{"k", "\u212a"}, {"s", "\u017f"}, {"ß", "ẞ"}, {"İ", "i"}, {"\xff", "\xfe"},
@@ -300,7 +300,7 @@ func FuzzFoldKey(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, a, b string) {
 		for _, other := range []string{b, strings.ToUpper(a), strings.ToLower(a), strings.ToTitle(a)} {
-			want := strings.EqualFold(a, other)
+			want := match.EqualFold(a, other)
 			if got := FoldKey(a) == FoldKey(other); got != want {
 				t.Fatalf("FoldKey(%q) == FoldKey(%q) is %v, EqualFold is %v", a, other, got, want)
 			}

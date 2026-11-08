@@ -227,7 +227,7 @@ func hasText(v event.Value) bool {
 	return v.Kind == event.KindString || v.Kind == event.KindInt || v.Kind == event.KindBool
 }
 
-// textEqualFold is strings.EqualFold(a.Text(), b.Text()) without
+// textEqualFold is match.EqualFold(a.Text(), b.Text()) without
 // formatting an integer into a new string. An integer's text is ASCII
 // digits and a minus sign, none of which has a case fold
 // (TestDigitsHaveNoCaseFolds), so against it EqualFold is plain equality.
@@ -249,12 +249,12 @@ func (s *scratch) textEqualFold(a, b event.Value) bool {
 		if b.Kind == event.KindBool {
 			return a.B == b.B
 		}
-		return strings.EqualFold(strconv.FormatBool(a.B), b.S)
+		return match.EqualFold(strconv.FormatBool(a.B), b.S)
 	}
 	if b.Kind == event.KindBool {
-		return strings.EqualFold(a.S, strconv.FormatBool(b.B))
+		return match.EqualFold(a.S, strconv.FormatBool(b.B))
 	}
-	return strings.EqualFold(a.S, b.S)
+	return match.EqualFold(a.S, b.S)
 }
 
 // maybeAddr is a cheap necessary condition for netip.ParseAddr to succeed:

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/atontalapur/signalman/internal/sigma"
+	"github.com/atontalapur/signalman/internal/sigma/match"
 )
 
 // venvPython is the interpreter the oracle runs in, relative to this package
@@ -76,6 +77,7 @@ var refusalCodes = map[string]bool{
 	"regex-shorthand":        true, // \s \w \d name different sets in RE2
 	"regex-brace":            true, // RE2 reads non-canonical braces literally
 	"regex-newline":          true, // Python's $ matches before a final newline
+	"regex-casefold":         true, // re.I's Turkish i class; Unicode version skew
 	"unparenthesized-not":    true, // the backend's NOT a OR b defect
 	"regex-python-rejects":   true, // Python's engine rejects what RE2 accepts
 	"unknown-modifier":       true, // a modifier name pySigma does not carry
@@ -345,6 +347,9 @@ func known(errG, errP error) bool {
 		var synErr *syntax.Error
 		if errors.As(errG, &synErr) {
 			return true // RE2 rejects what Python's engine accepts
+		}
+		if errors.Is(errG, match.ErrFanOut) {
+			return true // windash or chain fan-out budget; pySigma has none
 		}
 	}
 	var refusal *RefusalError
