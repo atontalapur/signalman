@@ -1,6 +1,8 @@
 // Package chsink is the ClickHouse sink: it consumes the alerts topic
 // and inserts each record into the alerts table from the spec (DDL in
 // deploy/clickhouse/), committing offsets only after the insert succeeds.
+// The events lane (events.go) does the same for events.norm and the events
+// table that retro-hunts read.
 //
 // Delivery is at-least-once, the same choice the pipeline makes. A crash
 // between the insert and the commit redelivers the batch, and the copies
@@ -131,8 +133,9 @@ func newLane[T any](cfg Config, spec laneSpec[T], b broker.Broker, ins RowInsert
 	return &Lane[T]{cfg: cfg, spec: spec, b: b, ins: ins, m: m, log: log}, nil
 }
 
-// Run consumes the lane's topic until ctx ends or a record cannot be inserted. Rows
-// not committed when it returns are redelivered to the next Run.
+// Run consumes the lane's topic until ctx ends or a record cannot be
+// inserted. Rows not committed when it returns are redelivered to the next
+// Run.
 //
 // The loop is single-threaded on purpose: while an insert is being retried
 // nothing polls, which is the backpressure. Kafka holds what has not been

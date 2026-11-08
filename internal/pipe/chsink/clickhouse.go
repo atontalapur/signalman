@@ -53,7 +53,7 @@ var (
 
 func checkTime(name string, t, lo, hi time.Time) error {
 	if t.Before(lo) || t.After(hi) {
-		return fmt.Errorf("%s %s is outside the range the alerts table stores exactly, %s to %s",
+		return fmt.Errorf("%s %s is outside the range the table stores exactly, %s to %s",
 			name, t.UTC().Format(time.RFC3339Nano), lo.Format(time.RFC3339Nano), hi.Format(time.RFC3339Nano))
 	}
 	return nil
