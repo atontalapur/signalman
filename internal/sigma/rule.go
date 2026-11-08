@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/atontalapur/signalman/internal/event"
 	"github.com/atontalapur/signalman/internal/sigma/ast"
 	"github.com/atontalapur/signalman/internal/sigma/match"
 	"gopkg.in/yaml.v3"
@@ -377,12 +379,43 @@ func renameNode(n ast.Node, mapping map[string]string, seen map[string]bool) ast
 		if field != "" {
 			seen[field] = true
 		}
-		return &ast.Pred{
+		out := &ast.Pred{
 			Field: field, Desc: n.Desc, Key: n.Key, M: n.M,
 			Mods: n.Mods, Vals: n.Vals, Keyword: n.Keyword,
 		}
+		if slices.Contains(n.Mods, "fieldref") {
+			renameFieldRef(out, mapping, seen)
+		}
+		return out
 	}
 	return n
+}
+
+// renameFieldRef maps a fieldref predicate's values, which are Sigma field
+// names, through the same mapping as its field, then rebuilds M and Key
+// from the renamed values so every engine reads the event field. Desc keeps
+// the names as written, like the field it describes.
+func renameFieldRef(p *ast.Pred, mapping map[string]string, seen map[string]bool) {
+	vals := make([]event.Value, len(p.Vals))
+	for i, v := range p.Vals {
+		vals[i] = v
+		name, ok := v.Text()
+		if !ok {
+			continue
+		}
+		if to, ok := mapping[name]; ok && to != "" {
+			name = to
+			vals[i] = event.String(name)
+		}
+		seen[name] = true
+	}
+	m, err := match.Build(p.Mods, vals)
+	if err != nil {
+		// Build accepted these mods over string values at compile time,
+		// and renaming only swaps one string for another.
+		panic(fmt.Sprintf("sigma: rebuilding renamed fieldref: %v", err))
+	}
+	p.Vals, p.M, p.Key = vals, m, predKey(p.Mods, vals)
 }
 
 // keyLine finds the 1-based line of the first line starting with key, so

@@ -574,3 +574,59 @@ func TestRuleSetVersionIgnoresFileOrder(t *testing.T) {
 		t.Fatal("RuleSetV must not depend on the order files were listed in")
 	}
 }
+
+// A fieldref target is a Sigma field name like the field it sits under, so
+// it goes through the same taxonomy mapping. Under Image: NewProcessName
+// and ParentImage: ParentProcessName, the rule compares the two event
+// fields NewProcessName and ParentProcessName. Left under its Sigma name,
+// the target is a field the event never has and the rule never matches.
+func TestFieldRefTargetIsRenamedThroughTheTaxonomy(t *testing.T) {
+	tax := loadTax(t)
+	src := `title: t
+id: 00000000-0000-4000-8000-0000000000ac
+level: low
+logsource:
+  product: windows
+  service: security
+  category: process_creation
+detection:
+  selection:
+    ParentImage|fieldref: Image
+  condition: selection
+`
+	r, lerr := LoadRuleBytes("r.yml", []byte(src), tax)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	ev, err := event.FromMap(map[string]any{
+		"NewProcessName":    `C:\a.exe`,
+		"ParentProcessName": `C:\A.EXE`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ast.Eval(r.Cond, ev) {
+		t.Fatalf("fieldref under a renaming entry did not match: %s", ast.String(r.Cond))
+	}
+	other, err := event.FromMap(map[string]any{
+		"NewProcessName":    `C:\a.exe`,
+		"ParentProcessName": `C:\b.exe`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ast.Eval(r.Cond, other) {
+		t.Fatal("fieldref matched two different values")
+	}
+	p := r.Cond.(*ast.Pred)
+	if len(p.Vals) != 1 {
+		t.Fatalf("vals = %v", p.Vals)
+	}
+	if got, _ := p.Vals[0].Text(); got != "NewProcessName" {
+		t.Fatalf("fieldref value = %q, want the event field NewProcessName", got)
+	}
+	want := []string{"NewProcessName", "ParentProcessName"}
+	if fmt.Sprint(r.Fields) != fmt.Sprint(want) {
+		t.Fatalf("fields = %v, want %v: the target is a field the rule reads", r.Fields, want)
+	}
+}

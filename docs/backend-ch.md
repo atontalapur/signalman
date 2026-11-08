@@ -228,11 +228,12 @@ replay read the same instant.
 ## Found in the frontend
 
 `fieldref` names its target field in the rule value, and the taxonomy rename
-rewrites `Pred.Field` but not the value. Under a mapping such as
-`Image: NewProcessName`, `ParentImage|fieldref: Image` compares against a
-field the event does not have, so v1 never matches. The backend mirrors v1,
-because v1 is the oracle; the fix belongs in the rule loader. Recorded in
-`TODOS.md`.
+used to rewrite `Pred.Field` but not the value. Under a mapping such as
+`Image: NewProcessName`, `ParentImage|fieldref: Image` compared against a
+field the event does not have, so v1 never matched and the backend, which
+mirrors v1, agreed. The rule loader now maps the value through the same
+entry and rebuilds the predicate, so v1, v2 and this backend all read the
+renamed field.
 
 ## Gaps
 

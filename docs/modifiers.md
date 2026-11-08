@@ -98,6 +98,9 @@ well as the value.
 Absence is not a value: if either side is absent, there is no match, even
 when both are absent. Two fields are not equal because neither exists.
 
+The target is a Sigma field name, so the taxonomy renames it the same way
+it renames the field the predicate sits under.
+
 ## Encoding transforms
 
 | Modifier | Effect |
