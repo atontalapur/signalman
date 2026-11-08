@@ -311,8 +311,9 @@ that needs them.
   `/metrics` on `:9465`, which Prometheus scrapes. The table is created when the ClickHouse volume is
   first initialized. On an existing volume, run new DDL such as
   `deploy/clickhouse/002_alerts_engine.sql` by hand; `docker compose down -v`
-  also applies it but wipes every compose volume: stored alerts, the Redpanda
-  topics, and Prometheus history.
+  also applies it but wipes every compose volume: stored alerts and events,
+  the Redpanda topics, Prometheus history, and dashboard edits saved in
+  Grafana (the provisioned dashboard comes back).
   It needs the `alerts.dead` and `events.raw` topics, which compose
   creates; it reads the `events.raw` partitions for its canary age. Reset the
   Redpanda and ClickHouse volumes together: `seq` restarts with a new

@@ -250,9 +250,11 @@ the compose ClickHouse and passes; the development machine has no Docker.
 offset, and `(partition, seq, rule_id)` is the table's dedup key. Recreating
 `events.raw` (or wiping the Redpanda volume) restarts offsets at 0, so new
 alerts reuse keys already in the table, and the ReplacingMergeTree collapses
-distinct alerts into one, silently. Wipe both volumes at once
-(`docker compose -f deploy/docker-compose.yml down -v`), or drop the
-`alerts` table when the topic is recreated.
+distinct alerts into one, silently, and the events table does the same on
+`(partition, seq)`. Wipe both volumes at once
+(`docker compose -f deploy/docker-compose.yml down -v`, which also deletes
+Prometheus history and any dashboard edits saved in Grafana), or drop the
+`alerts` and `events` tables when the topic is recreated.
 
 ## Rule set reload
 
