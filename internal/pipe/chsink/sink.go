@@ -1,4 +1,4 @@
-// Package chsink is the ClickHouse alert sink: it consumes the alerts topic
+// Package chsink is the ClickHouse sink: it consumes the alerts topic
 // and inserts each record into the alerts table from the spec (DDL in
 // deploy/clickhouse/), committing offsets only after the insert succeeds.
 //
@@ -33,18 +33,39 @@ import (
 	"github.com/atontalapur/signalman/internal/pipe"
 )
 
-// Inserter writes rows to the alerts table. Insert returns nil only once
-// every row is stored. On error any subset may have been stored, so the
-// caller retries the whole slice, which the table absorbs. An error that
-// wraps ErrPermanent will not succeed on retry, and the caller stops.
-type Inserter interface {
-	Insert(ctx context.Context, rows []pipe.Alert) error
+// RowInserter writes rows to a table. Insert returns nil only once every
+// row is stored. On error any subset may have been stored, so the caller
+// retries the whole slice, which the table absorbs. An error that wraps
+// ErrPermanent will not succeed on retry, and the caller stops.
+type RowInserter[T any] interface {
+	Insert(ctx context.Context, rows []T) error
+}
+
+// Inserter writes rows to the alerts table.
+type Inserter = RowInserter[pipe.Alert]
+
+// laneSpec is what differs between the topics a sink can store: where it
+// reads, where a record the table cannot hold goes, how a record becomes a
+// row, and, for alerts only, which rows are canaries.
+type laneSpec[T any] struct {
+	topic, dead string
+	decode      func(broker.Record) (T, error)
+	// canary reports the events.raw partition of a canary row. nil means
+	// the lane tracks no canary age.
+	canary func(T) (int32, bool)
+}
+
+func alertLane() laneSpec[pipe.Alert] {
+	return laneSpec[pipe.Alert]{
+		topic: pipe.TopicAlerts, dead: pipe.TopicAlertsDead, decode: Decode,
+		canary: func(a pipe.Alert) (int32, bool) { return a.Partition, a.RuleID == pipe.CanaryRuleID },
+	}
 }
 
 // Config sizes the sink. Sizes are stated by the operator; New rejects a
 // zero.
 type Config struct {
-	// Group is the alerts consumer group.
+	// Group is the consumer group.
 	Group string
 	// BatchRows flushes the buffer once it holds this many rows. The buffer
 	// never holds more than BatchRows plus one poll.
@@ -72,21 +93,29 @@ func (c Config) validate() error {
 	return errors.Join(errs...)
 }
 
-// Sink moves alerts from the topic to the table.
-type Sink struct {
-	cfg Config
-	b   broker.Broker
-	ins Inserter
-	m   *obs.Metrics
-	log *slog.Logger
+// Lane moves records from one topic to one table.
+type Lane[T any] struct {
+	cfg  Config
+	spec laneSpec[T]
+	b    broker.Broker
+	ins  RowInserter[T]
+	m    *obs.Metrics
+	log  *slog.Logger
 
 	// Lag accounting, touched only by the Run goroutine.
 	hw        map[broker.TopicPartition]int64
 	committed map[broker.TopicPartition]int64
 }
 
-// New builds a sink. m and log may be nil.
+// Sink moves alerts from the alerts topic to the alerts table.
+type Sink = Lane[pipe.Alert]
+
+// New builds the alert sink. m and log may be nil.
 func New(cfg Config, b broker.Broker, ins Inserter, m *obs.Metrics, log *slog.Logger) (*Sink, error) {
+	return newLane(cfg, alertLane(), b, ins, m, log)
+}
+
+func newLane[T any](cfg Config, spec laneSpec[T], b broker.Broker, ins RowInserter[T], m *obs.Metrics, log *slog.Logger) (*Lane[T], error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("sink config: %w", err)
 	}
@@ -99,17 +128,17 @@ func New(cfg Config, b broker.Broker, ins Inserter, m *obs.Metrics, log *slog.Lo
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Sink{cfg: cfg, b: b, ins: ins, m: m, log: log}, nil
+	return &Lane[T]{cfg: cfg, spec: spec, b: b, ins: ins, m: m, log: log}, nil
 }
 
-// Run consumes alerts until ctx ends or a record cannot be inserted. Rows
+// Run consumes the lane's topic until ctx ends or a record cannot be inserted. Rows
 // not committed when it returns are redelivered to the next Run.
 //
 // The loop is single-threaded on purpose: while an insert is being retried
 // nothing polls, which is the backpressure. Kafka holds what has not been
 // read, so the only buffer is the one batch in hand.
-func (s *Sink) Run(ctx context.Context) error {
-	cons, err := s.b.Consume(s.cfg.Group, []string{pipe.TopicAlerts})
+func (s *Lane[T]) Run(ctx context.Context) error {
+	cons, err := s.b.Consume(s.cfg.Group, []string{s.spec.topic})
 	if err != nil {
 		return err
 	}
@@ -117,15 +146,15 @@ func (s *Sink) Run(ctx context.Context) error {
 	if err := s.loadCommitted(ctx); err != nil {
 		return err
 	}
-	if parts, err := s.b.EndOffsets(ctx, pipe.TopicAlertsDead); err != nil || len(parts) == 0 {
-		return fmt.Errorf("dead-letter topic %s is required and was not found: %v", pipe.TopicAlertsDead, err)
+	if parts, err := s.b.EndOffsets(ctx, s.spec.dead); err != nil || len(parts) == 0 {
+		return fmt.Errorf("dead-letter topic %s is required and was not found: %v", s.spec.dead, err)
 	}
 	if err := s.startCanary(ctx); err != nil {
 		return err
 	}
 
 	var (
-		buf      []pipe.Alert
+		buf      []T
 		first    = map[broker.TopicPartition]int64{}
 		next     = map[broker.TopicPartition]int64{}
 		deadline time.Time
@@ -176,7 +205,7 @@ func (s *Sink) Run(ctx context.Context) error {
 			deadline = time.Now().Add(s.cfg.FlushInterval)
 		}
 		for _, r := range f.Records {
-			a, err := Decode(r)
+			a, err := s.spec.decode(r)
 			if err != nil {
 				if err := s.deadLetter(ctx, r, err); err != nil {
 					return err
@@ -201,7 +230,7 @@ func (s *Sink) Run(ctx context.Context) error {
 // insert retries until the rows are stored or ctx ends. An unreachable
 // ClickHouse is lag, so this never gives up on its own. A permanent error
 // is returned at once: it would fail the same way forever.
-func (s *Sink) insert(ctx context.Context, rows []pipe.Alert) error {
+func (s *Lane[T]) insert(ctx context.Context, rows []T) error {
 	wait := s.cfg.RetryBackoff
 	for {
 		err := s.ins.Insert(ctx, rows)
@@ -228,8 +257,8 @@ func (s *Sink) insert(ctx context.Context, rows []pipe.Alert) error {
 // ClickHouse that died before the first canary visible. The partitions are
 // listed once: one gauge per partition, and a partition added later is
 // tracked from the next restart.
-func (s *Sink) startCanary(ctx context.Context) error {
-	if s.m == nil {
+func (s *Lane[T]) startCanary(ctx context.Context) error {
+	if s.m == nil || s.spec.canary == nil {
 		return nil
 	}
 	parts, err := s.b.EndOffsets(ctx, pipe.TopicEventsRaw)
@@ -245,22 +274,23 @@ func (s *Sink) startCanary(ctx context.Context) error {
 // canary resets the canary age of every partition with a canary alert in
 // rows, which are stored. A partition not tracked at startup is skipped, so
 // the gauge never grows past the partitions events.raw had.
-func (s *Sink) canary(rows []pipe.Alert) {
-	if s.m == nil {
+func (s *Lane[T]) canary(rows []T) {
+	if s.m == nil || s.spec.canary == nil {
 		return
 	}
-	for _, a := range rows {
-		if a.RuleID != pipe.CanaryRuleID {
+	for _, row := range rows {
+		p, ok := s.spec.canary(row)
+		if !ok {
 			continue
 		}
-		if _, ok := s.m.SinkCanaryAge.Age(a.Partition); ok {
-			s.m.SinkCanaryAge.Reset(a.Partition)
+		if _, ok := s.m.SinkCanaryAge.Age(p); ok {
+			s.m.SinkCanaryAge.Reset(p)
 		}
 	}
 }
 
-// Headers on an alerts.dead record. The key and value are the original
-// record's.
+// Headers on a dead-letter record (alerts.dead, events.dead). The key and
+// value are the original record's.
 const (
 	HeaderDeadTopic     = "signalman-dead-topic"
 	HeaderDeadPartition = "signalman-dead-partition"
@@ -272,15 +302,15 @@ const (
 	maxDeadReason       = 1024
 )
 
-// deadRecord is the alerts.dead record for r, refused for reason. It fits
+// deadRecord is the record for dead, holding r refused for reason. It fits
 // broker.MaxMessageBytes: the reason is capped and the value cut if needed.
-func deadRecord(r broker.Record, reason error) broker.Record {
+func deadRecord(dead string, r broker.Record, reason error) broker.Record {
 	msg := reason.Error()
 	if len(msg) > maxDeadReason {
 		msg = msg[:maxDeadReason]
 	}
 	d := broker.Record{
-		Topic:     pipe.TopicAlertsDead,
+		Topic:     dead,
 		Partition: broker.AnyPartition,
 		Key:       r.Key,
 		Headers: []broker.Header{
@@ -300,11 +330,11 @@ func deadRecord(r broker.Record, reason error) broker.Record {
 	return d
 }
 
-// deadLetter writes r to alerts.dead, retrying a transient failure until it
+// deadLetter writes r to the lane's dead-letter topic, retrying a transient failure until it
 // is durable or ctx ends. A permanent failure stops the sink with r's
 // position, nothing committed.
-func (s *Sink) deadLetter(ctx context.Context, r broker.Record, reason error) error {
-	d := deadRecord(r, reason)
+func (s *Lane[T]) deadLetter(ctx context.Context, r broker.Record, reason error) error {
+	d := deadRecord(s.spec.dead, r, reason)
 	wait := s.cfg.RetryBackoff
 	for {
 		err := s.b.Produce(ctx, []broker.Record{d})
@@ -316,7 +346,7 @@ func (s *Sink) deadLetter(ctx context.Context, r broker.Record, reason error) er
 		}
 		if errors.Is(err, broker.ErrPermanent) {
 			return fmt.Errorf("%s/%d offset %d: %v; the dead-letter write to %s cannot succeed and nothing from this batch was committed: %w",
-				r.Topic, r.Partition, r.Offset, reason, pipe.TopicAlertsDead, err)
+				r.Topic, r.Partition, r.Offset, reason, s.spec.dead, err)
 		}
 		s.log.Warn("dead-letter write failed, retrying; not polling until it lands", "err", err)
 		if !sleep(ctx, wait) {
@@ -324,7 +354,7 @@ func (s *Sink) deadLetter(ctx context.Context, r broker.Record, reason error) er
 		}
 		wait = min(2*wait, s.cfg.MaxBackoff)
 	}
-	s.log.Error("alert record the table cannot hold; written to "+pipe.TopicAlertsDead,
+	s.log.Error("record the table cannot hold; written to "+s.spec.dead,
 		"topic", r.Topic, "partition", r.Partition, "offset", r.Offset, "reason", reason)
 	if s.m != nil {
 		s.m.SinkDeadLetters.Inc()
@@ -335,7 +365,7 @@ func (s *Sink) deadLetter(ctx context.Context, r broker.Record, reason error) er
 // commit records the next offset per partition. A failed commit is logged,
 // not retried: the rows are stored, the next commit supersedes it, and the
 // worst case is a redelivery the table collapses.
-func (s *Sink) commit(ctx context.Context, cons broker.Consumer, next map[broker.TopicPartition]int64) {
+func (s *Lane[T]) commit(ctx context.Context, cons broker.Consumer, next map[broker.TopicPartition]int64) {
 	if err := cons.Commit(ctx, next); err != nil {
 		s.log.Warn("offset commit failed; the batch will be redelivered", "err", err)
 		return
@@ -346,20 +376,20 @@ func (s *Sink) commit(ctx context.Context, cons broker.Consumer, next map[broker
 	}
 }
 
-func (s *Sink) loadCommitted(ctx context.Context) error {
-	c, err := s.b.CommittedOffsets(ctx, s.cfg.Group, pipe.TopicAlerts)
+func (s *Lane[T]) loadCommitted(ctx context.Context) error {
+	c, err := s.b.CommittedOffsets(ctx, s.cfg.Group, s.spec.topic)
 	if err != nil {
 		return err
 	}
 	s.hw = map[broker.TopicPartition]int64{}
 	s.committed = map[broker.TopicPartition]int64{}
 	for p, off := range c {
-		s.committed[broker.TopicPartition{Topic: pipe.TopicAlerts, Partition: p}] = off
+		s.committed[broker.TopicPartition{Topic: s.spec.topic, Partition: p}] = off
 	}
 	return nil
 }
 
-func (s *Sink) observe(hw map[broker.TopicPartition]int64) {
+func (s *Lane[T]) observe(hw map[broker.TopicPartition]int64) {
 	for tp, off := range hw {
 		s.hw[tp] = off
 		s.setLag(tp)
@@ -369,7 +399,7 @@ func (s *Sink) observe(hw map[broker.TopicPartition]int64) {
 // setLag is signalman_consumer_lag_records for the sink's group: the log end
 // minus the committed offset. During an outage it is where the
 // backpressure surfaces.
-func (s *Sink) setLag(tp broker.TopicPartition) {
+func (s *Lane[T]) setLag(tp broker.TopicPartition) {
 	hw, ok := s.hw[tp]
 	if !ok || s.m == nil {
 		return

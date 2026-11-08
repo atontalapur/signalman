@@ -71,7 +71,7 @@ func readTopic(t *testing.T, b broker.Broker, topic string) []broker.Record {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for int64(len(out)) < n {
+		for got := int64(0); got < n; {
 			pctx, cancel := context.WithTimeout(ctx, time.Second)
 			f, err := c.Poll(pctx)
 			cancel()
@@ -79,6 +79,7 @@ func readTopic(t *testing.T, b broker.Broker, topic string) []broker.Record {
 				t.Fatal(err)
 			}
 			out = append(out, f.Records...)
+			got += int64(len(f.Records))
 		}
 		c.Close()
 	}
@@ -504,14 +505,14 @@ func TestSinkRefusesToStartWithoutEventsRaw(t *testing.T) {
 // was at the limit: the value is cut and the cut is recorded.
 func TestDeadLetterRecordFitsTheLimit(t *testing.T) {
 	r := broker.Record{Topic: pipe.TopicAlerts, Partition: 2, Offset: 7, Key: []byte("k"), Value: make([]byte, broker.MaxMessageBytes-1)}
-	d := deadRecord(r, errors.New(strings.Repeat("x", 10_000)))
+	d := deadRecord(pipe.TopicAlertsDead, r, errors.New(strings.Repeat("x", 10_000)))
 	if n := broker.RecordSize(d); n > broker.MaxMessageBytes {
 		t.Fatalf("dead-letter record is %d bytes, limit %d", n, broker.MaxMessageBytes)
 	}
 	if string(d.Header(HeaderDeadTruncated)) != strconv.Itoa(len(r.Value)) {
 		t.Fatalf("truncation not recorded: %v", d.Header(HeaderDeadTruncated))
 	}
-	small := deadRecord(broker.Record{Topic: pipe.TopicAlerts, Value: []byte("{")}, errors.New("bad"))
+	small := deadRecord(pipe.TopicAlertsDead, broker.Record{Topic: pipe.TopicAlerts, Value: []byte("{")}, errors.New("bad"))
 	if small.Header(HeaderDeadTruncated) != nil || string(small.Value) != "{" {
 		t.Fatal("a small record must be carried whole")
 	}

@@ -91,6 +91,7 @@ signalman lint    rules/                         # every LoadError, structured (
 signalman bench   rules/ [--corpus dir]          # p50/p99/max per rule, flags p99 over 50us
 signalman noise   rules/proc_dump.yml --corpus dir   # matches per 100k, ten samples, budget:
 signalman gates   --set rules rules/proc_dump.yml    # the five PR gates as a markdown report
+signalman hunt    --from T --to T rules/             # retro-hunt over the ClickHouse events table
 ```
 
 Every command takes `--taxonomy` (default `config/taxonomy`). Exit codes
@@ -131,8 +132,14 @@ modifier the frontend accepts compiles, and every rule the corpus loads
 compiles. Where ClickHouse disagrees with Go (case folding, regex dot and
 Unicode tables, NULL, number and address parsing, invalid UTF-8), the event
 is stored with the value v1 would compute, so the SQL only compares.
-`docs/backend-ch.md` lists each leak. `TestRetroHuntEqualsReplay` runs
-against the compose ClickHouse in CI's `integration` job and passes.
+`docs/backend-ch.md` lists each leak. `signalman-sink -lane events` stores
+`events.norm` in that table (`deploy/clickhouse/003_events.sql`), and
+`signalman hunt --from --to rules/` runs rules over it. In CI's
+`integration` job, against the compose ClickHouse,
+`TestRetroHuntEqualsReplay` checks every node type over synthetic rules, and
+`TestHuntEqualsReplayOverTheRuleDirectory` runs `signalman hunt` over every
+fixture event of every rule in `rules/` and requires each rule's rows to
+equal a v1 replay; both pass. That is the Plan D gate.
 
 A pull request that touches `rules/` runs `.github/workflows/rules.yml`:
 `signalman gates` checks each changed rule for parse, fixtures, noise
@@ -183,7 +190,7 @@ detector.
 | A. Sigma frontend | event model, lexer, parser, AST, modifiers, taxonomy, rule loader, pySigma differential fuzzer | done: frontend loads 1478 of 3760 corpus rules with coded rejections; differential fuzzer green, gate passed |
 | B. Reference evaluator and CLI | `internal/engine/v1`, verdict digest, `signalman test` and `explain` | done: twenty rules pass their fixtures; shuffle property green, gate passed |
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | in progress: all five stories built, audit green in test mode; one-hour soak on Redpanda not run |
-| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | in progress: SQL compiler, retro-hunt, alert schema and idempotent sink built; retro-hunt SQL equals a v1 replay on a real ClickHouse in CI, over synthetic rules; no binary runs a retro-hunt yet, gate not passed |
+| D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | done: SQL compiler, alert and events sinks, `signalman hunt`; the hunt over `rules/` equals a v1 replay on a real ClickHouse, gate passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | in progress: all ten core metrics, canary, absence alerts, and dashboard built; page within 2m shown in process and with promtool; consumer kill against the compose stack not run |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); Redpanda and ClickHouse runs not done |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; no gate G0 to G6 run against traffic or passed, no game day run |
@@ -222,10 +229,10 @@ will look reasonable around week six. Adding any of them costs the cutover.
 ## Repository
 
 ```
-cmd/signalman/          CLI: test, explain, lint, bench, noise, gates
+cmd/signalman/          CLI: test, explain, lint, bench, noise, gates, hunt
 cmd/signalmand/         the pipeline daemon
 cmd/loadgen/            replays a corpus into events.raw at a multiple of a baseline rate
-cmd/signalman-sink/     alerts topic to the ClickHouse alerts table
+cmd/signalman-sink/     alerts topic to the ClickHouse alerts table; -lane events: events.norm to the events table
 cmd/differ/             shadow-mode verdict comparison: verdicts.v1 x verdicts.v2 -> divergences
 cmd/cutover/            gate ladder checker (check -record) and rollback game day (gameday, measure)
 cmd/corpusaccept/       corpus acceptance report (dev tool, needs corpora/)
@@ -239,7 +246,7 @@ internal/engine/v2/     compiled evaluator: interned predicates, presence gating
 internal/engine/v2/aho/ Aho-Corasick automaton for the prefilter
 internal/backend/ch/    AST to ClickHouse SQL, events table schema, retro-hunt
 internal/pipe/          ingest, normalizer, drop ledger, bounded stages, engine slot, shadow lane, rollout, invariant 1 audit, canary generator
-internal/pipe/chsink/   ClickHouse alert sink: batch insert, commit after insert, retry with backoff
+internal/pipe/chsink/   ClickHouse sink lanes (alerts, events): batch insert, commit after insert, retry with backoff
 internal/differ/        bounded merge join of the two verdict streams, divergence classes
 internal/cutover/       gate criteria G0 to G6, Prometheus source, corpus replay, game day measurement, docs/cutover.md recording
 internal/corpus/        NDJSON event corpus reader shared by noise, bench and the G0 replay
@@ -249,7 +256,7 @@ internal/obs/           metrics, including the scrape-time staleness and canary 
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
 deploy/                 Dockerfile; docker compose for Redpanda, topic setup, ClickHouse, Prometheus, Grafana
-deploy/clickhouse/      ClickHouse init SQL: the alerts table (spec columns plus engine), and its migration
+deploy/clickhouse/      ClickHouse init SQL: the alerts table (spec columns plus engine), its migration, and the events table
 deploy/prometheus/      scrape config, alert rules (absence, pipeline), promtool tests
 deploy/grafana/         provisioning and the pipeline dashboard
 docs/spec/              the spec (signalman-v1.html)
@@ -310,6 +317,12 @@ that needs them.
   creates; it reads the `events.raw` partitions for its canary age. Reset the
   Redpanda and ClickHouse volumes together: `seq` restarts with a new
   `events.raw` and would collide with stored alerts.
+- For retro-hunts, run the events lane as a second process:
+  `go run ./cmd/signalman-sink -lane events`. It reads `events.norm` as
+  group `signalman-events`, writes the `events` table
+  (`deploy/clickhouse/003_events.sql`; on an existing volume apply it by
+  hand like 002), dead-letters to `events.dead`, and serves `/metrics` on
+  `:9467`. Then `go run ./cmd/signalman hunt --from <RFC 3339> --to <RFC 3339> rules/`.
 - `make check-alerts` validates the Prometheus config and alert rules and runs
   their promtool unit tests. It needs `promtool` on PATH (from the Prometheus
   release archive) and says so when it is missing; with `CI=true` a missing

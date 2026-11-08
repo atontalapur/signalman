@@ -28,6 +28,7 @@ All record bodies are JSON. Types are in `internal/pipe/wire.go` and
 | `alerts` | rule_id | `Alert`: one per match by the engine serving the rule, shaped like the spec's ClickHouse alert table plus `engine`, and `fields_omitted` when `fields` was left empty to fit the output limit |
 | `drops` | host_id | `DropEntry`: identity, reason, detail, and the raw bytes (base64) |
 | `alerts.dead` | the alert's key | an `alerts` record the ClickHouse table cannot hold, written by `signalman-sink`; not in the spec |
+| `events.dead` | the event's key | an `events.norm` record the ClickHouse events table cannot hold, written by `signalman-sink -lane events`; same headers as `alerts.dead`; not in the spec |
 
 `verdicts.v1` holds one record per event rather than one per verdict, so the
 topic grows with events, not events times rules, and an event's verdicts are
@@ -352,7 +353,7 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_rollout_percent` | gauge | | the slot, on every rollout change; not in the spec table |
 | `signalman_event_time_future_total` | counter | partition | sink, per durable event whose event time is ahead of the clock; not in the spec table |
 | `signalman_sink_canary_age_seconds` | gauge | partition | signalman-sink: seconds since the last canary alert was stored in ClickHouse, at scrape; not in the spec table |
-| `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead`; not in the spec table |
+| `signalman_sink_dead_letters_total` | counter | none | signalman-sink, per record written to `alerts.dead` (or `events.dead` by the events lane); not in the spec table |
 
 A `source` label is never the raw header: it is the header when it is one of
 `pipe.Sources`, `unknown` when the header is missing, and `other` otherwise.

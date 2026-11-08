@@ -47,6 +47,10 @@ const DefaultTable = "events"
 // quoted: database.table or table, ASCII letters, digits, and underscores.
 var tableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
 
+// CheckTable reports whether table is a name the backend accepts:
+// database.table or table, ASCII letters, digits, and underscores.
+func CheckTable(table string) error { return checkTable(table) }
+
 func checkTable(table string) error {
 	if !tableName.MatchString(table) {
 		return fmt.Errorf("ch: table name %q is not database.table or table", table)

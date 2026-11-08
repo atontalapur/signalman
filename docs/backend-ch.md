@@ -8,7 +8,32 @@ window. That is the Plan D gate.
 
 The compiler is pure. It reads the bound tree and returns a string.
 `RetroHunt` runs the query through `database/sql`, so the package imports no
-driver; the integration test brings `clickhouse-go`.
+driver; `signalman hunt` and the integration tests bring `clickhouse-go`.
+
+## Running a hunt
+
+`signalman-sink -lane events` fills the events table from `events.norm`,
+storing each event as the row `Encode` computes, with the alert lane's
+delivery: commit after insert, retry on outage, and a record the table
+cannot hold goes to `events.dead`. `deploy/clickhouse/003_events.sql` creates
+the table on a fresh volume; `TestEventsDDLIsTheBackendSchema` holds it to
+`CreateTableSQL`.
+
+```
+signalman hunt --from 2026-11-01T00:00:00Z --to 2026-11-02T00:00:00Z rules/
+```
+
+prints each rule's matching `(partition, seq)` rows over `[from, to)` in
+event time (`--json` for one object per rule). The DSN is `--clickhouse`,
+then `SIGNALMAN_CLICKHOUSE_DSN`, then the compose server; `--table` defaults
+to `events`. A rule that does not load or compile is reported and fails the
+command; the others still run.
+
+`TestHuntEqualsReplayOverTheRuleDirectory` (`cmd/signalman`, integration) is
+the gate over real rules: every fixture event of every rule in `rules/` is
+stored twice through the events lane's inserter, `signalman hunt` runs the
+directory over a window that excludes some of them, and each rule's rows
+equal a v1 replay, logsource test included.
 
 ## The events table
 
