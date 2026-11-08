@@ -45,9 +45,22 @@ jobs:
           test/fuzz/.venv/bin/pip install --require-hashes -r test/fuzz/requirements.txt
       # A runner has 4 vCPUs. Each Go fuzz process picks its own random
       # mutations, so shards explore different inputs from the same seeds.
+      # make expands FUZZTIME unquoted into its recipe, so the input must be
+      # a plain duration, and it must leave room for setup and upload
+      # inside the job's 350 minutes. The suppressed cap matches nightly.
       - env:
           FUZZTIME: ${{ inputs.fuzztime || '5h20m' }}
-        run: make fuzz-differential FUZZWORKERS=4 FUZZTIME="$FUZZTIME" FUZZMAXTIMEOUT=0.01
+        run: |
+          if ! [[ "$FUZZTIME" =~ ^(([0-9]+)h)?(([0-9]+)m)?$ ]] || [ -z "$FUZZTIME" ]; then
+            echo "fuzztime must be hours and minutes, as 5h20m: got '$FUZZTIME'" >&2
+            exit 1
+          fi
+          mins=$(( 10#${BASH_REMATCH[2]:-0} * 60 + 10#${BASH_REMATCH[4]:-0} ))
+          if [ "$mins" -lt 1 ] || [ "$mins" -gt 330 ]; then
+            echo "fuzztime $FUZZTIME is $mins minutes; it must be 1 to 330" >&2
+            exit 1
+          fi
+          make fuzz-differential FUZZWORKERS=4 FUZZTIME="$FUZZTIME" FUZZMAXSUPPRESSED=0.40 FUZZMAXTIMEOUT=0.01
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -57,11 +70,13 @@ jobs:
           # stats directory is .fuzzstats.
           include-hidden-files: true
           if-no-files-found: error
-      - if: always()
+      # The corpus directory holds the committed seeds too, so this uploads
+      # only when the fuzz step failed; the new crasher is the file not in git.
+      - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-crashers-${{ matrix.shard }}
-          path: "**/testdata/fuzz/**"
+          path: test/fuzz/testdata/fuzz/**
           if-no-files-found: ignore
 
   merge:
@@ -74,6 +89,21 @@ jobs:
         with:
           pattern: fuzzstats-*
           path: shards
+      # Each shard must have finished clean and uploaded stats: a crasher in
+      # one shard, or a missing shard, fails the gate run even when the rest
+      # clear the floor.
+      - env:
+          SHARDS: ${{ needs.shard.result }}
+        run: |
+          if [ "$SHARDS" != success ]; then
+            echo "shard matrix result is $SHARDS, not success" >&2
+            exit 1
+          fi
+          n=$(ls -d shards/fuzzstats-* | wc -l)
+          if [ "$n" -ne 12 ]; then
+            echo "found $n shard stats artifacts, want 12" >&2
+            exit 1
+          fi
       # Worker file names are pid-time and could repeat across runners, so
       # each is prefixed with its shard.
       - run: |
@@ -83,9 +113,9 @@ jobs:
             for f in "$d"/*.json; do cp "$f" "merged/shard$s-$(basename "$f")"; done
           done
           ls merged | wc -l
-          python3 scripts/fuzz_stats.py merged --min-compared 100000000 --max-timeout-ratio 0.01
-      - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          python3 scripts/fuzz_stats.py merged --min-compared 100000000 --max-suppressed-ratio 0.40 --max-timeout-ratio 0.01
+      # Only a passing run publishes the merged stats cutover check reads.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzzstats-merged
           path: merged/*.json
