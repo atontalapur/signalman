@@ -125,6 +125,24 @@ class RegexChecks(unittest.TestCase):
         self.assertNotIn("error", out)
         self.assertTrue(out["matched"])
 
+    def test_turkish_i_in_a_case_insensitive_regex_event_is_refused(self):
+        out = ask("ParentImage|re|i", "'I'", {"ParentImage": "\u0130"})
+        self.assertEqual(out.get("refusal"), "regex-casefold")
+
+    def test_dotless_i_in_a_case_insensitive_regex_pattern_is_refused(self):
+        out = ask("Image|re|i", "'\u0131'", {"Image": "I"})
+        self.assertEqual(out.get("refusal"), "regex-casefold")
+
+    def test_turkish_i_in_a_case_sensitive_regex_is_answered(self):
+        out = ask("Image|re", "'I'", {"Image": "\u0130"})
+        self.assertNotIn("refusal", out)
+        self.assertFalse(out["matched"])
+
+    def test_ascii_case_insensitive_regex_is_answered(self):
+        out = ask("Image|re|i", "'cmd'", {"Image": "CMD.exe"})
+        self.assertNotIn("refusal", out)
+        self.assertTrue(out["matched"])
+
     def test_newline_in_the_regex_field_is_refused(self):
         out = ask("Image|re", "'^a'", {"Image": "a\nb"})
         self.assertEqual(out.get("refusal"), "regex-newline")

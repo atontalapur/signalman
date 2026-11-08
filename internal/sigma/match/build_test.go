@@ -514,3 +514,17 @@ func TestBuildBase64EncodesTheUnescapedPlaintext(t *testing.T) {
 		}
 	}
 }
+
+// Both load-time fan-out budgets wrap ErrFanOut, so the differential
+// fuzzer can recognize the documented divergence by type.
+func TestFanOutBudgetsWrapErrFanOut(t *testing.T) {
+	for _, c := range []struct{ mods, val string }{
+		{"windash|contains", "-a -b -c -d -e -f"},
+		{"windash|base64offset|contains", "-a -b -c -d -e"},
+	} {
+		_, err := Build(strings.Split(c.mods, "|"), []event.Value{event.String(c.val)})
+		if !errors.Is(err, ErrFanOut) || !errors.Is(err, ErrUnsupportedModifier) {
+			t.Errorf("Build(%q, %q) = %v, want ErrFanOut and ErrUnsupportedModifier", c.mods, c.val, err)
+		}
+	}
+}

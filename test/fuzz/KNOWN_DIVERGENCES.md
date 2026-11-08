@@ -41,7 +41,10 @@ Three deliberate adjustments to make the comparison meaningful:
   insensitive through `contains` and case sensitive through a plain equals.
   NOCASE folds ASCII only. A case difference outside ASCII is still a real
   divergence and has no suppression; if the fuzzer finds one, it is a
-  question about Signalman's Unicode folding, not noise.
+  question about Signalman's Unicode folding, not noise. It found one: Go
+  lowercased `İ` (U+0130) to `i`, so `contains: İ` matched every `i`
+  (inputs `6c2f3783bbcc1257`, `af3c814fc5bfa650`). Signalman's fold now
+  never crosses the ASCII boundary (`match.Fold`, `docs/modifiers.md`).
 - **A `regexp` function registered from Python's `re`.** SQLite ships no
   REGEXP implementation, so `|re` would otherwise fail to run at all.
 - **`TEXT` affinity on every column.** The fuzzer sends integer and null
@@ -92,6 +95,16 @@ in the spec and in `CLAUDE.md`; it is not up for revision by a fuzzer.
 Go's `regexp` is RE2: no backreferences, no lookaround. Python's engine has
 both. A pattern using them loads in the oracle and is a load error in
 Signalman.
+
+### A modifier chain over its fan-out budget
+
+`windash` on a value with more than five switch-introducing dashes, or any
+chain that expands to more than 4096 variants, is a `modifier` load error
+here. pySigma has no budget and expands it. The limit is deliberate
+(`docs/modifiers.md`): every variant is a matcher scanned on every event
+that does not match. Keyed on `match.ErrFanOut`, which only those two
+budgets wrap. The G0 fuzz matrix found it first, with
+`-0ϳ-0ϳ-0ϳ-0ϳ-0ϳ-0`, input `0771b852e8440357`.
 
 ## The oracle will not answer
 
@@ -198,6 +211,18 @@ literal text. `0{00}` is the five-character string `0{00}` in Go and a
 zero-width repetition in Python, and `{,3}` and `{}` split the same way. The
 braced forms the two engines agree on are not worth the ones they do not, so
 the oracle declines any braced pattern.
+
+### A case-insensitive regex on a character the engines fold differently
+
+Measured over the whole BMP, `(?i)` in RE2 and `re.IGNORECASE` in Python
+disagree on sixteen ordered pairs. Python treats `I`, `i`, `İ` (U+0130) and
+`ı` (U+0131) as one case class; RE2 pairs only `I` and `i`. Go's Unicode
+tables also case-pair U+A7CE to U+A7D5, which Python 3.14's do not yet.
+`|re` is RE2 by design, and RE2 not matching `İ` to `I` agrees with the
+string fold (`docs/modifiers.md`). The oracle declines with
+`regex-casefold` when a `re|i` value or the event field it is matched
+against holds one of those characters. The G0 fuzz matrix found it first:
+`ParentImage|re|i: I` against `İ`, input `bbda9a31f50d0616`.
 
 ### A regex compared against a value containing a newline
 

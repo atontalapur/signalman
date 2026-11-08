@@ -101,8 +101,8 @@ func WinDashVariants(s string) ([]string, error) {
 		return []string{s}, nil
 	}
 	if len(pos) > maxWinDashPositions {
-		return nil, fmt.Errorf("windash: %d dash positions in %q exceeds the limit of %d",
-			len(pos), s, maxWinDashPositions)
+		return nil, fmt.Errorf("%w: windash: %d dash positions in %q exceeds the limit of %d",
+			ErrFanOut, len(pos), s, maxWinDashPositions)
 	}
 
 	// Split s into the fixed segments between dash positions, so a variant

@@ -152,10 +152,12 @@ Resolved by `f_folded`.
 
 ### `fieldref` is not a lowercase comparison
 
-v1 uses `strings.EqualFold`, which is simple-fold orbit equality, not
-`ToLower` equality: `ſ` (U+017F) lowercases to itself but is `EqualFold` to
-`s`. Comparing `f_folded` would be wrong, so `f_eqfold` stores each rune's
-orbit minimum. Equal keys are exactly `EqualFold` (fuzzed).
+v1 uses `match.EqualFold`, which is simple-fold orbit equality, not
+`ToLower` equality, restricted to one side of the ASCII boundary: `ſ`
+(U+017F) and `s` share an orbit but are not equal here. Comparing
+`f_folded` would be wrong, so `f_eqfold` stores each rune's orbit minimum
+on its own side of the boundary. Equal keys are exactly `match.EqualFold`
+(fuzzed).
 
 ### `.` matches newline in `match()` (docs)
 

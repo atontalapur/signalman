@@ -22,10 +22,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/atontalapur/signalman/internal/event"
+	"github.com/atontalapur/signalman/internal/sigma/match"
 )
 
 // Column names. The compiler emits only these identifiers; nothing from a
@@ -133,7 +133,7 @@ type Row struct {
 	// Text is Value.Text with each invalid UTF-8 byte replaced by U+FFFD,
 	// which is the rune Go's regexp reads for it. Regex runs here.
 	Text map[string][]string
-	// Folded is strings.ToLower(Value.Text): the form the wildcard matcher
+	// Folded is match.Fold(Value.Text): the form the wildcard matcher
 	// compares. Equals, contains, startswith, endswith, and keywords run here.
 	Folded map[string][]string
 	// EqFold maps each rune to the least rune of its unicode.SimpleFold
@@ -190,7 +190,7 @@ func Encode(ev *event.Event) Row {
 				continue
 			}
 			r.Text[name] = append(r.Text[name], runeSafe(s))
-			r.Folded[name] = append(r.Folded[name], strings.ToLower(s))
+			r.Folded[name] = append(r.Folded[name], match.Fold(s))
 			r.EqFold[name] = append(r.EqFold[name], FoldKey(s))
 			if n, ok := intOf(item); ok {
 				r.Ints[name] = append(r.Ints[name], n)
@@ -231,27 +231,8 @@ func runeSafe(s string) string {
 	return b.String()
 }
 
-// FoldKey is the strings.EqualFold canonical form: each rune, with invalid
-// bytes read as U+FFFD the way EqualFold reads them, replaced by the least
-// rune of its simple fold orbit.
-func FoldKey(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		b.WriteRune(foldMin(r))
-	}
-	return b.String()
-}
-
-func foldMin(r rune) rune {
-	m := r
-	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
-		if f < m {
-			m = f
-		}
-	}
-	return m
-}
+// FoldKey is match.FoldKey: the canonical form fieldref compares.
+func FoldKey(s string) string { return match.FoldKey(s) }
 
 // IPKey is the stored form of an address match.CIDR could match: what
 // netip.ParseAddr accepts, minus zoned addresses, which Prefix.Contains

@@ -125,12 +125,17 @@ func TestWildcardLiteralsAppearInEveryMatch(t *testing.T) {
 	}
 }
 
-func TestAppendFoldIsToLower(t *testing.T) {
-	for _, s := range []string{"", "abc", "ABC", `C:\Windows`, "ÄÖÜ", "İstanbul", "\xff\xfeA", "a\xc3", "K", "ẞ", "\uFFFD"} {
+// AppendFold is strings.ToLower with foldRune, which keeps a non-ASCII
+// rune whose lowercase is ASCII (U+0130, U+212A) as itself.
+func TestAppendFoldIsFold(t *testing.T) {
+	for _, s := range []string{"", "abc", "ABC", `C:\Windows`, "ÄÖÜ", "İstanbul", "\xff\xfeA", "a\xc3", "\u212a", "ẞ", "\uFFFD"} {
 		got := AppendFold([]byte("prefix"), s)
-		if string(got) != "prefix"+strings.ToLower(s) {
-			t.Errorf("AppendFold(%q) = %q, want %q", s, got[6:], strings.ToLower(s))
+		if want := strings.Map(foldRune, s); string(got) != "prefix"+want {
+			t.Errorf("AppendFold(%q) = %q, want %q", s, got[6:], want)
 		}
+	}
+	if got := Fold("İstanbul"); got != "İstanbul" {
+		t.Errorf("Fold(İstanbul) = %q: the dotted capital I must not become i", got)
 	}
 }
 
@@ -140,8 +145,11 @@ func FuzzAppendFold(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		got := AppendFold(nil, s)
-		if string(got) != strings.ToLower(s) {
-			t.Fatalf("AppendFold(%q) = %q, want %q", s, got, strings.ToLower(s))
+		if want := strings.Map(foldRune, s); string(got) != want {
+			t.Fatalf("AppendFold(%q) = %q, want %q", s, got, want)
+		}
+		if !strings.ContainsAny(s, "\u0130\u212a") && string(got) != strings.ToLower(s) {
+			t.Fatalf("AppendFold(%q) = %q differs from strings.ToLower away from U+0130 and U+212A", s, got)
 		}
 		if !utf8.Valid(got) && utf8.ValidString(strings.ToLower(s)) {
 			t.Fatalf("AppendFold(%q) is not valid UTF-8", s)

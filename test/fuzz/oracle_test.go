@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/atontalapur/signalman/internal/sigma"
+	"github.com/atontalapur/signalman/internal/sigma/match"
 )
 
 // known() is a pure function and the closed set of suppressions it
@@ -49,6 +50,11 @@ func TestKnownSignalmanLoadDivergences(t *testing.T) {
 		{"aggregation", loadErr(sigma.CodeAggregation, "aggregation is not supported"), true},
 		{"missing id", loadErr(sigma.CodeMissingID, "rule has no id"), true},
 		{"regexp syntax", &sigma.LoadError{Code: sigma.CodeDetection, Err: &syntax.Error{Code: syntax.ErrMissingBracket}}, true},
+		// windash above five dash positions, or any chain over 4096
+		// variants: a load-time budget, keyed on match.ErrFanOut.
+		{"fan-out budget", &sigma.LoadError{Code: sigma.CodeModifier, Err: fmt.Errorf("%w: %w", match.ErrUnsupportedModifier, match.ErrFanOut)}, true},
+		{"modifier without the budget", &sigma.LoadError{Code: sigma.CodeModifier, Err: match.ErrUnsupportedModifier}, false},
+		{"budget text without the sentinel", loadErr(sigma.CodeModifier, "windash: 6 dash positions exceeds the limit of 5"), false},
 		// A loaded rule whose logsource then fails to resolve means the
 		// loader and Resolve disagree: a Signalman bug, not an oracle gap.
 		{"does not resolve", errors.New("rule loaded but logsource windows/process_creation does not resolve"), false},
