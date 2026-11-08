@@ -17,6 +17,9 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
 - `cutover check -record` no longer leaves two blank lines before the
   first gate's evidence.
+- A G0 fuzz run now fails when any shard fails or goes missing, even if
+  the rest clear the floor, and it caps the suppressed share at 40% as
+  nightly does.
 
 ## [0.18.2] - 2026-11-08
 
