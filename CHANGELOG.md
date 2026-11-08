@@ -3,6 +3,40 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.18.0] - 2026-11-08
+
+### Added
+
+- `signalman hunt --from --to rules/` runs rules as ClickHouse queries over
+  stored events and prints each rule's matching `(partition, seq)` rows.
+- `signalman-sink -lane events` stores `events.norm` in a new `events`
+  table (`deploy/clickhouse/003_events.sql`) for the hunt to read, with the
+  alert lane's delivery: commit after insert, retry on outage, and
+  dead letters to the new `events.dead` topic. Prometheus scrapes it on
+  `:9467`.
+- Plans C, D and E passed their gates on the compose stack. The one-hour
+  soak ran 3.72 million events through the real binaries with zero audit
+  violations. The hunt over stored events equals the pipeline's stored
+  alerts for all 21 rules. A killed `signalmand` paged in 51 s and a
+  stalled one in 95 s. Numbers are in `docs/results.md`.
+
+### Fixed
+
+- A `fieldref` target is now renamed through the taxonomy like the field
+  it sits under. Under `Image: NewProcessName`, `ParentImage|fieldref: Image`
+  used to compare against a field no event has and never matched, in all
+  three engines.
+- A wildcard inside a `base64` or `base64offset` value is a load error
+  (`modifier`). The star used to be encoded as a literal byte, so the rule
+  matched something other than what it said. pySigma rejects the same
+  values. No SigmaHQ rule is affected.
+- `go.mod` pins the go1.27.3 toolchain, so local builds no longer fail
+  govulncheck on ten standard library vulnerabilities fixed after 1.27.1.
+- `TestPipelineOverRedpanda` reread all of `events.raw` with a fresh group
+  and timed out on a stack with history. It now starts at the end.
+- `TestRetroHuntEqualsReplay` now forces the merge it claimed to check, and
+  `002_alerts_engine.sql` is tested against a table that lacks the column.
+
 ## [0.17.1] - 2026-11-07
 
 ### Fixed
