@@ -534,7 +534,10 @@ func TestRuleSetVersionTracksTheRenamedField(t *testing.T) {
 	tax := loadTax(t)
 	rs := ruleSetFrom(t, tax, fmt.Sprintf(vssRule, "  service: security"))
 	r := rs.Rules[0]
-	renamed, _ := rename(r.Cond, map[string]string{"NewProcessName": "SomethingElse"})
+	renamed, _, err := rename(r.Cond, map[string]string{"NewProcessName": "SomethingElse"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	moved := r
 	moved.Cond = renamed
 	if ruleSetVersion([]Rule{r}, tax.Version) == ruleSetVersion([]Rule{moved}, tax.Version) {
