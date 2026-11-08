@@ -329,6 +329,13 @@ made 232,324 comparisons against the 1e8 floor. At about 1,900 a second on
 this laptop, the floor is roughly 15 hours of fuzzing, a nightly-scale run
 rather than a session. G0 is not dated in `docs/cutover.md`.
 
+The floor now runs as a 12-shard GitHub Actions matrix (`g0-fuzz.yml`),
+5h20m a shard. Three runs so far found three oracle gaps and one Signalman
+bug, each with a seed in `test/fuzz/testdata`: the `İ` fold (0.18.1),
+regex case folding on the Turkish i, and SQLite's ASCII-only NOCASE
+against a non-ASCII case pair (0.18.2). A clean shard compares about 18.8
+million cases, so twelve clear the floor.
+
 ## Codebase
 
 As of commit `365ed2d`: about 7,400 lines of Go, of which about 4,200 are
