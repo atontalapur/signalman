@@ -78,6 +78,7 @@ var refusalCodes = map[string]bool{
 	"regex-brace":            true, // RE2 reads non-canonical braces literally
 	"regex-newline":          true, // Python's $ matches before a final newline
 	"regex-casefold":         true, // re.I's Turkish i class; Unicode version skew
+	"unicode-case":           true, // SQLite's NOCASE and LIKE fold ASCII only
 	"unparenthesized-not":    true, // the backend's NOT a OR b defect
 	"regex-python-rejects":   true, // Python's engine rejects what RE2 accepts
 	"unknown-modifier":       true, // a modifier name pySigma does not carry

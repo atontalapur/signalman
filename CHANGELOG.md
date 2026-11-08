@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.18.2] - 2026-11-08
+
+### Fixed
+
+- The fuzzer's oracle declines a case-insensitive comparison between two
+  non-ASCII letters that differ only by case (`unicode-case`). SQLite folds
+  ASCII only, so it reported `Ώ` against `ώ` as a Signalman bug. The G0
+  fuzz matrix found it.
+- `regex-casefold` also covers a regex range that holds the Turkish i
+  family without naming it, as `[x-٬]` does, and an inline `(?i)` under a
+  plain `re`.
+
 ## [0.18.1] - 2026-11-08
 
 ### Fixed

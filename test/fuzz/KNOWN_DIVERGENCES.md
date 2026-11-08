@@ -39,12 +39,13 @@ Three deliberate adjustments to make the comparison meaningful:
   insensitive by default. SQLite's `LIKE` already ignores ASCII case but its
   `=` does not, so without the collation the same rule would be case
   insensitive through `contains` and case sensitive through a plain equals.
-  NOCASE folds ASCII only. A case difference outside ASCII is still a real
-  divergence and has no suppression; if the fuzzer finds one, it is a
-  question about Signalman's Unicode folding, not noise. It found one: Go
-  lowercased `İ` (U+0130) to `i`, so `contains: İ` matched every `i`
-  (inputs `6c2f3783bbcc1257`, `af3c814fc5bfa650`). Signalman's fold now
-  never crosses the ASCII boundary (`match.Fold`, `docs/modifiers.md`).
+  NOCASE folds ASCII only, so the oracle declines a case-insensitive
+  comparison between two non-ASCII letters that differ only by case
+  (below). An ASCII letter against a non-ASCII one is still compared, and
+  that is how the fuzzer found Go lowercasing `İ` (U+0130) to `i`, so that
+  `contains: İ` matched every `i` (inputs `6c2f3783bbcc1257`,
+  `af3c814fc5bfa650`). Signalman's fold now never crosses the ASCII
+  boundary (`match.Fold`, `docs/modifiers.md`).
 - **A `regexp` function registered from Python's `re`.** SQLite ships no
   REGEXP implementation, so `|re` would otherwise fail to run at all.
 - **`TEXT` affinity on every column.** The fuzzer sends integer and null
@@ -220,9 +221,29 @@ disagree on sixteen ordered pairs. Python treats `I`, `i`, `İ` (U+0130) and
 tables also case-pair U+A7CE to U+A7D5, which Python 3.14's do not yet.
 `|re` is RE2 by design, and RE2 not matching `İ` to `I` agrees with the
 string fold (`docs/modifiers.md`). The oracle declines with
-`regex-casefold` when a `re|i` value or the event field it is matched
-against holds one of those characters. The G0 fuzz matrix found it first:
-`ParentImage|re|i: I` against `İ`, input `bbda9a31f50d0616`.
+`regex-casefold` when a `re|i` value, or a `re` value with an inline flag
+group such as `(?i)`, or the event field it is matched
+against holds one of those characters, or when a range in the value may
+cover one without naming it (`[x-٬]` holds both Turkish i's; an escaped
+endpoint is not decoded and counts as covering). The G0 fuzz matrix found
+it first: `ParentImage|re|i: I` against `İ`, input `bbda9a31f50d0616`, then
+`User|re|i: [x-٬]` against `I`, input `6821c336d738065b`.
+
+### A case difference between two non-ASCII letters
+
+SQLite's NOCASE and `LIKE` fold ASCII only, so `contains: Ώ` (U+038F)
+against `ώ` (U+03CE) is no match in the oracle and a match in Signalman,
+which folds Unicode as Sigma's case-insensitive default requires. The oracle
+declines with `unicode-case` when a rule value and the event field it is
+compared against hold two distinct non-ASCII characters that Python pairs
+by `lower()`, `upper()` or `casefold()`, or two of U+A7CE, U+A7CF and
+U+A7D2 to U+A7D5, which Go's tables pair and Python's do not yet. A key under `re` or `cased` is case sensitive and
+is still compared. Teaching the oracle Unicode folding was rejected: it
+would copy Signalman's own rule into the oracle, and Python's and Go's case
+tables differ. Signalman's folding is covered by unit tests in
+`internal/sigma/match`. The G0 fuzz matrix found it twice, under
+`windash|contains` and `startswith`: inputs `c59e4d290ef6243b` and
+`487f37ef076fc1bf`.
 
 ### A regex compared against a value containing a newline
 

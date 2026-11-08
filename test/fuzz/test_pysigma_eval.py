@@ -133,6 +133,82 @@ class RegexChecks(unittest.TestCase):
         out = ask("Image|re|i", "'\u0131'", {"Image": "I"})
         self.assertEqual(out.get("refusal"), "regex-casefold")
 
+    def test_non_ascii_case_pair_is_refused(self):
+        # Input c59e4d290ef6243b: SQLite's NOCASE and LIKE fold ASCII only.
+        out = ask("ParentImage|windash|contains", "'Ώ'", {"ParentImage": "ώ"})
+        self.assertEqual(out.get("refusal"), "unicode-case")
+
+    def test_non_ascii_case_pair_under_equals_is_refused(self):
+        out = ask("Image", "'ДОМ'", {"Image": "дом"})
+        self.assertEqual(out.get("refusal"), "unicode-case")
+
+    def test_case_pair_python_tables_do_not_know_is_refused(self):
+        # Go's tables pair U+A7CE with U+A7CF; Python 3.14's do not yet.
+        out = ask("Image|contains", "'꟎'", {"Image": "꟏"})
+        self.assertEqual(out.get("refusal"), "unicode-case")
+
+    def test_case_pair_beside_the_same_letter_is_refused(self):
+        # The event holds the rule's letter and its other case.
+        out = ask("Image|contains", "'ΏΏ'", {"Image": "Ώώ"})
+        self.assertEqual(out.get("refusal"), "unicode-case")
+
+    def test_case_pair_only_casefold_sees_is_refused(self):
+        # U+03D1 and U+03F4 share a fold orbit; lower() and upper() differ.
+        out = ask("Image", "'ϑ'", {"Image": "ϴ"})
+        self.assertEqual(out.get("refusal"), "unicode-case")
+
+    def test_same_non_ascii_text_is_answered(self):
+        out = ask("Image|contains", "'ώ'", {"Image": "xώy"})
+        self.assertNotIn("refusal", out)
+        self.assertTrue(out["matched"])
+
+    def test_non_ascii_pair_in_another_field_is_answered(self):
+        r = rule("Image", "'a'", "selection and not filter").replace(
+            "  condition:", "  filter:\n    User: x\n  condition:"
+        )
+        out = pe.respond({"rule": r, "event": {"Image": "ώ", "User": "u", "x": "Ώ"}})
+        self.assertNotIn("refusal", out)
+
+    def test_ascii_onto_non_ascii_is_answered(self):
+        # Signalman never folds across the ASCII boundary, so both say no.
+        out = ask("Image|contains", "'i'", {"Image": "İ"})
+        self.assertNotIn("refusal", out)
+        self.assertFalse(out["matched"])
+
+    def test_non_ascii_case_pair_under_a_case_sensitive_regex_is_answered(self):
+        out = ask("Image|re", "'Ώ'", {"Image": "ώ"})
+        self.assertNotIn("refusal", out)
+        self.assertFalse(out["matched"])
+
+    def test_range_covering_the_turkish_i_is_refused(self):
+        # Input 6821c336d738065b: [x-٬] holds U+0130 and U+0131 without
+        # naming either, and re.I pairs them with I.
+        out = ask("User|re|i", "'[x-٬]'", {"User": "I"})
+        self.assertEqual(out.get("refusal"), "regex-casefold")
+
+    def test_inline_case_flag_on_the_turkish_i_is_refused(self):
+        out = ask("Image|re", "'(?i)I'", {"Image": "İ"})
+        self.assertEqual(out.get("refusal"), "regex-casefold")
+
+    def test_inline_flag_group_with_i_on_a_range_is_refused(self):
+        out = ask("User|re", "'(?si)[x-٬]'", {"User": "I"})
+        self.assertEqual(out.get("refusal"), "regex-casefold")
+
+    def test_inline_flag_without_i_is_answered(self):
+        out = ask("Image|re", "'(?s)I'", {"Image": "İ"})
+        self.assertNotIn("refusal", out)
+        self.assertFalse(out["matched"])
+
+    def test_ascii_range_in_a_case_insensitive_regex_is_answered(self):
+        out = ask("User|re|i", "'[a-z]'", {"User": "I"})
+        self.assertNotIn("refusal", out)
+        self.assertTrue(out["matched"])
+
+    def test_range_covering_the_turkish_i_case_sensitive_is_answered(self):
+        out = ask("User|re", "'[x-٬]'", {"User": "I"})
+        self.assertNotIn("refusal", out)
+        self.assertFalse(out["matched"])
+
     def test_turkish_i_in_a_case_sensitive_regex_is_answered(self):
         out = ask("Image|re", "'I'", {"Image": "\u0130"})
         self.assertNotIn("refusal", out)

@@ -266,6 +266,62 @@ REGEX_BRACE = re.compile(r"[{}]")
 # answer in its own dialect.
 REGEX_CASEFOLD = frozenset("\u0130\u0131\ua7ce\ua7cf\ua7d2\ua7d3\ua7d4\ua7d5")
 
+# The letters of that set Go's tables case-pair and Python's do not, so
+# str.lower() cannot see the pair in unicode_case_pair. Declining any two of
+# them together over-declines U+A7CE against U+A7D3; there is no such rule.
+# An inline flag group that turns on case folding, as (?i) or (?si) does,
+# under a plain re key.
+INLINE_CASE_FLAG = re.compile(r"\(\?[a-zA-Z]*i")
+
+CASE_SKEW = frozenset("\ua7ce\ua7cf\ua7d2\ua7d3\ua7d4\ua7d5")
+
+
+def range_holds_casefold(pattern: str) -> bool:
+    """Report whether a range in pattern may cover a REGEX_CASEFOLD character
+    without naming it, as [x-\\u066c] covers U+0130 and U+0131.
+
+    Read off the text, so a '-' outside a class counts too; declining one of
+    those is harmless. An escaped endpoint (\\x41, an octal) is not decoded
+    and counts as covering, since an octal reaches U+0130.
+    """
+    for i in range(1, len(pattern) - 1):
+        if pattern[i] != "-":
+            continue
+        lo, hi = pattern[i - 1], pattern[i + 1]
+        if hi == "\\" or (i >= 2 and pattern[i - 2] == "\\"):
+            return True
+        if any(ord(lo) <= ord(c) <= ord(hi) for c in REGEX_CASEFOLD):
+            return True
+    return False
+
+
+def unicode_case_pair(values, v) -> bool:
+    """Report whether a rule value and the event value hold two distinct
+    non-ASCII characters that differ only by case.
+
+    SQLite's NOCASE and LIKE fold ASCII only, so for such a pair the oracle
+    answers no match where Sigma's case-insensitive match says yes. ASCII
+    against non-ASCII is not a pair: Signalman never folds across that
+    boundary either, so both engines already agree.
+    """
+    if not isinstance(v, str):
+        return False
+    ev = {c for c in v if not c.isascii()}
+    if not ev:
+        return False
+    for s in values:
+        for r in {c for c in s if not c.isascii()}:
+            for e in ev:
+                if r == e:
+                    continue
+                # casefold() as well: lower() and upper() equality is not
+                # transitive, and misses U+03D1 against U+03F4.
+                if r.lower() == e.lower() or r.upper() == e.upper() or r.casefold() == e.casefold():
+                    return True
+                if r in CASE_SKEW and e in CASE_SKEW:
+                    return True
+    return False
+
 
 def evaluate(rule_yaml: str, event: dict, fields, mods):
     sql = query(rule_yaml)
@@ -340,6 +396,9 @@ def handle(req: dict) -> dict:
     if value_only:
         raise Unanswerable("value-only", "value-only expression")
     for field, key_mods, values in keyed:
+        if key_mods.isdisjoint({"re", "cased"}) and unicode_case_pair(values, event.get(field)):
+            raise Unanswerable("unicode-case", "non-ASCII case difference; SQLite folds ASCII only")
+    for field, key_mods, values in keyed:
         if "re" not in key_mods:
             continue
         if any(REGEX_SHORTHAND.search(v) for v in values):
@@ -347,8 +406,9 @@ def handle(req: dict) -> dict:
         if any(REGEX_BRACE.search(v) for v in values):
             raise Unanswerable("regex-brace", "regex repetition brace")
         v = event.get(field)
-        if "i" in key_mods and any(
-            REGEX_CASEFOLD & set(s) for s in [*values, v] if isinstance(s, str)
+        if ("i" in key_mods or any(INLINE_CASE_FLAG.search(p) for p in values)) and (
+            any(REGEX_CASEFOLD & set(s) for s in [*values, v] if isinstance(s, str))
+            or any(range_holds_casefold(p) for p in values)
         ):
             raise Unanswerable("regex-casefold", "case-insensitive regex on a character the engines fold differently")
         if isinstance(v, str) and "\n" in v:
