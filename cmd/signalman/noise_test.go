@@ -115,3 +115,32 @@ func TestSampleTextCutsOnARuneBoundary(t *testing.T) {
 		t.Fatalf("got %q", got[len(got)-10:])
 	}
 }
+
+// The committed noise corpus (testdata/noise, made by
+// scripts/gen_noise_corpus.py) is ordinary Sysmon activity, so no shipped
+// rule fires on it. That is weaker than it reads for some rules: one on
+// `service: security`, or on a binary the corpus never runs, cannot fire
+// whatever it says. The name-only rule below shows events do reach the
+// process_creation rules through the taxonomy.
+func TestNoiseCorpusIsQuietForShippedRules(t *testing.T) {
+	rules, err := filepath.Glob("../../rules/*.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rules {
+		if strings.HasSuffix(r, ".test.yml") {
+			continue
+		}
+		code, stdout, stderr := cli(t, "noise", "--taxonomy", testTaxonomy, "--corpus", "../../testdata/noise", r)
+		if code != exitOK || !strings.Contains(stdout, "matches   0\n") {
+			t.Errorf("%s on the benign corpus: code %d\n%s%s", r, code, stdout, stderr)
+		}
+	}
+}
+
+func TestNoiseCorpusCatchesANameOnlyRule(t *testing.T) {
+	code, stdout, _ := cli(t, "noise", "--taxonomy", testTaxonomy, "--corpus", "../../testdata/noise", "testdata/noise/certutil_any.yml")
+	if code != exitFail || !strings.Contains(stdout, "EXCEEDED") || strings.Contains(stdout, "matches   0\n") {
+		t.Fatalf("a rule on certutil.exe alone should exceed its budget on the benign corpus: code %d\n%s", code, stdout)
+	}
+}

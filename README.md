@@ -199,7 +199,7 @@ detector.
 | E. Observability | metrics, dashboards, canary generator, silence detector | done: a killed signalmand pages in 51 s and a stalled one in 95 s on the compose stack, gate passed |
 | F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); on Redpanda and ClickHouse, overload, five kills, a 10-minute ClickHouse outage, poison records, and reloads lost nothing; one partition offline on three brokers: signalmand kept the live partitions current and the canary pages only the dead one |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; G0 passed (offline); G1 to G6 not run against traffic, no game day run |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow passed on its first real rule PR (`signalman-canary`, #44); no noise corpus is configured |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow passed on its first real rule PR (`signalman-canary`, #44); a synthetic benign noise corpus (`testdata/noise`) on which no shipped rule fires |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
@@ -281,7 +281,8 @@ config/taxonomy/        logsource bindings, hashed into every verdict
 rules/                  twenty hand-written rules and signalman-canary, each with a .test.yml fixture
 docs/superpowers/plans/ roadmap and per-plan task lists
 docs/backlog.yml        Jira source of truth, synced by scripts/jira_sync.py
-scripts/                backlog validator, Jira sync, differential fuzzer run stats
+scripts/                backlog validator, Jira sync, differential fuzzer run stats, noise corpus generator
+testdata/noise/         the synthetic benign corpus the noise gate measures rules against
 .github/workflows/      ci, nightly fuzz, release, rules (the rule PR gates)
 ```
 

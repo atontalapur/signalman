@@ -1,0 +1,12 @@
+title: Certutil run by name alone (deliberately noisy)
+id: 0b5a3f0e-5a8e-4d8e-9a61-1c3c0a4f7e21
+status: experimental
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\certutil.exe'
+  condition: selection
+level: low
+budget: 50
