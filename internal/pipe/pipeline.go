@@ -220,7 +220,10 @@ func (p *Pipeline) Run(ctx context.Context) error {
 // pipeline on its first produce instead. The other outputs are keyed and
 // need only exist.
 func (p *Pipeline) checkTopics(ctx context.Context) error {
-	raw, err := p.b.EndOffsets(ctx, TopicEventsRaw)
+	// Partition counts come from metadata, which needs no leader: a restart
+	// while one events.raw partition is offline still starts and serves the
+	// others.
+	raw, err := p.b.Partitions(ctx, TopicEventsRaw)
 	if err != nil {
 		return fmt.Errorf("topic check: %w", err)
 	}
@@ -235,7 +238,7 @@ func (p *Pipeline) checkTopics(ctx context.Context) error {
 	}
 	slices.Sort(topics)
 	for _, t := range topics {
-		parts, err := p.b.EndOffsets(ctx, t)
+		parts, err := p.b.Partitions(ctx, t)
 		if err != nil {
 			return fmt.Errorf("topic check: output topic %s: %w", t, err)
 		}

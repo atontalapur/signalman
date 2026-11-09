@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.19.1] - 2026-11-08
+
+### Fixed
+
+- One partition without a leader no longer pages the canary alert for
+  every partition. The canary lists partitions from topic metadata, which
+  needs no leader, and writes each partition's canary separately, so
+  `SignalmanCanaryStalled` names only the partitions that are out.
+
+### Changed
+
+- `deploy/docker-compose.multibroker.yml` runs a three-broker Redpanda for
+  the one-partition-offline load experiment, recorded in `docs/load.md`.
+
 ## [0.18.4] - 2026-11-08
 
 ### Fixed

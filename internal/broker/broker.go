@@ -122,6 +122,10 @@ type Broker interface {
 	// EndOffsets returns, per partition, the offset the next produced
 	// record will get.
 	EndOffsets(ctx context.Context, topic string) (map[int32]int64, error)
+	// Partitions lists the topic's partitions from metadata. Unlike the
+	// offset lookups it needs no partition leader, so it still answers when
+	// one partition is offline.
+	Partitions(ctx context.Context, topic string) ([]int32, error)
 	// StartOffsets returns, per partition, the oldest offset still in the
 	// log. Retention moves it forward; offsets below it are gone.
 	StartOffsets(ctx context.Context, topic string) (map[int32]int64, error)
