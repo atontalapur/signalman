@@ -1,0 +1,103 @@
+# A three-broker Redpanda cluster for the "one partition offline" load
+# experiment (docs/load.md). It runs beside the main stack under its own
+# project name and ports, so nothing in deploy/docker-compose.yml changes:
+#
+#   docker compose -f deploy/docker-compose.multibroker.yml up -d --wait
+#   signalmand -brokers localhost:29092,localhost:29093,localhost:29094 -rules rules
+#
+# events.raw has one replica, so stopping a broker takes the partitions it
+# leads offline, which is the experiment. Every output topic has three
+# replicas, so signalmand can keep writing what the other partitions
+# produce. Brokers are capped at one core and 512 MB each. Tear it down with
+# `down -v`; the volumes hold nothing else.
+name: signalman-multibroker
+
+x-broker: &broker
+  image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+  healthcheck:
+    test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+    interval: 2s
+    timeout: 5s
+    retries: 60
+
+services:
+  rp0:
+    <<: *broker
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --node-id=0
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:29092
+      - --advertise-kafka-addr=internal://rp0:9092,external://localhost:29092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=rp0:33145
+    ports: ["29092:29092"]
+    volumes: [rp0:/var/lib/redpanda/data]
+
+  rp1:
+    <<: *broker
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --node-id=1
+      - --seeds=rp0:33145
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:29093
+      - --advertise-kafka-addr=internal://rp1:9092,external://localhost:29093
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=rp1:33145
+    ports: ["29093:29093"]
+    volumes: [rp1:/var/lib/redpanda/data]
+    depends_on: [rp0]
+
+  rp2:
+    <<: *broker
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --node-id=2
+      - --seeds=rp0:33145
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:29094
+      - --advertise-kafka-addr=internal://rp2:9092,external://localhost:29094
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=rp2:33145
+    ports: ["29094:29094"]
+    volumes: [rp2:/var/lib/redpanda/data]
+    depends_on: [rp0]
+
+  # The pipeline topics, as in deploy/docker-compose.yml, except replication.
+  topics:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    depends_on:
+      rp0: {condition: service_healthy}
+      rp1: {condition: service_healthy}
+      rp2: {condition: service_healthy}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        rpk() { command rpk -X brokers=rp0:9092,rp1:9092,rp2:9092 "$$@"; }
+        rpk topic create events.raw -p 8 -r 1 -c max.message.bytes=1048576 || rpk topic describe events.raw >/dev/null
+        for t in events.norm alerts verdicts.v1 verdicts.v2 divergences drops alerts.dead events.dead; do
+          rpk topic create "$$t" -p 8 -r 3 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
+        done
+        touch /tmp/ready
+        exec sleep infinity
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+volumes:
+  rp0:
+  rp1:
+  rp2:
