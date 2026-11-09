@@ -252,7 +252,14 @@ failed, 2 when the command could not run.
 
 The noise gate in CI uses the directory named by the repository variable
 `SIGNALMAN_NOISE_CORPUS`, a path inside the checkout. When it is unset the
-gate is skipped and the report says so. Latency numbers come from a shared
+gate is skipped and the report says so. The repository's corpus is
+`testdata/noise`: 10,000 synthetic events of ordinary activity from
+`scripts/gen_noise_corpus.py` (seed 1), with benign uses of tools that
+attack rules also name, such as `certutil -hashfile` and `net user /domain`.
+Every shipped rule scores 0 on it, and a rule on `certutil.exe` alone scores
+1,200 per 100k. It is synthetic, so it catches a rule that fires on
+everyday activity but not a real fleet's long tail; point the variable at
+exported production events when there are some. Latency numbers come from a shared
 GitHub runner and move around; a rule near 50µs locally may land on either
 side of it there.
 
