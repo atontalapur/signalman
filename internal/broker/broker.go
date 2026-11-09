@@ -99,6 +99,13 @@ type Consumer interface {
 	Close()
 }
 
+// Owner is implemented by a group consumer that knows which partitions it
+// currently owns. Lag accounting uses it to report only those, so a
+// partition a rebalance moved to another member is not counted twice.
+type Owner interface {
+	Owned() []TopicPartition
+}
+
 // Broker is the whole surface.
 type Broker interface {
 	// Produce writes recs and returns once every one is durable (acked by

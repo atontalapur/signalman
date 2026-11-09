@@ -400,3 +400,12 @@ func (c *consumer) Commit(ctx context.Context, next map[broker.TopicPartition]in
 }
 
 func (c *consumer) Close() { c.cl.Close() }
+
+// Owned is the partitions assigned to this member and not since revoked
+// or lost. A positioned reader owns nothing.
+func (c *consumer) Owned() []broker.TopicPartition {
+	if c.own == nil {
+		return nil
+	}
+	return c.own.owned()
+}

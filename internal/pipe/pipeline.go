@@ -103,9 +103,7 @@ type Pipeline struct {
 	m    *obs.Metrics
 	log  *slog.Logger
 
-	mu        sync.Mutex
-	hw        map[broker.TopicPartition]int64
-	committed map[broker.TopicPartition]int64
+	lag *Lag
 }
 
 // New builds a pipeline evaluating with whatever slot holds. log may be nil.
@@ -126,15 +124,14 @@ func New(cfg Config, b broker.Broker, norm *Normalizer, slot *Slot, m *obs.Metri
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Pipeline{
-		cfg:       cfg,
-		b:         b,
-		in:        NewIngest(m),
-		norm:      norm,
-		slot:      slot,
-		m:         m,
-		log:       log,
-		hw:        map[broker.TopicPartition]int64{},
-		committed: map[broker.TopicPartition]int64{},
+		cfg:  cfg,
+		b:    b,
+		in:   NewIngest(m),
+		norm: norm,
+		slot: slot,
+		m:    m,
+		log:  log,
+		lag:  NewLag(b, cfg.Group, TopicEventsRaw, m.ConsumerLag),
 	}, nil
 }
 
@@ -161,7 +158,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		return err
 	}
 	defer cons.Close()
-	if err := p.loadCommitted(ctx); err != nil {
+	if err := p.lag.Load(ctx); err != nil {
 		return err
 	}
 
@@ -175,6 +172,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	wg.Go(func() { p.sample(ctx, normCh, matchCh, sinkCh, batchCh) })
+	wg.Go(func() { p.lag.Run(ctx, cons, p.cfg.LagRefreshInterval) })
 
 	ingestErr := make(chan error, 1)
 	wg.Go(func() {
@@ -284,7 +282,7 @@ func (p *Pipeline) ingest(ctx context.Context, cons broker.Consumer, normCh chan
 			}
 			continue
 		}
-		p.observe(f.HighWatermarks)
+		p.lag.Observe(f.HighWatermarks)
 		b := &batch{act: p.slot.load(), items: make([]*Item, len(f.Records)), remaining: len(f.Records)}
 		for i, r := range f.Records {
 			b.items[i] = p.in.Admit(r)
@@ -643,84 +641,13 @@ func (p *Pipeline) commit(ctx context.Context, cons broker.Consumer, b *batch) {
 		p.log.Warn("offset commit failed; the batch will be redelivered", "err", err)
 		return
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for tp, off := range next {
-		p.committed[tp] = off
-		p.setLag(tp)
-	}
-}
-
-func (p *Pipeline) loadCommitted(ctx context.Context) error {
-	c, err := p.b.CommittedOffsets(ctx, p.cfg.Group, TopicEventsRaw)
-	if err != nil {
-		return err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for part, off := range c {
-		p.committed[broker.TopicPartition{Topic: TopicEventsRaw, Partition: part}] = off
-	}
-	return nil
-}
-
-func (p *Pipeline) observe(hw map[broker.TopicPartition]int64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for tp, off := range hw {
-		p.hw[tp] = off
-		p.setLag(tp)
-	}
-}
-
-// refreshLag recomputes the lag gauge from the broker's log end. A poll
-// reports high watermarks too, but ingest stops polling when a stage stalls
-// and blocks it on a full queue, which is when the backlog grows. Only
-// partitions a poll has reported are refreshed: they are the ones this
-// process is assigned, and its committed offsets for any other are stale.
-// The lookup is bounded so a slow broker does not hold up the sampler.
-func (p *Pipeline) refreshLag(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, lagRefreshTimeout)
-	defer cancel()
-	ends, err := p.b.EndOffsets(ctx, TopicEventsRaw)
-	if err != nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for part, off := range ends {
-		tp := broker.TopicPartition{Topic: TopicEventsRaw, Partition: part}
-		// A log end never moves back; a lookup that raced a poll may be
-		// older than what the poll reported.
-		if cur, ok := p.hw[tp]; ok {
-			p.hw[tp] = max(cur, off)
-			p.setLag(tp)
-		}
-	}
-}
-
-// lagRefreshTimeout bounds refreshLag's broker lookup.
-const lagRefreshTimeout = 2 * time.Second
-
-// setLag is the log end minus the committed offset: records that would be
-// processed again if the process died now. Caller holds p.mu.
-func (p *Pipeline) setLag(tp broker.TopicPartition) {
-	hw, ok := p.hw[tp]
-	if !ok {
-		return
-	}
-	p.m.ConsumerLag.WithLabelValues(tp.Topic, strconv.Itoa(int(tp.Partition))).Set(float64(max(0, hw-p.committed[tp])))
+	p.lag.Committed(next)
 }
 
 func (p *Pipeline) sample(ctx context.Context, normCh, matchCh, sinkCh chan work, batchCh chan *batch) {
 	t := time.NewTicker(p.cfg.SampleInterval)
 	defer t.Stop()
-	var lastLag time.Time
 	for {
-		if time.Since(lastLag) >= p.cfg.LagRefreshInterval {
-			p.refreshLag(ctx)
-			lastLag = time.Now()
-		}
 		p.m.StageQueueDepth.WithLabelValues(StageNormalize).Set(float64(len(normCh)))
 		p.m.StageQueueDepth.WithLabelValues(StageMatch).Set(float64(len(matchCh)))
 		p.m.StageQueueDepth.WithLabelValues(StageSink).Set(float64(len(sinkCh)))

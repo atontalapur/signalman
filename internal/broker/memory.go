@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -310,6 +311,12 @@ func (c *memConsumer) take() Fetch {
 		c.cursor = (c.cursor + 1) % n
 	}
 	return f
+}
+
+// Owned is every partition the consumer reads: the memory broker has one
+// member per group and no rebalance.
+func (c *memConsumer) Owned() []TopicPartition {
+	return slices.Clone(c.order)
 }
 
 func (c *memConsumer) Commit(ctx context.Context, next map[TopicPartition]int64) error {

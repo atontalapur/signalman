@@ -3,17 +3,18 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
-## [0.18.4] - 2026-11-09
+## [0.18.4] - 2026-11-08
 
 ### Fixed
 
-- The alert and event sinks' lag gauge now grows during a ClickHouse
-  outage. It used to freeze at its last value, because the sink stops
-  polling while it retries, and showed 1,043 while 1.2 million records
-  waited.
-- signalmand's `events.raw` lag gauge no longer freezes when a stalled
-  stage stops it polling. It is now recomputed from the broker every 5
-  seconds as well as on each poll.
+- The lag gauge, `signalman_consumer_lag_records`, now keeps moving when a
+  consumer stops polling. A sink retrying a ClickHouse insert showed 1,043
+  while 1.2 million records waited, and a stalled signalmand froze the
+  same way. Both now refresh it from the broker every 5 seconds as well as
+  on each poll.
+- With several members in one group, each reports lag only for the
+  partitions it owns, measured against the group's committed offsets, so
+  a rebalance no longer leaves a stale or double-counted series.
 
 ### Changed
 
