@@ -426,8 +426,10 @@ func (s *Lane[T]) refreshLag(ctx context.Context) {
 	}
 	for p, off := range ends {
 		tp := broker.TopicPartition{Topic: s.spec.topic, Partition: p}
-		if _, ok := s.hw[tp]; ok {
-			s.hw[tp] = off
+		// A log end never moves back; a lookup that raced a poll may be
+		// older than what the poll reported.
+		if cur, ok := s.hw[tp]; ok {
+			s.hw[tp] = max(cur, off)
 			s.setLag(tp)
 		}
 	}

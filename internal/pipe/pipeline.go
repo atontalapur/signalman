@@ -47,6 +47,9 @@ type Config struct {
 	RetryBackoff time.Duration
 	// SampleInterval is how often queue depth is sampled. Default 1s.
 	SampleInterval time.Duration
+	// LagRefreshInterval is how often the lag gauge is recomputed from the
+	// broker's log end, independent of polling. Default 5s.
+	LagRefreshInterval time.Duration
 	// RuleEvalEvery times every rule on events whose Seq is a multiple of
 	// it, for signalman_rule_eval_seconds. 0 turns timing off. The timed
 	// walk is separate from the verdicts and its result is discarded, so
@@ -112,6 +115,9 @@ func New(cfg Config, b broker.Broker, norm *Normalizer, slot *Slot, m *obs.Metri
 	}
 	if cfg.RetryBackoff <= 0 {
 		cfg.RetryBackoff = 100 * time.Millisecond
+	}
+	if cfg.LagRefreshInterval <= 0 {
+		cfg.LagRefreshInterval = 5 * time.Second
 	}
 	if cfg.SampleInterval <= 0 {
 		cfg.SampleInterval = time.Second
@@ -667,6 +673,35 @@ func (p *Pipeline) observe(hw map[broker.TopicPartition]int64) {
 	}
 }
 
+// refreshLag recomputes the lag gauge from the broker's log end. A poll
+// reports high watermarks too, but ingest stops polling when a stage stalls
+// and blocks it on a full queue, which is when the backlog grows. Only
+// partitions a poll has reported are refreshed: they are the ones this
+// process is assigned, and its committed offsets for any other are stale.
+// The lookup is bounded so a slow broker does not hold up the sampler.
+func (p *Pipeline) refreshLag(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, lagRefreshTimeout)
+	defer cancel()
+	ends, err := p.b.EndOffsets(ctx, TopicEventsRaw)
+	if err != nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for part, off := range ends {
+		tp := broker.TopicPartition{Topic: TopicEventsRaw, Partition: part}
+		// A log end never moves back; a lookup that raced a poll may be
+		// older than what the poll reported.
+		if cur, ok := p.hw[tp]; ok {
+			p.hw[tp] = max(cur, off)
+			p.setLag(tp)
+		}
+	}
+}
+
+// lagRefreshTimeout bounds refreshLag's broker lookup.
+const lagRefreshTimeout = 2 * time.Second
+
 // setLag is the log end minus the committed offset: records that would be
 // processed again if the process died now. Caller holds p.mu.
 func (p *Pipeline) setLag(tp broker.TopicPartition) {
@@ -680,7 +715,12 @@ func (p *Pipeline) setLag(tp broker.TopicPartition) {
 func (p *Pipeline) sample(ctx context.Context, normCh, matchCh, sinkCh chan work, batchCh chan *batch) {
 	t := time.NewTicker(p.cfg.SampleInterval)
 	defer t.Stop()
+	var lastLag time.Time
 	for {
+		if time.Since(lastLag) >= p.cfg.LagRefreshInterval {
+			p.refreshLag(ctx)
+			lastLag = time.Now()
+		}
 		p.m.StageQueueDepth.WithLabelValues(StageNormalize).Set(float64(len(normCh)))
 		p.m.StageQueueDepth.WithLabelValues(StageMatch).Set(float64(len(matchCh)))
 		p.m.StageQueueDepth.WithLabelValues(StageSink).Set(float64(len(sinkCh)))
