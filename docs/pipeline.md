@@ -342,7 +342,7 @@ registered by `cmd/differ`, not here; they are listed in `docs/cutover.md`.
 | `signalman_rule_matches_total` | counter | rule_id | sink, per durable alert, from whichever engine serves the rule |
 | `signalman_rule_eval_seconds` | histogram | rule_id | match workers, sampled (`-rule-eval-every`) |
 | `signalman_stage_queue_depth` | gauge | stage (normalize, match, sink, batches) | sampled every second |
-| `signalman_consumer_lag_records` | gauge | topic, partition | log end offset minus committed offset |
+| `signalman_consumer_lag_records` | gauge | topic, partition | log end offset minus committed offset, refreshed on each poll and from the broker every 5 s (signalmand) or on each retry (sinks), so a stall does not freeze it |
 | `signalman_event_staleness_seconds` | gauge | partition | now minus the newest durable event time, at scrape |
 | `signalman_canary_age_seconds` | gauge | partition | signalmand: seconds since the last canary alert was durable on `alerts`, at scrape |
 | `signalman_ruleset_version_info` | gauge | ruleset_v, taxonomy_v | the slot, on every reload |

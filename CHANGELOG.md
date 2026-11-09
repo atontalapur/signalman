@@ -11,6 +11,9 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
   outage. It used to freeze at its last value, because the sink stops
   polling while it retries, and showed 1,043 while 1.2 million records
   waited.
+- signalmand's `events.raw` lag gauge no longer freezes when a stalled
+  stage stops it polling. It is now recomputed from the broker every 5
+  seconds as well as on each poll.
 
 ### Changed
 
