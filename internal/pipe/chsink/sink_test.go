@@ -256,6 +256,40 @@ func TestSinkBackpressuresDuringOutage(t *testing.T) {
 	sameKeys(t, want, ch.tbl.final())
 }
 
+// While an insert is retried the sink does not poll, so the high watermarks
+// a poll returns go stale. The lag gauge must still count what arrives
+// during the outage: it is the backlog an operator looks for. The G0-era
+// Redpanda run showed it frozen at 1,043 while the backlog was 1.2 million.
+func TestSinkLagGrowsDuringOutage(t *testing.T) {
+	b := newBroker(10)
+	first := produceAlerts(t, b, 30)
+	ch := &flaky{tbl: &replacingTable{}, down: true}
+	reg := prometheus.NewRegistry()
+	s, err := New(testConfig(), b, ch, obs.New(reg), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lag := func() float64 {
+		var sum float64
+		for p := range 3 {
+			sum += testutil.ToFloat64(s.m.ConsumerLag.WithLabelValues(pipe.TopicAlerts, strconv.Itoa(p)))
+		}
+		return sum
+	}
+	stop := start(t, s)
+	waitFor(t, "the first insert attempts", func() bool { return ch.attemptCount() >= 3 })
+	later := produceAlerts(t, b, 60)
+	waitFor(t, "lag counting the alerts produced during the outage", func() bool {
+		return lag() == float64(len(first)+len(later))
+	})
+	ch.setDown(false)
+	waitFor(t, "every offset committed after recovery", func() bool { return committedAll(t, b) })
+	waitFor(t, "lag back to zero", func() bool { return lag() == 0 })
+	if err := stop(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v", err)
+	}
+}
+
 // A crash after the insert and before the commit redelivers the batch. The
 // table after the second run, merged, is the table a single delivery leaves.
 func TestSinkRedeliveryCollapses(t *testing.T) {

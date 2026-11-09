@@ -247,6 +247,7 @@ func (s *Lane[T]) insert(ctx context.Context, rows []T) error {
 			return err
 		}
 		s.log.Warn("insert failed, retrying the batch; not polling until it lands", "rows", len(rows), "err", err)
+		s.refreshLag(ctx)
 		if !sleep(ctx, wait) {
 			return ctx.Err()
 		}
@@ -352,6 +353,7 @@ func (s *Lane[T]) deadLetter(ctx context.Context, r broker.Record, reason error)
 				r.Topic, r.Partition, r.Offset, reason, s.spec.dead, err)
 		}
 		s.log.Warn("dead-letter write failed, retrying; not polling until it lands", "err", err)
+		s.refreshLag(ctx)
 		if !sleep(ctx, wait) {
 			return ctx.Err()
 		}
@@ -397,6 +399,26 @@ func (s *Lane[T]) observe(hw map[broker.TopicPartition]int64) {
 		s.hw[tp] = off
 		s.setLag(tp)
 	}
+}
+
+// refreshLag asks the broker for the topic's log end and resets the lag
+// gauge from it. A retry loop calls it because the sink is not polling then,
+// so the high watermarks a poll reports stop moving exactly while the
+// backlog grows. A failed lookup keeps the last value; the broker may be the
+// thing that is down.
+func (s *Lane[T]) refreshLag(ctx context.Context) {
+	if s.m == nil {
+		return
+	}
+	ends, err := s.b.EndOffsets(ctx, s.spec.topic)
+	if err != nil {
+		return
+	}
+	hw := make(map[broker.TopicPartition]int64, len(ends))
+	for p, off := range ends {
+		hw[broker.TopicPartition{Topic: s.spec.topic, Partition: p}] = off
+	}
+	s.observe(hw)
 }
 
 // setLag is signalman_consumer_lag_records for the sink's group: the log end
