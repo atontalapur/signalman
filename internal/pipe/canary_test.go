@@ -336,3 +336,61 @@ func TestCanaryAgeClimbsWhenNothingEverConsumes(t *testing.T) {
 		}
 	}
 }
+
+// partitionDown is a broker whose events.raw partition down has no leader:
+// listing offsets fails for the whole topic, as kadm reports one shard
+// error, and any produce holding a record for it fails.
+type partitionDown struct {
+	*broker.Memory
+	down int32
+}
+
+var errNoLeader = errors.New("NOT_LEADER_FOR_PARTITION")
+
+func (b *partitionDown) EndOffsets(ctx context.Context, topic string) (map[int32]int64, error) {
+	if topic == TopicEventsRaw && b.down >= 0 {
+		return nil, errNoLeader
+	}
+	return b.Memory.EndOffsets(ctx, topic)
+}
+
+func (b *partitionDown) Produce(ctx context.Context, recs []broker.Record) error {
+	for _, r := range recs {
+		if r.Topic == TopicEventsRaw && r.Partition == b.down {
+			return errNoLeader
+		}
+	}
+	return b.Memory.Produce(ctx, recs)
+}
+
+// One partition losing its leader must not stop the canary on the others:
+// on Redpanda (docs/load.md, "One partition offline") a single broker down
+// paged SignalmanCanaryStalled for all eight partitions, which hides which
+// one is actually out.
+func TestCanaryKeepsTheOtherPartitionsWhenOneIsDown(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1790000000, 0)}
+	mem := newMemory()
+	r := newRigClock(t, mem, mem, clk.Now)
+	b := &partitionDown{Memory: mem, down: -1}
+	canary := NewCanary(b, r.m, clk.Now, nil)
+	if err := canary.Inject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b.down = 2
+	if err := canary.Inject(context.Background()); err == nil {
+		t.Fatal("an injection with partition 2 down reported no error")
+	}
+	end, err := mem.EndOffsets(context.Background(), TopicEventsRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, e := range end {
+		want := int64(2)
+		if p == 2 {
+			want = 1
+		}
+		if e != want {
+			t.Errorf("partition %d holds %d canaries after two injections, want %d", p, e, want)
+		}
+	}
+}
