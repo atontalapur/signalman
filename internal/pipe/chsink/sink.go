@@ -198,6 +198,7 @@ func (s *Lane[T]) Run(ctx context.Context) error {
 				continue
 			}
 			s.log.Warn("poll failed, retrying", "err", err)
+			s.refreshLag(ctx)
 			if !sleep(ctx, s.cfg.RetryBackoff) {
 				return ctx.Err()
 			}
@@ -406,20 +407,34 @@ func (s *Lane[T]) observe(hw map[broker.TopicPartition]int64) {
 // so the high watermarks a poll reports stop moving exactly while the
 // backlog grows. A failed lookup keeps the last value; the broker may be the
 // thing that is down.
+//
+// Only partitions a poll has already reported are refreshed: those are the
+// ones this lane is assigned. With several sinks in one group, another
+// instance's partitions are its own to report, and this lane's committed
+// offsets for them are stale. An assigned partition no poll has touched yet
+// stays unreported until one does. The lookup is bounded so a slow broker does
+// not stretch the retry it rides on.
 func (s *Lane[T]) refreshLag(ctx context.Context) {
-	if s.m == nil {
+	if s.m == nil || len(s.hw) == 0 {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, lagRefreshTimeout)
+	defer cancel()
 	ends, err := s.b.EndOffsets(ctx, s.spec.topic)
 	if err != nil {
 		return
 	}
-	hw := make(map[broker.TopicPartition]int64, len(ends))
 	for p, off := range ends {
-		hw[broker.TopicPartition{Topic: s.spec.topic, Partition: p}] = off
+		tp := broker.TopicPartition{Topic: s.spec.topic, Partition: p}
+		if _, ok := s.hw[tp]; ok {
+			s.hw[tp] = off
+			s.setLag(tp)
+		}
 	}
-	s.observe(hw)
 }
+
+// lagRefreshTimeout bounds refreshLag's broker lookup.
+const lagRefreshTimeout = 2 * time.Second
 
 // setLag is signalman_consumer_lag_records for the sink's group: the log end
 // minus the committed offset. During an outage it is where the

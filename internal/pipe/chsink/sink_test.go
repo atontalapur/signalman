@@ -258,10 +258,13 @@ func TestSinkBackpressuresDuringOutage(t *testing.T) {
 
 // While an insert is retried the sink does not poll, so the high watermarks
 // a poll returns go stale. The lag gauge must still count what arrives
-// during the outage: it is the backlog an operator looks for. The G0-era
-// Redpanda run showed it frozen at 1,043 while the backlog was 1.2 million.
+// during the outage: it is the backlog an operator looks for. The ClickHouse
+// outage on Redpanda (docs/load.md, "ClickHouse unavailable") showed it
+// frozen at 1,043 while the backlog was 1.2 million.
 func TestSinkLagGrowsDuringOutage(t *testing.T) {
-	b := newBroker(10)
+	// One poll takes all 30 and so touches every partition; refreshLag
+	// reports only partitions a poll has shown the lane.
+	b := newBroker(100)
 	first := produceAlerts(t, b, 30)
 	ch := &flaky{tbl: &replacingTable{}, down: true}
 	reg := prometheus.NewRegistry()
@@ -287,6 +290,31 @@ func TestSinkLagGrowsDuringOutage(t *testing.T) {
 	waitFor(t, "lag back to zero", func() bool { return lag() == 0 })
 	if err := stop(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned %v", err)
+	}
+}
+
+// refreshLag reports only partitions a poll has shown this lane. Another
+// sink in the same group owns the rest, and this lane's committed offsets
+// for them are a startup snapshot.
+func TestRefreshLagSkipsUnassignedPartitions(t *testing.T) {
+	b := newBroker(10)
+	produceAlerts(t, b, 30)
+	s, err := New(testConfig(), b, &replacingTable{}, obs.New(prometheus.NewRegistry()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.hw = map[broker.TopicPartition]int64{{Topic: pipe.TopicAlerts, Partition: 0}: 0}
+	s.committed = map[broker.TopicPartition]int64{}
+	s.refreshLag(context.Background())
+	ends, err := b.EndOffsets(context.Background(), pipe.TopicAlerts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := testutil.ToFloat64(s.m.ConsumerLag.WithLabelValues(pipe.TopicAlerts, "0")); v != float64(ends[0]) {
+		t.Fatalf("assigned partition 0 lag %v, want %d", v, ends[0])
+	}
+	if n := testutil.CollectAndCount(s.m.ConsumerLag); n != 1 {
+		t.Fatalf("%d lag series after refresh, want only the assigned partition", n)
 	}
 }
 
