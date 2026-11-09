@@ -117,9 +117,11 @@ func TestSampleTextCutsOnARuneBoundary(t *testing.T) {
 }
 
 // The committed noise corpus (testdata/noise, made by
-// scripts/gen_noise_corpus.py) is ordinary activity. Every shipped rule
-// keys on how a tool is used, so none fires on it; a rule that fires on a
-// binary's name alone does, and its budget fails.
+// scripts/gen_noise_corpus.py) is ordinary Sysmon activity, so no shipped
+// rule fires on it. That is weaker than it reads for some rules: one on
+// `service: security`, or on a binary the corpus never runs, cannot fire
+// whatever it says. The name-only rule below shows events do reach the
+// process_creation rules through the taxonomy.
 func TestNoiseCorpusIsQuietForShippedRules(t *testing.T) {
 	rules, err := filepath.Glob("../../rules/*.yml")
 	if err != nil {

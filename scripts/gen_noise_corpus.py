@@ -18,7 +18,16 @@ The output is deterministic for a seed, so the committed corpus can be
 regenerated and diffed. It is synthetic: it finds rules that fire on
 everyday activity, and it cannot stand in for a real fleet's long tail.
 
+Process starts are Sysmon event 1, not Security 4688. Most rules resolve
+to the Sysmon taxonomy entry, and an event no rule can see would still
+count in the per-100k denominator and dilute every rate. Rules on
+`service: security` are therefore not exercised by this corpus.
+
+Public addresses come from the RFC 5737 documentation ranges, so no event
+names a real third party that an IOC list could match by chance.
+
 Usage: scripts/gen_noise_corpus.py OUT.ndjson [--events N] [--seed S]
+The committed corpus is the defaults: 10,000 events, seed 1.
 """
 
 import argparse
@@ -90,15 +99,18 @@ CONNECTIONS = [
 ]
 
 
+# The committed corpus's size; the seed default is 1.
+EVENTS = 10000
+
+
 def ip(rng: random.Random, kind: str) -> str:
     if kind == "dns":
         return "10.0.0.53"
     if kind == "intranet":
         return f"10.{rng.randint(1, 40)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
-    # Documentation and well-known public ranges, never private.
-    first = rng.choice([13, 20, 23, 34, 52, 104, 142, 151, 172, 185])
-    second = rng.randint(0, 255) if first != 172 else rng.randint(32, 255)
-    return f"{first}.{second}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+    # RFC 5737 documentation ranges: public, never routed, never real.
+    net = rng.choice(["192.0.2", "198.51.100", "203.0.113"])
+    return f"{net}.{rng.randint(1, 254)}"
 
 
 def user(rng: random.Random, kind: str) -> str:
@@ -109,10 +121,6 @@ def process(rng: random.Random) -> dict:
     _, kind, parent, img, cmd = rng.choices(PROCESSES, weights=[p[0] for p in PROCESSES])[0]
     u = user(rng, kind)
     line = cmd.format(img=img, n=rng.randint(1, 900), u=u.split("\\")[-1], doc=rng.choice(HOSTS_DOCS), svc=rng.choice(SERVICES))
-    if rng.random() < 0.25:
-        # The same process start as the Security log's 4688 records it.
-        return {"channel": "Security", "event_id": 4688, "NewProcessName": img, "CommandLine": line,
-                "ParentProcessName": parent, "SubjectUserName": u.split("\\")[-1]}
     return {"channel": SYSMON, "event_id": 1, "Image": img, "CommandLine": line, "ParentImage": parent, "User": u}
 
 
@@ -135,7 +143,7 @@ def lines(n: int, seed: int = 1):
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("out")
-    p.add_argument("--events", type=int, default=20000)
+    p.add_argument("--events", type=int, default=EVENTS)
     p.add_argument("--seed", type=int, default=1)
     args = p.parse_args(argv)
     with open(args.out, "w", encoding="utf-8") as f:
