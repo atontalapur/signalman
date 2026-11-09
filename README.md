@@ -105,7 +105,7 @@ key given twice in one object is rejected, and an empty object `{}` adds no
 fields. A fixture file is one YAML document. A rule may
 declare `budget:` in matches per 100k events; noise exits 1 above it.
 
-Plan F has started. `internal/loadtest` runs the pipeline in process over
+Plan F is done. `internal/loadtest` runs the pipeline in process over
 the in-memory broker behind a tap that checks every batch's outputs, and
 `cmd/loadgen` replays a corpus (ndjson, or events generated from a rule
 directory) into `events.raw` on Kafka at a multiple of a measured baseline.
@@ -114,7 +114,10 @@ consumer killed between durable outputs and commit, poison records, rule
 reloads every 250 ms, a 30 s output outage, and an offline partition, every
 event ended as verdicts or a drop, and the verdict digest matched a clean
 replay wherever one is comparable. Overload showed up as broker lag,
-never as loss. `docs/load.md` has the answers and lists what still needs Redpanda and ClickHouse.
+never as loss. The same experiments then ran on Redpanda and ClickHouse,
+and one partition offline on a three-broker cluster; they found and fixed a
+lag gauge that froze while a consumer stopped polling and a canary that
+paged every partition when one was down. `docs/load.md` has the answers.
 
 Plan C's code has landed. `cmd/signalmand` consumes `events.raw`, assigns Seq
 from the offset, normalizes through the taxonomy, evaluates with v1, and
@@ -197,9 +200,9 @@ detector.
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | done: one-hour soak on Redpanda, 3.72M events, audit green throughout, gate passed |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | done: SQL compiler, alert and events sinks, `signalman hunt`; the hunt over `rules/` equals a v1 replay on a real ClickHouse, gate passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | done: a killed signalmand pages in 51 s and a stalled one in 95 s on the compose stack, gate passed |
-| F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); on Redpanda and ClickHouse, overload, five kills, a 10-minute ClickHouse outage, poison records, and reloads lost nothing; one partition offline on three brokers: signalmand kept the live partitions current and the canary pages only the dead one |
+| F. Load behavior | load harness, seven experiments, `docs/load.md` | done: all seven experiments in `docs/load.md`, in process and on Redpanda and ClickHouse (85 minutes of overload with no new drops, five consumer kills, a 10-minute ClickHouse outage, poison records, reloads, one partition offline on three brokers); v1 baseline 2,465 events/s on 1,236 rules; gate passed |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; G0 passed (offline); G1 to G6 not run against traffic, no game day run |
-| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow passed on its first real rule PR (`signalman-canary`, #44); a synthetic benign noise corpus (`testdata/noise`) on which no shipped rule fires |
+| H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | done: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md`; the workflow passed on its first real rule PR (`signalman-canary`, #44); the noise gate runs in CI on a synthetic benign corpus (`testdata/noise`) on which no shipped rule fires |
 
 A plan is done when its gate in the roadmap passes, not when its tasks are
 ticked. Plan G is the point; C through F exist so G has real traffic, real
