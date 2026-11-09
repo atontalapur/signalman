@@ -314,7 +314,8 @@ func (c *memConsumer) take() Fetch {
 }
 
 // Owned is every partition the consumer reads: the memory broker has one
-// member per group and no rebalance.
+// member per group and no rebalance, and a positioned reader owns what it
+// was given.
 func (c *memConsumer) Owned() []TopicPartition {
 	return slices.Clone(c.order)
 }

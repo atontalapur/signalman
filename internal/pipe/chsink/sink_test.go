@@ -42,15 +42,6 @@ type countingConsumer struct {
 	n *atomic.Int64
 }
 
-// Owned passes ownership through, so lag accounting sees what the wrapped
-// consumer owns.
-func (c *countingConsumer) Owned() []broker.TopicPartition {
-	if o, ok := c.Consumer.(broker.Owner); ok {
-		return o.Owned()
-	}
-	return nil
-}
-
 func (c *countingConsumer) Poll(ctx context.Context) (broker.Fetch, error) {
 	f, err := c.Consumer.Poll(ctx)
 	if err == nil {

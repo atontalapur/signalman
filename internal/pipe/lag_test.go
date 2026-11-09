@@ -101,3 +101,48 @@ func TestLagLogEndNeverMovesBack(t *testing.T) {
 		t.Fatalf("lag %v after a stale poll; want %d", v, ends[0])
 	}
 }
+
+// The group's committed offset wins over this process's record, which can
+// name a commit the broker dropped for a partition this member had lost.
+func TestLagGroupCommitOverridesLocal(t *testing.T) {
+	mem, g, l := lagRig(t)
+	other, err := mem.Consume("signalmand", []string{TopicEventsRaw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := other.Commit(context.Background(), map[broker.TopicPartition]int64{tp(1): 3}); err != nil {
+		t.Fatal(err)
+	}
+	l.Committed(map[broker.TopicPartition]int64{tp(1): 9}) // dropped by the broker
+	ends, _ := mem.EndOffsets(context.Background(), TopicEventsRaw)
+	l.Refresh(context.Background(), owner{parts: []broker.TopicPartition{tp(1)}})
+	if v := gauge(g, 1); v != float64(ends[1]-3) {
+		t.Fatalf("partition 1 lag %v, want %d against the group's commit 3", v, ends[1]-3)
+	}
+}
+
+// A partition the group never committed counts from the log start, not
+// from offset 0: retention already removed what is below it.
+func TestLagUncommittedPartitionCountsFromLogStart(t *testing.T) {
+	mem, g, l := lagRig(t)
+	mem.Trim(tp(2), 6)
+	ends, _ := mem.EndOffsets(context.Background(), TopicEventsRaw)
+	l.Refresh(context.Background(), owner{parts: []broker.TopicPartition{tp(2)}})
+	if v := gauge(g, 2); v != float64(ends[2]-6) {
+		t.Fatalf("partition 2 lag %v, want %d from the log start 6", v, ends[2]-6)
+	}
+}
+
+// A poll result from before a revoke does not bring back the series the
+// refresh deleted.
+func TestLagStalePollAfterRevokeStaysDeleted(t *testing.T) {
+	mem, g, l := lagRig(t)
+	ends, _ := mem.EndOffsets(context.Background(), TopicEventsRaw)
+	l.Observe(map[broker.TopicPartition]int64{tp(0): ends[0], tp(1): ends[1]})
+	l.Refresh(context.Background(), owner{parts: []broker.TopicPartition{tp(0)}})
+	l.Observe(map[broker.TopicPartition]int64{tp(1): ends[1]})
+	if n := testutil.CollectAndCount(g); n != 1 {
+		t.Fatalf("%d series after a stale poll for revoked partition 1; want 1", n)
+	}
+}

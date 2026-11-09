@@ -21,10 +21,9 @@ import (
 // offsets too, because after a rebalance this process's own record of them
 // is a snapshot from before another member committed.
 //
-// Only partitions this consumer owns are reported. A consumer that
-// implements broker.Owner says which; one that does not is taken to own
-// what its polls have reported. The series of a partition no longer owned
-// is deleted, so summing over the group's members does not count it twice.
+// Only partitions the consumer owns (broker.Consumer.Owned) are reported.
+// The series of a partition no longer owned is deleted, so summing over the
+// group's members does not count it twice.
 type Lag struct {
 	b     broker.Broker
 	group string
@@ -34,6 +33,10 @@ type Lag struct {
 	mu        sync.Mutex
 	hw        map[broker.TopicPartition]int64
 	committed map[broker.TopicPartition]int64
+	// disowned holds partitions the last refresh found owned by another
+	// member, so a poll result from before the revoke does not bring the
+	// series back.
+	disowned map[broker.TopicPartition]bool
 }
 
 // lagRefreshTimeout bounds each broker lookup a refresh makes.
@@ -45,6 +48,7 @@ func NewLag(b broker.Broker, group, topic string, gauge *prometheus.GaugeVec) *L
 		b: b, group: group, topic: topic, gauge: gauge,
 		hw:        map[broker.TopicPartition]int64{},
 		committed: map[broker.TopicPartition]int64{},
+		disowned:  map[broker.TopicPartition]bool{},
 	}
 }
 
@@ -68,6 +72,9 @@ func (l *Lag) Observe(hw map[broker.TopicPartition]int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for tp, off := range hw {
+		if l.disowned[tp] {
+			continue
+		}
 		// A log end never moves back. A refresh may have stored a newer
 		// one than this poll saw.
 		l.hw[tp] = max(l.hw[tp], off)
@@ -103,12 +110,27 @@ func (l *Lag) Run(ctx context.Context, cons broker.Consumer, interval time.Durat
 }
 
 // Refresh recomputes the gauge from the broker's log ends and the group's
-// committed offsets. A failed lookup leaves the gauge as it was; the broker
-// may be what is down.
+// committed offsets. The group's offset is authoritative: this process's
+// own record may name a commit the broker dropped for a partition it had
+// lost. A partition the group never committed is measured from the log
+// start, where a fresh consumer begins, not from offset 0. A failed lookup
+// leaves the gauge as it was; the broker may be what is down.
 func (l *Lag) Refresh(ctx context.Context, cons broker.Consumer) {
+	// Owned may wait on the consumer's own lock, which a slow commit holds;
+	// it is read before l.mu so that wait never blocks Observe.
+	owned := map[broker.TopicPartition]bool{}
+	for _, tp := range cons.Owned() {
+		if tp.Topic == l.topic {
+			owned[tp] = true
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, lagRefreshTimeout)
 	defer cancel()
 	ends, err := l.b.EndOffsets(ctx, l.topic)
+	if err != nil {
+		return
+	}
+	starts, err := l.b.StartOffsets(ctx, l.topic)
 	if err != nil {
 		return
 	}
@@ -118,42 +140,33 @@ func (l *Lag) Refresh(ctx context.Context, cons broker.Consumer) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	owned := l.owned(cons)
 	for tp := range l.hw {
 		if !owned[tp] {
 			delete(l.hw, tp)
+			delete(l.committed, tp)
+			l.disowned[tp] = true
 			if l.gauge != nil {
 				l.gauge.DeleteLabelValues(tp.Topic, strconv.Itoa(int(tp.Partition)))
 			}
 		}
 	}
-	for tp := range owned {
-		if tp.Topic != l.topic {
-			continue
+	for tp := range l.committed {
+		if !owned[tp] {
+			delete(l.committed, tp)
 		}
+	}
+	for tp := range owned {
+		delete(l.disowned, tp)
 		if end, ok := ends[tp.Partition]; ok {
 			l.hw[tp] = max(l.hw[tp], end)
 		}
 		if c, ok := group[tp.Partition]; ok {
-			l.committed[tp] = max(l.committed[tp], c)
+			l.committed[tp] = c
+		} else if st, ok := starts[tp.Partition]; ok {
+			l.committed[tp] = st
 		}
 		l.set(tp)
 	}
-}
-
-// owned is the set of partitions to report. Caller holds l.mu.
-func (l *Lag) owned(cons broker.Consumer) map[broker.TopicPartition]bool {
-	set := map[broker.TopicPartition]bool{}
-	if o, ok := cons.(broker.Owner); ok {
-		for _, tp := range o.Owned() {
-			set[tp] = true
-		}
-		return set
-	}
-	for tp := range l.hw {
-		set[tp] = true
-	}
-	return set
 }
 
 // set writes one partition's gauge. Caller holds l.mu.
