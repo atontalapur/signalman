@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.18.4] - 2026-11-09
+
+### Fixed
+
+- The alert and event sinks' lag gauge now grows during a ClickHouse
+  outage. It used to freeze at its last value, because the sink stops
+  polling while it retries, and showed 1,043 while 1.2 million records
+  waited.
+
+### Changed
+
+- `docs/load.md` records the load experiments run on Redpanda and
+  ClickHouse: 85 minutes of overload with no new drops, five consumer
+  kills, a 10-minute ClickHouse outage, poison records, and rule reloads.
+
 ## [0.18.3] - 2026-11-08
 
 ### Added
