@@ -3,10 +3,12 @@ package pipe
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/atontalapur/signalman/internal/broker"
@@ -72,30 +74,39 @@ func NewCanary(b broker.Broker, m *obs.Metrics, now func() time.Time, log *slog.
 // Inject writes one canary to every partition events.raw has now. Every
 // partition's age is started first, so a partition whose canary cannot
 // even be written still climbs toward the page.
+//
+// One partition without a leader must not silence the others, or the page
+// names every partition and hides which one is out. So the partitions come
+// from topic metadata, which needs no leader, and each partition's canary is
+// produced on its own with a short deadline, so a dead partition fails
+// fast instead of holding its record for the whole tick.
 func (c *Canary) Inject(ctx context.Context) error {
-	end, err := c.b.EndOffsets(ctx, TopicEventsRaw)
+	parts, err := c.b.Partitions(ctx, TopicEventsRaw)
 	if err != nil {
 		return fmt.Errorf("canary: list partitions: %w", err)
 	}
-	parts := make([]int32, 0, len(end))
-	for p := range end {
-		parts = append(parts, p)
-	}
 	slices.Sort(parts)
 	at := c.now()
-	recs := make([]broker.Record, len(parts))
+	errs := make([]error, len(parts))
+	var wg sync.WaitGroup
 	for i, p := range parts {
 		c.m.CanaryAge.Start(p)
-		recs[i] = CanaryRecord(p, at)
+		wg.Go(func() {
+			pctx, cancel := context.WithTimeout(ctx, canaryProduceTimeout)
+			defer cancel()
+			if err := c.b.Produce(pctx, []broker.Record{CanaryRecord(p, at)}); err != nil {
+				errs[i] = fmt.Errorf("canary: produce to partition %d: %w", p, err)
+				return
+			}
+			c.m.CanaryInjected.WithLabelValues(strconv.Itoa(int(p))).Inc()
+		})
 	}
-	if err := c.b.Produce(ctx, recs); err != nil {
-		return fmt.Errorf("canary: produce: %w", err)
-	}
-	for _, p := range parts {
-		c.m.CanaryInjected.WithLabelValues(strconv.Itoa(int(p))).Inc()
-	}
-	return nil
+	wg.Wait()
+	return errors.Join(errs...)
 }
+
+// canaryProduceTimeout bounds one partition's canary write.
+const canaryProduceTimeout = 10 * time.Second
 
 // Run injects now and then every interval until ctx ends. A failed
 // injection is logged and not retried: the next tick is the retry, and the

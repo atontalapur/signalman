@@ -387,6 +387,45 @@ generator or source writing to that partition blocks or errors, which this
 simulation does not model. A rebalance and the consumer's fetch error
 handling are also untested. Not run.
 
+**Run on Redpanda since** (2026-11-09, three brokers from
+`deploy/docker-compose.multibroker.yml`, `events.raw` with one replica so
+a broker's partitions go offline with it, every output topic with three).
+Partition 4 alone was on broker 2. Under `loadgen -baseline 2000 -duration
+6m`, broker 2 was stopped from 01:47:31 to 01:49:32 UTC.
+
+**Whether the other partitions kept processing.** signalmand did. Its lag
+on every live partition stayed 0, its fetches from the other brokers kept
+working, and it logged only audit steps that could not list offsets. No
+partition advanced, because the producer stopped. `loadgen` writes a batch
+across all partitions and waits for every ack, so a batch holding a record
+for partition 4 blocked everything behind it, and the run fell 2m5s behind
+schedule. That is the producer side the simulation could not show: a
+source that batches across partitions turns one dead partition into a
+stall of all of them. After broker 2 returned, all 720,000 records arrived
+with 0 retries, 0 drops and 0 audit violations, and lag ended at 0
+everywhere.
+
+**Whether the canary alerts on the dead partition.** It alerted on every
+partition, which was a bug. Listing `events.raw` offsets fails for the
+whole topic when one partition has no leader, and the canary wrote no
+canary anywhere, so `SignalmanCanaryStalled` fired for partitions 0 to 7
+and named no culprit. The canary now falls back to the last partition list
+it read and produces each partition's canary separately
+(`TestCanaryKeepsTheOtherPartitionsWhenOneIsDown`). Rerun with broker 2
+down for 150 s, by then leading partitions 4 and 5 after Redpanda moved
+one: `SignalmanCanaryStalled` fired for 4 and 5 only, their canary age
+read 154 s, and the other six stayed at 4 s. The partition list now comes
+from topic metadata (`broker.Partitions`), which needs no leader, so this
+also holds from a cold start.
+
+**Starting while a partition is down.** signalmand refuses to start until
+every `events.raw` partition has a leader. The audit takes its starting
+point, including each partition's log start, before the pipeline produces
+anything, and that lookup needs the dead partition. Starting without it
+would give up the invariant 1 proof for the run, so the refusal is kept.
+The startup topic check and the sink's listings now read partition counts
+from metadata and no longer fail on a leaderless partition.
+
 ## Since the recorded run
 
 The figures above come from the run of 2026-10-21, on the load harness
@@ -429,7 +468,7 @@ not checked against:
 | Poison record | run, every bad record one drop, no stall | on Redpanda: 200 records injected with `rpk`, 200 ledger entries, good records all stored |
 | Rule set reload | run, 236 reloads, zero straddles | on Redpanda: three `SIGHUP`s under 2,000/s, no drops or violations; a failed reload under load: not run |
 | ClickHouse unavailable | analogue run (output writes failing 30 s) | on Redpanda: ClickHouse down 10 min under 2,000/s, sinks held and retried, caught up in 3 min, 0 dead letters, partition 4 hunt equals stored alerts, sink canary paged; the sink lag gauge froze while the sink was not polling, fixed since |
-| One partition offline | run, other partitions kept going | leader loss on Redpanda; the canary alert (Plan E): not run |
+| One partition offline | run, other partitions kept going | on three Redpanda brokers: signalmand kept the live partitions at 0 lag, a batching producer stalled every partition, the canary now pages only the dead partitions (it paged all eight before the fix) |
 
 The Plan F gate, "the document answers all three questions per
 experiment", is not passed: three experiments have questions that only a

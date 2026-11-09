@@ -197,7 +197,7 @@ detector.
 | C. Pipeline | Redpanda ingest, normalizer, bounded stages, drop ledger, invariant audit job | done: one-hour soak on Redpanda, 3.72M events, audit green throughout, gate passed |
 | D. Sink and SQL backend | ClickHouse alert schema, AST to SQL compiler, retro-hunt | done: SQL compiler, alert and events sinks, `signalman hunt`; the hunt over `rules/` equals a v1 replay on a real ClickHouse, gate passed |
 | E. Observability | metrics, dashboards, canary generator, silence detector | done: a killed signalmand pages in 51 s and a stalled one in 95 s on the compose stack, gate passed |
-| F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); on Redpanda and ClickHouse, overload, five kills, a 10-minute ClickHouse outage, poison records, and reloads lost nothing; one partition offline needs a multi-broker cluster, not run |
+| F. Load behavior | load harness, seven experiments, `docs/load.md` | in progress: `cmd/loadgen` and `internal/loadtest` built; v1 baseline 2,465 events/s on 1,236 rules in process; all seven experiments run in process over the in-memory broker (zero drops at 2x, digest unchanged after consumer kills); on Redpanda and ClickHouse, overload, five kills, a 10-minute ClickHouse outage, poison records, and reloads lost nothing; one partition offline on three brokers: signalmand kept the live partitions current and the canary pages only the dead one |
 | G. Compiled engine and cutover | `internal/engine/v2`, shadow lane, differ, rollout flags, gate checker, game day, `docs/cutover.md` | in progress: v2 engine digest-identical to v1 on the corpus; shadow lane, differ, per-rule rollout with file-driven rollback, the G0 to G6 gate checker, the game day tool, and `-serve v2` built and tested in memory; G0 passed (offline); G1 to G6 not run against traffic, no game day run |
 | H. Author surface | `signalman lint / noise / bench`, rule PR CI gates, `docs/authoring.md` | in progress: lint, noise, bench, `budget:`, `signalman gates`, the rules workflow, and `docs/authoring.md` built; the workflow passed on its first real rule PR (`signalman-canary`, #44); a synthetic benign noise corpus (`testdata/noise`) on which no shipped rule fires |
 
@@ -260,7 +260,7 @@ internal/loadtest/      in-process load harness: pacer, output tap, failure inje
 internal/obs/           metrics, including the scrape-time staleness and canary age gauges
 internal/verdict/       verdict digest, one rolling hash per partition
 test/fuzz/              pySigma differential fuzzer, oracle bridge, KNOWN_DIVERGENCES.md
-deploy/                 Dockerfile; docker compose for Redpanda, topic setup, ClickHouse, Prometheus, Grafana
+deploy/                 Dockerfile; docker compose for Redpanda, topic setup, ClickHouse, Prometheus, Grafana; a three-broker Redpanda for the partition-offline experiment
 deploy/clickhouse/      ClickHouse init SQL: the alerts table (spec columns plus engine), its migration, and the events table
 deploy/prometheus/      scrape config, alert rules (absence, pipeline), promtool tests
 deploy/grafana/         provisioning and the pipeline dashboard

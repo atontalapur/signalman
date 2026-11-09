@@ -168,7 +168,7 @@ func (s *Lane[T]) Run(ctx context.Context) error {
 	var lagWG sync.WaitGroup
 	lagWG.Go(func() { s.lag.Run(lagCtx, cons, s.cfg.LagRefreshInterval) })
 	defer func() { stopLag(); lagWG.Wait() }()
-	if parts, err := s.b.EndOffsets(ctx, s.spec.dead); err != nil || len(parts) == 0 {
+	if parts, err := s.b.Partitions(ctx, s.spec.dead); err != nil || len(parts) == 0 {
 		return fmt.Errorf("dead-letter topic %s is required and was not found: %v", s.spec.dead, err)
 	}
 	if err := s.startCanary(ctx); err != nil {
@@ -283,11 +283,11 @@ func (s *Lane[T]) startCanary(ctx context.Context) error {
 	if s.m == nil || s.spec.canary == nil {
 		return nil
 	}
-	parts, err := s.b.EndOffsets(ctx, pipe.TopicEventsRaw)
+	parts, err := s.b.Partitions(ctx, pipe.TopicEventsRaw)
 	if err != nil || len(parts) == 0 {
 		return fmt.Errorf("topic %s is required for the canary age and was not found: %v", pipe.TopicEventsRaw, err)
 	}
-	for p := range parts {
+	for _, p := range parts {
 		s.m.SinkCanaryAge.Start(p)
 	}
 	return nil

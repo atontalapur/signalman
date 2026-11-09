@@ -160,6 +160,20 @@ func (m *Memory) ReadFrom(start map[TopicPartition]int64) (Consumer, error) {
 	return c, nil
 }
 
+func (m *Memory) Partitions(ctx context.Context, topic string) ([]int32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ps, ok := m.topics[topic]
+	if !ok {
+		return nil, fmt.Errorf("partitions: unknown topic %q", topic)
+	}
+	out := make([]int32, len(ps))
+	for p := range ps {
+		out[p] = int32(p)
+	}
+	return out, nil
+}
+
 func (m *Memory) EndOffsets(ctx context.Context, topic string) (map[int32]int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
