@@ -122,6 +122,64 @@ func TestPipelineCommitsOnlyWhatIsDurable(t *testing.T) {
 	}
 }
 
+// With the pipeline stalled, ingest blocks on a full queue and stops
+// polling, so no poll reports new high watermarks. The lag gauge must still
+// count records produced during the stall; otherwise it freezes exactly
+// when the backlog grows. Found by code review after the sink's version of
+// the same freeze (docs/load.md, "ClickHouse unavailable").
+func TestPipelineLagGrowsWhileStalled(t *testing.T) {
+	mem := newMemory(broker.WithMaxPoll(4))
+	g := &gated{Broker: mem, hold: make(chan struct{})}
+	r := newRig(t, g, mem)
+	gen := func(from, n int) []broker.Record {
+		var recs []broker.Record
+		for i := from; len(recs) < n; i++ {
+			if i%7 != 6 {
+				recs = append(recs, genRaw(i))
+			}
+		}
+		return recs
+	}
+	if err := mem.Produce(context.Background(), gen(0, 200)); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.LagRefreshInterval = time.Millisecond
+	p := newPipeline(t, r, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- p.Run(ctx) }()
+
+	lag := func() float64 {
+		var sum float64
+		for part := 0; part < testPartitions; part++ {
+			sum += testutil.ToFloat64(r.m.ConsumerLag.WithLabelValues(TopicEventsRaw, strconv.Itoa(part)))
+		}
+		return sum
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for lag() < 200 {
+		if time.Now().After(deadline) {
+			t.Fatalf("lag %v before the extra records; want the 200 already produced", lag())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := mem.Produce(context.Background(), gen(1000, 300)); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for lag() != 500 {
+		if time.Now().After(deadline) {
+			t.Fatalf("lag %v while stalled; want 500, the 300 produced during the stall included", lag())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(g.hold)
+	cancel()
+	<-errc
+}
+
 func TestPipelineLagsInsteadOfDropping(t *testing.T) {
 	mem := newMemory(broker.WithMaxPoll(4))
 	g := &gated{Broker: mem, hold: make(chan struct{})}

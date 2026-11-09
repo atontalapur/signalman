@@ -1,6 +1,8 @@
 package kafka
 
 import (
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/atontalapur/signalman/internal/broker"
@@ -42,6 +44,13 @@ func (o *ownership) assign(m map[string][]int32) {
 		o.floor = map[broker.TopicPartition]int64{}
 	}
 	each(m, func(tp broker.TopicPartition) { o.floor[tp] = -1 })
+}
+
+// owned lists the partitions currently assigned.
+func (o *ownership) owned() []broker.TopicPartition {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Collect(maps.Keys(o.floor))
 }
 
 func (o *ownership) revoke(m map[string][]int32) {

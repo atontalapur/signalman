@@ -3,6 +3,25 @@
 All notable changes to this project are documented here. Format follows
 Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 
+## [0.18.4] - 2026-11-08
+
+### Fixed
+
+- The lag gauge, `signalman_consumer_lag_records`, now keeps moving when a
+  consumer stops polling. A sink retrying a ClickHouse insert showed 1,043
+  while 1.2 million records waited, and a stalled signalmand froze the
+  same way. Both now refresh it from the broker every 5 seconds as well as
+  on each poll.
+- With several members in one group, each reports lag only for the
+  partitions it owns, measured against the group's committed offsets, so
+  a rebalance no longer leaves a stale or double-counted series.
+
+### Changed
+
+- `docs/load.md` records the load experiments run on Redpanda and
+  ClickHouse: 85 minutes of overload with no new drops, five consumer
+  kills, a 10-minute ClickHouse outage, poison records, and rule reloads.
+
 ## [0.18.3] - 2026-11-08
 
 ### Added

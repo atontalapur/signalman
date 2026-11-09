@@ -28,7 +28,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/atontalapur/signalman/internal/broker"
 	"github.com/atontalapur/signalman/internal/obs"
@@ -79,6 +82,10 @@ type Config struct {
 	// to MaxBackoff. Defaults 100ms and 5s.
 	RetryBackoff time.Duration
 	MaxBackoff   time.Duration
+	// LagRefreshInterval is how often the lag gauge is recomputed from the
+	// broker, independent of polling, which stops while an insert retries.
+	// Default 5s.
+	LagRefreshInterval time.Duration
 }
 
 func (c Config) validate() error {
@@ -104,9 +111,7 @@ type Lane[T any] struct {
 	m    *obs.Metrics
 	log  *slog.Logger
 
-	// Lag accounting, touched only by the Run goroutine.
-	hw        map[broker.TopicPartition]int64
-	committed map[broker.TopicPartition]int64
+	lag *pipe.Lag
 }
 
 // Sink moves alerts from the alerts topic to the alerts table.
@@ -127,10 +132,18 @@ func newLane[T any](cfg Config, spec laneSpec[T], b broker.Broker, ins RowInsert
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = 5 * time.Second
 	}
+	if cfg.LagRefreshInterval <= 0 {
+		cfg.LagRefreshInterval = 5 * time.Second
+	}
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Lane[T]{cfg: cfg, spec: spec, b: b, ins: ins, m: m, log: log}, nil
+	var gauge *prometheus.GaugeVec
+	if m != nil {
+		gauge = m.ConsumerLag
+	}
+	return &Lane[T]{cfg: cfg, spec: spec, b: b, ins: ins, m: m, log: log,
+		lag: pipe.NewLag(b, cfg.Group, spec.topic, gauge)}, nil
 }
 
 // Run consumes the lane's topic until ctx ends or a record cannot be
@@ -146,9 +159,15 @@ func (s *Lane[T]) Run(ctx context.Context) error {
 		return err
 	}
 	defer cons.Close()
-	if err := s.loadCommitted(ctx); err != nil {
+	if err := s.lag.Load(ctx); err != nil {
 		return err
 	}
+	// Lag is refreshed on a goroutine of its own: the loop below stops
+	// polling while an insert retries or hangs, which is when it matters.
+	lagCtx, stopLag := context.WithCancel(ctx)
+	var lagWG sync.WaitGroup
+	lagWG.Go(func() { s.lag.Run(lagCtx, cons, s.cfg.LagRefreshInterval) })
+	defer func() { stopLag(); lagWG.Wait() }()
 	if parts, err := s.b.EndOffsets(ctx, s.spec.dead); err != nil || len(parts) == 0 {
 		return fmt.Errorf("dead-letter topic %s is required and was not found: %v", s.spec.dead, err)
 	}
@@ -203,7 +222,7 @@ func (s *Lane[T]) Run(ctx context.Context) error {
 			}
 			continue
 		}
-		s.observe(f.HighWatermarks)
+		s.lag.Observe(f.HighWatermarks)
 		if len(next) == 0 && len(f.Records) > 0 {
 			deadline = time.Now().Add(s.cfg.FlushInterval)
 		}
@@ -373,41 +392,7 @@ func (s *Lane[T]) commit(ctx context.Context, cons broker.Consumer, next map[bro
 		s.log.Warn("offset commit failed; the batch will be redelivered", "err", err)
 		return
 	}
-	for tp, off := range next {
-		s.committed[tp] = off
-		s.setLag(tp)
-	}
-}
-
-func (s *Lane[T]) loadCommitted(ctx context.Context) error {
-	c, err := s.b.CommittedOffsets(ctx, s.cfg.Group, s.spec.topic)
-	if err != nil {
-		return err
-	}
-	s.hw = map[broker.TopicPartition]int64{}
-	s.committed = map[broker.TopicPartition]int64{}
-	for p, off := range c {
-		s.committed[broker.TopicPartition{Topic: s.spec.topic, Partition: p}] = off
-	}
-	return nil
-}
-
-func (s *Lane[T]) observe(hw map[broker.TopicPartition]int64) {
-	for tp, off := range hw {
-		s.hw[tp] = off
-		s.setLag(tp)
-	}
-}
-
-// setLag is signalman_consumer_lag_records for the sink's group: the log end
-// minus the committed offset. During an outage it is where the
-// backpressure surfaces.
-func (s *Lane[T]) setLag(tp broker.TopicPartition) {
-	hw, ok := s.hw[tp]
-	if !ok || s.m == nil {
-		return
-	}
-	s.m.ConsumerLag.WithLabelValues(tp.Topic, strconv.Itoa(int(tp.Partition))).Set(float64(max(0, hw-s.committed[tp])))
+	s.lag.Committed(next)
 }
 
 // span names the offsets a batch holds, per partition in order, such as

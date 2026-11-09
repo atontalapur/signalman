@@ -117,6 +117,30 @@ Prometheus would scrape them. `signalman-sink` reads the `alerts` topic as
 a separate process and is not in the harness, so alert inserts were not
 part of the sink's cost.
 
+**Run on Redpanda since** (2026-11-08, `deploy/docker-compose.yml` on an
+8-core laptop, `signalmand -rules rules`, both `signalman-sink` lanes, 21
+rules). `loadgen -rules rules -measure-baseline 40000 -profile
+2:30m,0:10m` measured 1x in process at 66,954 events/s and offered
+133,908/s. The producer and Redpanda on this machine took 21,134/s, so the
+30-minute schedule ran 85 minutes behind and was stopped there after
+108,262,400 records with 0 retries. signalmand evaluated about 18,000/s
+throughout, and the gap queued in Redpanda. Lag on `events.raw` rose to
+15.05 million records, then fell to 0 in 15 minutes once the producer
+stopped. Over the whole run, drop ledger entries stayed at the 355 already
+in the topic (zero new), `signalman_audit_violations_total` stayed 0, and
+no process logged ERROR. The alerts lane ended with no lag and 0 dead
+letters. ClickHouse holds 112,287,486 events with no repeated `(partition,
+seq)` on any partition. `signalman hunt` over all of partition 4
+(3,475,778 events) returned exactly the 2,139,080 `(rule, partition, seq)`
+alerts stored for it, none on one side only. A full hunt was not run,
+because 57.6 million hits do not fit this machine, and an exact-distinct
+count over the whole table got ClickHouse OOM-killed in the 7.75 GB compose
+VM. That restart was an unplanned ClickHouse outage of about a minute. Both
+sinks logged `insert failed, retrying the batch; not polling until it
+lands`, then resumed with no dead letters. This does not answer 2x of the
+pipeline's own capacity on Redpanda, since the producer, not signalmand,
+was the limit.
+
 ## Sustained 5x capacity
 
 5x = 12,325 events/s for 60 s (spec: 30 minutes), then drain. 739,500 sent.
@@ -190,6 +214,20 @@ stayed at zero violations, and `signalman hunt` over the stored events
 equaled the stored alerts row for row (`docs/results.md`). That is one
 kill at an arbitrary moment, not five at the worst one.
 
+**Five kills on Redpanda** (2026-11-09). `loadgen -rules rules -baseline
+10000 -duration 6m` sent 3,600,000 records with 0 retries while
+`signalmand` was `kill -9`ed five times, 60 s apart, and restarted a
+second later on the same group. At 10,000 events/s with 500-record polls
+every kill lands with batches in flight. Prometheus over the window shows
+0 drop ledger entries and 0 audit violations across 148 closed audit
+windows. Lag returned to 0 two minutes after the load ended. ClickHouse
+stores the run's 3,600,112 events (the load plus canaries) once each, with
+no repeated `(partition, seq)` even before merges, so the redelivered
+batches did not reach the table twice. `signalman hunt` over all of
+partition 4 returned exactly the 2,207,683 alerts stored for it. The kill
+moment was a timer rather than a chosen worst point such as mid-commit;
+the poll-to-commit window is most of each cycle at this rate.
+
 ## Poison record
 
 0.8x for 60 s. One record in every 500 was bad, all on one host (and so
@@ -221,6 +259,14 @@ source `sysmon`, since the normalizer drops any source not in
 either broker. A poison record from a real source, rather than one injected
 through a fault hook, has not been seen.
 
+**Run on Redpanda since** (2026-11-09). During a 3-minute load at 2,000
+events/s, `rpk topic produce events.raw` wrote 200 malformed records with
+no source header. The `drops` topic holds exactly 200 new entries, all
+`missing-source`, each with its partition, offset, seq and the raw bytes.
+The 360,000 good records are stored once each, and the audit stayed at 0
+violations. The source check runs before JSON parsing, so these never
+reached the `parse` reason.
+
 ## Rule set reload under load
 
 0.8x for 60 s, with the slot reloaded every 250 ms, alternating between
@@ -245,6 +291,14 @@ deliberately a mix of two rule sets.
 `signalmand`, which loads the rule directory from disk; this run called
 `Slot.Store` directly, so loading time and a failed reload under load
 were not exercised. The batch boundary does not depend on the broker.
+
+**Run on Redpanda since** (2026-11-09). Three `SIGHUP`s to one
+`signalmand`, 45 s apart, during a 3-minute load at 2,000 events/s. Each
+logged `rule set reloaded; applies from the next batch` with the same
+`ruleset_v`, the process stayed up, no drop or audit violation appeared,
+and every event was stored once. The Plan C soak also reloaded three times
+mid-run (`docs/results.md`). A failed reload under load, from a rule
+directory that no longer loads, was not tried.
 
 ## ClickHouse unavailable
 
@@ -279,6 +333,27 @@ to 5 s late.
 sink inserting into ClickHouse, ClickHouse down for 10 minutes, and
 whether the sink's own retry and the `alerts` topic retention hold up for
 that long. Not run.
+
+**Run on Redpanda since** (2026-11-09). `loadgen -rules rules -baseline
+2000 -duration 15m` sent 1,800,000 records with 0 retries, and
+`docker compose stop clickhouse` held ClickHouse down from 00:13:51 to
+00:23:52 UTC. Both sink lanes logged `insert failed, retrying the batch;
+not polling until it lands` and held their batch, so the backlog stayed in
+the `alerts` and `events.norm` topics. signalmand never noticed, because
+its output is the topics. After the restart both lanes caught up in about
+3 minutes with 0 dead letters and no ERROR. ClickHouse stores the
+1,800,264 events (load plus canaries) once each, and `signalman hunt` over
+all of partition 4 returned exactly the 2,242,003 alerts stored for it.
+`SignalmanSinkCanaryStalled` fired: the sink canary age climbed to 610 s.
+The sinks' `signalman_consumer_lag_records` did not. A sink that stops
+polling stops refreshing that gauge, so it sat at the last value (1,043
+and 2,100) for the whole outage while the real backlog grew to about 1.2
+million records. The canary, not lag, is what pages for a stalled sink.
+Fixed since: each retry now asks the broker for the topic's log end
+(`refreshLag` in `internal/pipe/chsink`, `TestSinkLagGrowsDuringOutage`).
+In a 2-minute outage under 2,000 events/s after the fix, the events lane's
+lag read 55,708, 115,816, 175,924 and 236,032 at 30 s steps, then fell to 0
+after ClickHouse returned, with 0 dead letters.
 
 ## One partition offline
 
@@ -348,12 +423,12 @@ not checked against:
 
 | Experiment | In process | Still needs |
 |---|---|---|
-| Sustained 2x | run, 120 s, zero drops, digest equal | 30 min on Redpanda; real lag and staleness metrics |
+| Sustained 2x | run, 120 s, zero drops, digest equal; on Redpanda, 85 min offered past capacity, lag peaked at 15.05M and drained in 15 min, zero new drops, partition 4 hunt equals stored alerts | 2x of the pipeline's own Redpanda capacity: the laptop producer topped out first |
 | Sustained 5x | run, 60 s, nothing failed | broker disk, socket buffers, producer backpressure on Redpanda: not run |
-| Consumer kill | run, 5 kills, digest equal, duplicates counted | one `kill -9` of `signalmand` on Redpanda with ClickHouse: audit green, hunt equals stored alerts; five worst-moment kills on Redpanda: not run |
-| Poison record | run, every bad record one drop, no wedge | a real-source poison record |
-| Rule set reload | run, 236 reloads, zero straddles | `SIGHUP` path in `signalmand` under load |
-| ClickHouse unavailable | analogue run (output writes failing 30 s) | the ClickHouse alert sink and a 10 min ClickHouse outage: not run |
+| Consumer kill | run, 5 kills, digest equal, duplicates counted | on Redpanda with ClickHouse: one `kill -9` at 1,000/s, then five at 10,000/s, audit 0, no duplicate keys, partition 4 hunt equals stored alerts; a kill timed to mid-commit: not run |
+| Poison record | run, every bad record one drop, no stall | on Redpanda: 200 records injected with `rpk`, 200 ledger entries, good records all stored |
+| Rule set reload | run, 236 reloads, zero straddles | on Redpanda: three `SIGHUP`s under 2,000/s, no drops or violations; a failed reload under load: not run |
+| ClickHouse unavailable | analogue run (output writes failing 30 s) | on Redpanda: ClickHouse down 10 min under 2,000/s, sinks held and retried, caught up in 3 min, 0 dead letters, partition 4 hunt equals stored alerts, sink canary paged; the sink lag gauge froze while the sink was not polling, fixed since |
 | One partition offline | run, other partitions kept going | leader loss on Redpanda; the canary alert (Plan E): not run |
 
 The Plan F gate, "the document answers all three questions per

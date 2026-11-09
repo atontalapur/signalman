@@ -96,6 +96,12 @@ type Consumer interface {
 	// Nothing is committed implicitly: an offset the caller never commits
 	// is redelivered after a restart. Positioned readers return an error.
 	Commit(ctx context.Context, next map[TopicPartition]int64) error
+	// Owned is the partitions the consumer currently reads: for a group
+	// consumer, those assigned to this member and not since revoked or
+	// lost; for a positioned reader, the partitions it was given. Lag
+	// accounting reports only these, so a partition a rebalance moved to
+	// another member is not counted twice.
+	Owned() []TopicPartition
 	Close()
 }
 

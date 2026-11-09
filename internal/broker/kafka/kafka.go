@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -210,7 +212,7 @@ func (b *Broker) ReadFrom(start map[broker.TopicPartition]int64) (broker.Consume
 	if err != nil {
 		return nil, err
 	}
-	return &consumer{cl: cl, max: b.cfg.MaxPollRecords}, nil
+	return &consumer{cl: cl, max: b.cfg.MaxPollRecords, fixed: slices.Collect(maps.Keys(start))}, nil
 }
 
 func (b *Broker) EndOffsets(ctx context.Context, topic string) (map[int32]int64, error) {
@@ -322,6 +324,8 @@ type consumer struct {
 	cl  *kgo.Client
 	max int
 	own *ownership // nil for a positioned reader
+	// fixed is a positioned reader's partitions.
+	fixed []broker.TopicPartition
 }
 
 var errClosed = errors.New("kafka: consumer closed")
@@ -400,3 +404,12 @@ func (c *consumer) Commit(ctx context.Context, next map[broker.TopicPartition]in
 }
 
 func (c *consumer) Close() { c.cl.Close() }
+
+// Owned is the partitions assigned to this member and not since revoked
+// or lost, or a positioned reader's partitions.
+func (c *consumer) Owned() []broker.TopicPartition {
+	if c.own == nil {
+		return slices.Clone(c.fixed)
+	}
+	return c.own.owned()
+}
