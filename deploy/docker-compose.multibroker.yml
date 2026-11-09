@@ -8,7 +8,8 @@
 # events.raw has one replica, so stopping a broker takes the partitions it
 # leads offline, which is the experiment. Every output topic has three
 # replicas, so signalmand can keep writing what the other partitions
-# produce. Brokers are capped at one core and 512 MB each. Tear it down with
+# produce. Brokers are capped at one core and 512 MB each and listen on
+# localhost only. Tear it down with
 # `down -v`; the volumes hold nothing else.
 name: signalman-multibroker
 
@@ -34,7 +35,7 @@ services:
       - --advertise-kafka-addr=internal://rp0:9092,external://localhost:29092
       - --rpc-addr=0.0.0.0:33145
       - --advertise-rpc-addr=rp0:33145
-    ports: ["29092:29092"]
+    ports: ["127.0.0.1:29092:29092"]
     volumes: [rp0:/var/lib/redpanda/data]
 
   rp1:
@@ -51,7 +52,7 @@ services:
       - --advertise-kafka-addr=internal://rp1:9092,external://localhost:29093
       - --rpc-addr=0.0.0.0:33145
       - --advertise-rpc-addr=rp1:33145
-    ports: ["29093:29093"]
+    ports: ["127.0.0.1:29093:29093"]
     volumes: [rp1:/var/lib/redpanda/data]
     depends_on: [rp0]
 
@@ -69,11 +70,12 @@ services:
       - --advertise-kafka-addr=internal://rp2:9092,external://localhost:29094
       - --rpc-addr=0.0.0.0:33145
       - --advertise-rpc-addr=rp2:33145
-    ports: ["29094:29094"]
+    ports: ["127.0.0.1:29094:29094"]
     volumes: [rp2:/var/lib/redpanda/data]
     depends_on: [rp0]
 
-  # The pipeline topics, as in deploy/docker-compose.yml, except replication.
+  # The pipeline topics with deploy/docker-compose.yml's partitions and
+  # retention; only the replication differs.
   topics:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
     depends_on:
@@ -86,8 +88,14 @@ services:
         set -e
         rpk() { command rpk -X brokers=rp0:9092,rp1:9092,rp2:9092 "$$@"; }
         rpk topic create events.raw -p 8 -r 1 -c max.message.bytes=1048576 || rpk topic describe events.raw >/dev/null
-        for t in events.norm alerts verdicts.v1 verdicts.v2 divergences drops alerts.dead events.dead; do
+        for t in events.norm alerts; do
           rpk topic create "$$t" -p 8 -r 3 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
+        done
+        for t in verdicts.v1 verdicts.v2; do
+          rpk topic create "$$t" -p 8 -r 3 -c retention.ms=604800000 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
+        done
+        for t in divergences drops alerts.dead events.dead; do
+          rpk topic create "$$t" -p 8 -r 3 -c retention.ms=2592000000 -c max.message.bytes=1048576 || rpk topic describe "$$t" >/dev/null
         done
         touch /tmp/ready
         exec sleep infinity

@@ -414,7 +414,17 @@ it read and produces each partition's canary separately
 (`TestCanaryKeepsTheOtherPartitionsWhenOneIsDown`). Rerun with broker 2
 down for 150 s, by then leading partitions 4 and 5 after Redpanda moved
 one: `SignalmanCanaryStalled` fired for 4 and 5 only, their canary age
-read 154 s, and the other six stayed at 4 s.
+read 154 s, and the other six stayed at 4 s. The partition list now comes
+from topic metadata (`broker.Partitions`), which needs no leader, so this
+also holds from a cold start.
+
+**Starting while a partition is down.** signalmand refuses to start until
+every `events.raw` partition has a leader. The audit takes its starting
+point, including each partition's log start, before the pipeline produces
+anything, and that lookup needs the dead partition. Starting without it
+would give up the invariant 1 proof for the run, so the refusal is kept.
+The startup topic check and the sink's listings now read partition counts
+from metadata and no longer fail on a leaderless partition.
 
 ## Since the recorded run
 

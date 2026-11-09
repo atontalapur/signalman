@@ -8,7 +8,8 @@ Keep a Changelog; versions follow SemVer. `/ship` appends entries.
 ### Fixed
 
 - One partition without a leader no longer pages the canary alert for
-  every partition. The canary keeps writing to the live partitions, so
+  every partition. The canary lists partitions from topic metadata, which
+  needs no leader, and writes each partition's canary separately, so
   `SignalmanCanaryStalled` names only the partitions that are out.
 
 ### Changed

@@ -60,9 +60,6 @@ type Canary struct {
 	m   *obs.Metrics
 	now func() time.Time
 	log *slog.Logger
-
-	mu    sync.Mutex
-	parts []int32 // the last partition list read
 }
 
 // NewCanary builds a generator. now is the clock for event times and for
@@ -79,22 +76,25 @@ func NewCanary(b broker.Broker, m *obs.Metrics, now func() time.Time, log *slog.
 // even be written still climbs toward the page.
 //
 // One partition without a leader must not silence the others, or the page
-// names every partition and hides which one is out. So the partition list
-// falls back to the last one that was read (listing fails for the whole
-// topic when one partition has no leader), and each partition's canary is
-// produced on its own.
+// names every partition and hides which one is out. So the partitions come
+// from topic metadata, which needs no leader, and each partition's canary is
+// produced on its own with a short deadline, so a dead partition fails
+// fast instead of holding its record for the whole tick.
 func (c *Canary) Inject(ctx context.Context) error {
-	parts, listErr := c.partitions(ctx)
-	if len(parts) == 0 {
-		return fmt.Errorf("canary: list partitions: %w", listErr)
+	parts, err := c.b.Partitions(ctx, TopicEventsRaw)
+	if err != nil {
+		return fmt.Errorf("canary: list partitions: %w", err)
 	}
+	slices.Sort(parts)
 	at := c.now()
 	errs := make([]error, len(parts))
 	var wg sync.WaitGroup
 	for i, p := range parts {
 		c.m.CanaryAge.Start(p)
 		wg.Go(func() {
-			if err := c.b.Produce(ctx, []broker.Record{CanaryRecord(p, at)}); err != nil {
+			pctx, cancel := context.WithTimeout(ctx, canaryProduceTimeout)
+			defer cancel()
+			if err := c.b.Produce(pctx, []broker.Record{CanaryRecord(p, at)}); err != nil {
 				errs[i] = fmt.Errorf("canary: produce to partition %d: %w", p, err)
 				return
 			}
@@ -102,29 +102,11 @@ func (c *Canary) Inject(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
-	if listErr != nil {
-		errs = append(errs, fmt.Errorf("canary: list partitions, using the last list: %w", listErr))
-	}
 	return errors.Join(errs...)
 }
 
-// partitions lists events.raw's partitions, or returns the last list that
-// was read when listing fails, with the error.
-func (c *Canary) partitions(ctx context.Context) ([]int32, error) {
-	end, err := c.b.EndOffsets(ctx, TopicEventsRaw)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if err != nil {
-		return c.parts, err
-	}
-	parts := make([]int32, 0, len(end))
-	for p := range end {
-		parts = append(parts, p)
-	}
-	slices.Sort(parts)
-	c.parts = parts
-	return parts, nil
-}
+// canaryProduceTimeout bounds one partition's canary write.
+const canaryProduceTimeout = 10 * time.Second
 
 // Run injects now and then every interval until ctx ends. A failed
 // injection is logged and not retried: the next tick is the retry, and the

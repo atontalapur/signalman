@@ -215,6 +215,21 @@ func (b *Broker) ReadFrom(start map[broker.TopicPartition]int64) (broker.Consume
 	return &consumer{cl: cl, max: b.cfg.MaxPollRecords, fixed: slices.Collect(maps.Keys(start))}, nil
 }
 
+func (b *Broker) Partitions(ctx context.Context, topic string) ([]int32, error) {
+	tds, err := b.admin.ListTopics(ctx, topic)
+	if err != nil {
+		return nil, err
+	}
+	td, ok := tds[topic]
+	if !ok {
+		return nil, fmt.Errorf("partitions: topic %q not in metadata", topic)
+	}
+	if td.Err != nil {
+		return nil, td.Err
+	}
+	return slices.Sorted(maps.Keys(td.Partitions)), nil
+}
+
 func (b *Broker) EndOffsets(ctx context.Context, topic string) (map[int32]int64, error) {
 	l, err := b.admin.ListEndOffsets(ctx, topic)
 	if err != nil {
